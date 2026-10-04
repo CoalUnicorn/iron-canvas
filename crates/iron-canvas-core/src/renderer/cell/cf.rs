@@ -155,11 +155,9 @@ impl CfDecorationPaint {
 
     fn glyph_count(&self) -> i32 {
         i32::from(self.icon.is_some())
-            + self.rating.as_ref().map_or(0, |rating| {
-                match rating.style {
-                    RatingStyle::RepeatedGlyph(_) => i32::from(rating.count),
-                    RatingStyle::FiveQuarters => i32::from(rating.max > 0),
-                }
+            + self.rating.as_ref().map_or(0, |rating| match rating.style {
+                RatingStyle::RepeatedGlyph(_) => i32::from(rating.count),
+                RatingStyle::FiveQuarters => i32::from(rating.max > 0),
             })
     }
 
@@ -200,7 +198,7 @@ impl CfDecorationPaint {
                     if left < inner.right()
                         && let Some(fraction) = circle_rating_fraction(rating.count, rating.max)
                     {
-                    paint_circle_rating(painter, left, top, size, fraction, &rating.color);
+                        paint_circle_rating(painter, left, top, size, fraction, &rating.color);
                     }
                 }
             }

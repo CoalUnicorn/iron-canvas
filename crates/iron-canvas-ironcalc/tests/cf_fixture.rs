@@ -13,10 +13,7 @@ use iron_canvas_ironcalc::convert::cell_decoration_from_extended;
 use ironcalc::import::load_from_xlsx;
 use ironcalc_base::UserModel;
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../IronCalc/xlsx/tests/conditional_formatting/cf_tests.xlsx"
-);
+const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cf_tests.xlsx");
 
 fn load(path: &str) -> UserModel<'static> {
     UserModel::from_model(load_from_xlsx(path, "en", "UTC", "en").expect("workbook loads"))

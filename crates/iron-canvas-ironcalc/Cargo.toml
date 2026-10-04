@@ -14,4 +14,4 @@ ironcalc_base = { workspace = true }
 [dev-dependencies]
 # Engine-backed conditional-formatting verification: load the same workbooks
 # the audit used and assert the adapter's evaluated decorations.
-ironcalc = { version = "0.8.3", path = "../../../IronCalc/xlsx" }
+ironcalc = { workspace = true }

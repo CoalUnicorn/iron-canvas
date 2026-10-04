@@ -18,10 +18,7 @@ use ironcalc_base::cf_types::{CfRuleInput, Cfvo};
 use ironcalc_base::types::Color;
 use ironcalc_base::{Model, UserModel};
 
-const FIXTURE: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../IronCalc/xlsx/tests/conditional_formatting/cf_tests.xlsx"
-);
+const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cf_tests.xlsx");
 
 /// Cells that exercise each decoration category the audit calls out.
 const PROBE_CELLS: &[(u32, i32, i32)] = &[

@@ -475,7 +475,8 @@ fn every_icon_glyph_paints_something() {
 #[test]
 fn rating_bars_leave_a_gap_between_points() {
     let mut decoration = rating(3, 5);
-    decoration.rating.as_mut().expect("rating").glyph = IconGlyph::FlatRectangle;
+    decoration.rating.as_mut().expect("rating").style =
+        RatingStyle::RepeatedGlyph(IconGlyph::FlatRectangle);
     let (core, _) = render_cell(decoration);
 
     let bars: Vec<Vec<PointF>> = core

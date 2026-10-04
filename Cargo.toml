@@ -9,7 +9,8 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
-ironcalc_base = { version = "0.8.3", path = "../IronCalc/base" }
+ironcalc_base = { version = "0.8.3", git = "https://github.com/CoalUnicorn/IronCalc", rev = "93f3407f822df5925d8b65a23248fd40155579e9" }
+ironcalc = { version = "0.8.3", git = "https://github.com/CoalUnicorn/IronCalc", rev = "93f3407f822df5925d8b65a23248fd40155579e9" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bitflags = "2.11.1"

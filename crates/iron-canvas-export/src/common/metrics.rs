@@ -21,7 +21,7 @@ use iron_canvas_core::painter::approx_text_width;
 
 //  Inter (SVG)
 
-/// Inter Regular (v13, Latin subset) — see `assets/PROVENANCE.md` for
+/// Inter Regular (v13, Latin subset) — see `assets/FONT-NOTICE.txt` for
 /// source, submodule commit, and license (`assets/OFL.txt`).
 const INTER_TTF: &[u8] = include_bytes!("../../assets/inter-regular.ttf");
 

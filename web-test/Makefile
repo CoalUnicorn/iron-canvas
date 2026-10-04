@@ -1,8 +1,9 @@
 IC_CRATE  := iron-canvas-web
 IC_DIR    := ../crates/$(IC_CRATE)
 IC_PKG    := $(IC_DIR)/pkg
-ICALC_PKG := ../../IronCalc/bindings/wasm/pkg
-ICALC_XLSX_MANIFEST := ../../IronCalc/xlsx/Cargo.toml
+IRONCALC_DIR ?= ../../RustyCalc-canvas-next/IronCalc
+ICALC_PKG := $(IRONCALC_DIR)/bindings/wasm/pkg
+ICALC_XLSX_MANIFEST := $(IRONCALC_DIR)/xlsx/Cargo.toml
 DEMO_XLSX := $(wildcard demo/*.xlsx)
 DEMO_ICALC := $(DEMO_XLSX:.xlsx=.ic)
 PORT      ?= 8000
