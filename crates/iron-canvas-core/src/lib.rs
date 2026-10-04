@@ -17,6 +17,7 @@ pub mod renderer;
 pub mod shape;
 mod style;
 pub mod surface;
+pub mod text_layout;
 pub mod theme;
 
 pub use frame::{
@@ -62,4 +63,7 @@ pub use style::{
     FontStyle, HAlign, IconGlyph, IconSpec, RatingSpec, RatingStyle, VAlign,
 };
 pub use surface::{LayerBase, Surface};
+pub use text_layout::{
+    TextLayoutOptions, TextLine, TextVerticalAlign, layout_text_into, layout_text_lines_into,
+};
 pub use theme::{CanvasTheme, ThemeVariables};

@@ -20,23 +20,18 @@ use crate::geometry::constants::STANDARD_BORDER_WIDTH;
 use crate::geometry::pixel_rect::PixelRect;
 use crate::geometry::prim::Point;
 use crate::model::sheet::links::CellLink;
-use crate::painter::{
-    CHAR_WIDTH_FACTOR, PaintColor, Painter, TextAlign, TextBaseline, TextMetrics,
-};
+use crate::painter::{CHAR_WIDTH_FACTOR, PaintColor, Painter, TextAlign, TextBaseline};
 use crate::renderer::RendererCore;
 use crate::renderer::cache::ColorIntern;
+use crate::text_layout::{
+    CELL_PADDING, LINE_HEIGHT_FACTOR, TEXT_V_INSET_PX, TextLayoutOptions, TextVerticalAlign,
+    layout_text_into,
+};
+pub use crate::text_layout::{TextLine, layout_text_lines_into as layout_into};
 use crate::theme::CanvasTheme;
-
-//  layout constants
 
 /// Below this in either pixel dimension, no text is laid out at all.
 const MIN_TEXT_DIM_PX: f64 = 10.0;
-// Excel uses single line spacing inside a cell — the font's natural line
-// height, ~1.2x the em for Calibri. Matches `.fe-text` (formula-overlay.css)
-// so canvas display and the DOM editor stack lines identically.
-pub(crate) const LINE_HEIGHT_FACTOR: f64 = 1.2;
-const TEXT_V_INSET_PX: f64 = 4.0;
-pub(crate) const CELL_PADDING: f64 = 4.0;
 
 //  paint constants
 
@@ -95,15 +90,6 @@ pub enum TextColor {
     ThemeDefault,
     ThemeError,
     Owned(Rc<str>),
-}
-
-/// One visual line of text inside a cell, positioned for paint
-/// (`center_x`/`center_y` carry the resolved anchor point).
-pub struct TextLine {
-    pub text: String,
-    pub center_x: f64,
-    pub center_y: f64,
-    pub width: f64,
 }
 
 //  resolve
@@ -174,7 +160,6 @@ impl TextPaint {
         );
 
         let approx_char_w = size_px * CHAR_WIDTH_FACTOR;
-        let line_height = size_px * LINE_HEIGHT_FACTOR;
 
         // Keep long values out of the indicator band for every alignment.
         let reserved_left = reserved_left.clamp(0, rect.width);
@@ -200,26 +185,35 @@ impl TextPaint {
             return None;
         }
 
-        // Layout pass: split + wrap, measuring once. `lines` comes back with
-        // text + width populated and `center_x/y` left at 0.0 for the position
-        // pass below. Routed through `&dyn TextMetrics` so resolution stays
-        // backend-agnostic.
+        let vertical = match v_align {
+            VAlign::Bottom => TextVerticalAlign::Bottom,
+            VAlign::Center => TextVerticalAlign::Center,
+            _ => TextVerticalAlign::Top,
+        };
+
+        // The shared layout helper handles wrapping, placement, and clipping
+        // from resolved paint inputs; spreadsheet alignment policy stays here.
         let mut wrap_buf = renderer.frame_cache.wrap_buf.borrow_mut();
-        layout_into(
+        let needs_clip = layout_text_into(
             renderer.painter(),
             &font_css,
             &text,
-            wrap_text,
-            usable_w,
-            approx_char_w,
+            TextLayoutOptions {
+                bounds: layout_rect,
+                clip,
+                font_size_px: size_px,
+                horizontal: h_align,
+                vertical,
+                wrap: wrap_text,
+                horizontal_padding: CELL_PADDING,
+                vertical_inset: TEXT_V_INSET_PX,
+                line_height_factor: LINE_HEIGHT_FACTOR,
+                approx_char_width: approx_char_w,
+            },
             lines,
             &mut wrap_buf,
         );
         drop(wrap_buf);
-
-        position_lines(lines, h_align, v_align, layout_rect, size_px, line_height);
-
-        let needs_clip = lines_escape_cell(lines, usable_w, clip, line_height);
 
         Some(TextPaint {
             clip,
@@ -233,63 +227,6 @@ impl TextPaint {
             needs_clip,
         })
     }
-}
-
-/// Assign each already-measured line its `center_x`/`center_y` anchor. Split out
-/// of `resolve_into` so the pipeline reads resolve -> layout -> position -> assemble
-/// without a 20-line alignment digression inline (B-4). Mutates `lines` in place;
-/// `width` must already be populated by `layout_into`.
-fn position_lines(
-    lines: &mut [TextLine],
-    h_align: TextAlign,
-    v_align: VAlign,
-    rect: PixelRect,
-    size_px: f64,
-    line_height: f64,
-) {
-    let right = rect.right();
-    let bottom = rect.bottom();
-    let center = rect.center();
-    let line_count = lines.len() as f64;
-    for (i, line) in lines.iter_mut().enumerate() {
-        let i_f = i as f64;
-        let tw = line.width;
-        // `CellTextStyle::resolve` owns the model's fallback rules, so only
-        // the three paint directions reach here and every arm is explicit.
-        line.center_x = match h_align {
-            TextAlign::End => f64::from(right) - CELL_PADDING - tw / 2.0,
-            TextAlign::Center => f64::from(center.x),
-            TextAlign::Start => f64::from(rect.left()) + CELL_PADDING + tw / 2.0,
-        };
-        // Top / Justify / Distributed default to top-anchored.
-        line.center_y = match v_align {
-            VAlign::Bottom => {
-                f64::from(bottom) - size_px / 2.0 - TEXT_V_INSET_PX
-                    + (i_f - line_count + 1.0) * line_height
-            }
-            VAlign::Center => f64::from(center.y) + (i_f + (1.0 - line_count) / 2.0) * line_height,
-            _ => f64::from(rect.top()) + size_px / 2.0 + TEXT_V_INSET_PX + i_f * line_height,
-        };
-    }
-}
-
-/// Clip iff any *positioned* line escapes the cell box on either axis. Vertical
-/// reads the resolved `center_y` (post-`position_lines`), not a raw block-height
-/// compare: bottom/top alignment plus `TEXT_V_INSET_PX` can push a block that
-/// "fits" by total height past the top or bottom edge, and only the anchored
-/// centers reveal that. Glyphs are baseline-middle, so each spans
-/// `center_y +- line_height/2` (1.2 x em over-estimates real glyph height, so the
-/// strict `<`/`>` err toward clipping a hair early — the safe direction).
-/// Supersedes the old `lines.len() > 1` proxy: catches a single tall line and a
-/// bottom-anchored block crossing the top edge, while still skipping the
-/// save/restore for multi-line cells that genuinely fit.
-fn lines_escape_cell(lines: &[TextLine], usable_w: f64, rect: PixelRect, line_height: f64) -> bool {
-    let half_line = line_height / 2.0;
-    let top = f64::from(rect.top());
-    let bottom = f64::from(rect.bottom());
-    lines.iter().any(|l| {
-        l.width > usable_w || l.center_y - half_line < top || l.center_y + half_line > bottom
-    })
 }
 
 /// Per-cell text styling resolved from the model's raw `Style`. Private step
@@ -357,107 +294,6 @@ impl CellTextStyle {
             v_align,
             wrap_text,
         }
-    }
-}
-
-// layout
-
-/// Break `text` into render-ready lines: split on `\n` always, then word-wrap
-/// within each split when `wrap` is on and the cell has width. `approx_char_w`
-/// is the fallback glyph width when `measure_text` fails; biases the wrap
-/// point slightly but never loses characters.
-///
-/// Fills `out` with `TextLine`s carrying `text` + `width`; `center_x`/`center_y`
-/// are left at `0.0` for the caller's positioning pass.
-///
-/// Measurement strategy: non-wrap path measures each `\n`-split line once.
-/// Wrap path measures each word once plus one space-width per call, then sums
-/// additively (`current_w + space_w + word_w`). Adjacent-glyph kerning across
-/// a space is sub-pixel for the proportional fonts this renderer ships, well
-/// below the rounding the position pass already does — additive sum is within
-/// 1px of a fresh `measureText(full_line)` and avoids the O(words^2) re-measure
-/// the previous algorithm did on long wrapping cells.
-#[allow(clippy::too_many_arguments)]
-pub fn layout_into(
-    metrics: &dyn TextMetrics,
-    font_css: &str,
-    text: &str,
-    wrap: bool,
-    usable_w: f64,
-    approx_char_w: f64,
-    out: &mut Vec<TextLine>,
-    wrap_buf: &mut String,
-) {
-    // Slot-reuse contract: do not `out.clear()` — that would drop every
-    // `TextLine.text` String and free its capacity, defeating the cache.
-    // Overwrite slots in place via `write_line`, then `truncate(idx)` so the
-    // tail of stale lines from a previous (longer) cell isn't iterated.
-    let mut idx = 0usize;
-    // Backends without sticky font state (Recorder, future SVG) need the font
-    // passed per-measurement; CanvasPainter caches the value internally.
-    let measure = |s: &str| -> f64 {
-        let w = metrics.measure_text_width(s, font_css);
-        if w > 0.0 {
-            w
-        } else {
-            s.len() as f64 * approx_char_w
-        }
-    };
-
-    if !wrap || usable_w <= 0.0 {
-        for line in text.split('\n') {
-            let width = measure(line);
-            write_line(out, &mut idx, line, width);
-        }
-        out.truncate(idx);
-        return;
-    }
-
-    let space_w = measure(" ");
-
-    for raw_line in text.split('\n') {
-        wrap_buf.clear();
-        let mut current_w = 0.0;
-        for word in raw_line.split_whitespace() {
-            let word_w = measure(word);
-            let separator_w = if wrap_buf.is_empty() { 0.0 } else { space_w };
-            let tentative_w = current_w + separator_w + word_w;
-
-            if tentative_w > usable_w && !wrap_buf.is_empty() {
-                // Overflow with prior content: commit the line as-is, start
-                // fresh with this word alone (no leading space -> no separator).
-                write_line(out, &mut idx, wrap_buf, current_w);
-                wrap_buf.clear();
-                wrap_buf.push_str(word);
-                current_w = word_w;
-            } else {
-                if !wrap_buf.is_empty() {
-                    wrap_buf.push(' ');
-                }
-                wrap_buf.push_str(word);
-                current_w = tentative_w;
-            }
-        }
-        write_line(out, &mut idx, wrap_buf, current_w);
-    }
-    out.truncate(idx);
-
-    fn write_line(out: &mut Vec<TextLine>, idx: &mut usize, text: &str, width: f64) {
-        if let Some(slot) = out.get_mut(*idx) {
-            slot.text.clear();
-            slot.text.push_str(text);
-            slot.center_x = 0.0;
-            slot.center_y = 0.0;
-            slot.width = width;
-        } else {
-            out.push(TextLine {
-                text: text.to_owned(),
-                center_x: 0.0,
-                center_y: 0.0,
-                width,
-            });
-        }
-        *idx += 1;
     }
 }
 
@@ -539,7 +375,6 @@ impl<P: Painter> RendererCore<P> {
 mod tests {
     use super::*;
     use crate::address::RCRange;
-    use crate::geometry::prim::Point;
     use crate::model::sheet::links::{CellLink, LinkTarget};
 
     fn link(color: Option<&str>, dynamic: bool) -> CellLink {
@@ -550,102 +385,6 @@ mod tests {
             dynamic,
             color.map(str::to_string),
         )
-    }
-
-    fn line(width: f64) -> TextLine {
-        TextLine {
-            text: "x".to_string(),
-            center_x: 0.0,
-            center_y: 0.0,
-            width,
-        }
-    }
-
-    fn rect(height: i32) -> PixelRect {
-        PixelRect {
-            top_left: Point { x: 0, y: 0 },
-            width: 100,
-            height,
-        }
-    }
-
-    // Regression (review 2026-06-13 finding #1): a bottom-aligned two-line cell
-    // whose block height *fits* the row can still cross the top edge once
-    // `position_lines` anchors it at the bottom with `TEXT_V_INSET_PX`. The
-    // raw block-height predicate missed this; the positioned-bounds check
-    // must clip it.
-    #[test]
-    fn bottom_aligned_block_fits_height_but_escapes_top_edge() {
-        let size_px = 12.0;
-        let line_height = size_px * LINE_HEIGHT_FACTOR; // 14.4
-        let rect = rect(30); // block = 2 * 14.4 = 28.8 < 30, so "fits" by height
-        let usable_w = f64::from(rect.width) - 2.0 * CELL_PADDING;
-        let mut lines = vec![line(10.0), line(10.0)];
-
-        position_lines(
-            &mut lines,
-            TextAlign::Start,
-            VAlign::Bottom,
-            rect,
-            size_px,
-            line_height,
-        );
-
-        // Line 0 center lands at 5.6 -> top of glyph ≈ 5.6 - 7.2 < 0.
-        assert!(
-            lines[0].center_y - line_height / 2.0 < 0.0,
-            "test premise: top line crosses the top edge"
-        );
-        assert!(
-            lines_escape_cell(&lines, usable_w, rect, line_height),
-            "bottom-anchored block crossing the top edge must clip"
-        );
-    }
-
-    #[test]
-    fn single_line_that_fits_does_not_clip() {
-        let size_px = 11.0;
-        let line_height = size_px * LINE_HEIGHT_FACTOR;
-        let rect = rect(20);
-        let usable_w = f64::from(rect.width) - 2.0 * CELL_PADDING;
-        let mut lines = vec![line(10.0)];
-
-        position_lines(
-            &mut lines,
-            TextAlign::Start,
-            VAlign::Bottom,
-            rect,
-            size_px,
-            line_height,
-        );
-
-        assert!(
-            !lines_escape_cell(&lines, usable_w, rect, line_height),
-            "a single short line in a normal row must not pay the clip round-trip"
-        );
-    }
-
-    #[test]
-    fn line_wider_than_usable_width_clips() {
-        let size_px = 11.0;
-        let line_height = size_px * LINE_HEIGHT_FACTOR;
-        let rect = rect(20);
-        let usable_w = f64::from(rect.width) - 2.0 * CELL_PADDING;
-        let mut lines = vec![line(usable_w + 1.0)];
-
-        position_lines(
-            &mut lines,
-            TextAlign::Start,
-            VAlign::Bottom,
-            rect,
-            size_px,
-            line_height,
-        );
-
-        assert!(
-            lines_escape_cell(&lines, usable_w, rect, line_height),
-            "horizontal overflow must clip"
-        );
     }
 
     // A formula link carries no `font.u`, so the link rule must underline it;

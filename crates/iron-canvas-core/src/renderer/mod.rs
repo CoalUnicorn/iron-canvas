@@ -85,9 +85,9 @@ use crate::renderer::cache::{FrameCache, GridCache};
 pub use cache::ColorIntern;
 pub use cache::FontIntern;
 
-pub use self::cell::text::{TextLine, layout_into};
 pub(crate) use self::layers::GridPaintOutcome;
 pub use self::layers::{GridRenderer, LayerOps, OverlayRenderer};
+pub use crate::text_layout::{TextLine, layout_text_lines_into as layout_into};
 
 use crate::frame::FrameTrace;
 use crate::painter::Painter;

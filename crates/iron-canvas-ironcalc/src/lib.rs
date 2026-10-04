@@ -7,7 +7,10 @@
 //! the IronCalc-specific adapter: constructing an `IronCalcModel` requires
 //! naming `ironcalc_base::UserModel`. The engine-agnostic path uses `CanvasModel`.
 
+pub mod compiler;
 pub mod convert;
+
+pub use compiler::{CellReadOperation, PreparedCell, WorksheetCompileError, WorksheetCompiler};
 
 use iron_canvas_core::{
     CanvasModel, CanvasView, CellContentQuery, CellDecoration, CellKind, CellStyle, Fetched,

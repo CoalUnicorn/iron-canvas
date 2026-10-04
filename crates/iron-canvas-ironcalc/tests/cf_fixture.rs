@@ -8,8 +8,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use iron_canvas_core::{CellDecoration, IconGlyph, RatingStyle};
-use iron_canvas_ironcalc::color_resolver;
 use iron_canvas_ironcalc::convert::cell_decoration_from_extended;
+use iron_canvas_ironcalc::{WorksheetCompiler, color_resolver};
 use ironcalc::import::load_from_xlsx;
 use ironcalc_base::UserModel;
 
@@ -62,6 +62,28 @@ fn icons_with_show_value_zero_reach_the_canvas_hidden() {
     assert!(
         !icon.show_value,
         "showValue=0 must survive as show_value=false"
+    );
+}
+
+#[test]
+fn compiler_uses_one_extended_style_for_style_and_decoration() {
+    let model = load(FIXTURE);
+    let coordinate = iron_canvas_core::CellCoord { row: 17, col: 2 };
+    let prepared = WorksheetCompiler::new()
+        .prepare_cells(&model, 0, [coordinate, coordinate])
+        .expect("cell compiles");
+
+    assert_eq!(prepared.len(), 1, "duplicate requests compile once");
+    let compiled = &prepared[0];
+    let icon = compiled
+        .decoration
+        .as_ref()
+        .and_then(|decoration| decoration.icon.as_ref())
+        .expect("B17 has a conditional-formatting icon");
+    assert!(!icon.show_value);
+    assert!(
+        compiled.style.font.size > 0.0,
+        "the same extended style also supplies ordinary cell style"
     );
 }
 
