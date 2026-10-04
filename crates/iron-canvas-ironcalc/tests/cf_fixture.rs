@@ -7,11 +7,14 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use iron_canvas_core::{CanvasSize, CanvasTheme};
 use iron_canvas_core::{CellDecoration, IconGlyph, RatingStyle};
+use iron_canvas_export::SvgSurface;
 use iron_canvas_ironcalc::convert::cell_decoration_from_extended;
-use iron_canvas_ironcalc::{WorksheetCompiler, color_resolver};
-use ironcalc::import::load_from_xlsx;
-use ironcalc_base::UserModel;
+use iron_canvas_ironcalc::{IronCalcModel, WorksheetCompiler, color_resolver};
+use ironcalc::import::{load_from_xlsx, load_from_xlsx_bytes};
+use ironcalc_base::{Model, UserModel};
+use std::rc::Rc;
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cf_tests.xlsx");
 
@@ -145,4 +148,33 @@ fn ratings_carry_the_engine_glyph_color_and_counts() {
         .expect("M23 is a rating cell");
     assert_eq!(circle.style, RatingStyle::FiveQuarters);
     assert_eq!((circle.count, circle.max), (2, 5));
+}
+
+#[test]
+fn cf_fixture_renders_through_svg_backend() {
+    let workbook = load_from_xlsx_bytes(
+        include_bytes!("fixtures/cf_tests.xlsx"),
+        "cf_tests",
+        "en",
+        "UTC",
+    )
+    .expect("fixture workbook loads");
+    let model = UserModel::from_model(
+        Model::from_workbook(workbook, "en").expect("fixture model constructs"),
+    );
+    let svg = SvgSurface::render(
+        Rc::new(IronCalcModel(model)),
+        &CanvasTheme::light(),
+        CanvasSize {
+            w: 1100.0,
+            h: 700.0,
+        },
+    )
+    .expect("fixture renders to SVG");
+
+    assert!(svg.starts_with("<svg "));
+    assert!(
+        svg.contains("<linearGradient"),
+        "the fixture's gradient data bars should use SVG gradients"
+    );
 }

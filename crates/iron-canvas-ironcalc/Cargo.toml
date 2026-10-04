@@ -15,3 +15,4 @@ ironcalc_base = { workspace = true }
 # Engine-backed conditional-formatting verification: load the same workbooks
 # the audit used and assert the adapter's evaluated decorations.
 ironcalc = { workspace = true }
+iron-canvas-export = { path = "../iron-canvas-export" }

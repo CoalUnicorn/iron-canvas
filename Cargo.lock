@@ -329,6 +329,7 @@ name = "iron-canvas-ironcalc"
 version = "0.1.0-beta.2"
 dependencies = [
  "iron-canvas-core",
+ "iron-canvas-export",
  "ironcalc",
  "ironcalc_base",
 ]
@@ -351,6 +352,7 @@ dependencies = [
  "iron-canvas-export",
  "iron-canvas-ironcalc",
  "iron-canvas-recorder",
+ "ironcalc",
  "ironcalc_base",
  "js-sys",
  "serde",
