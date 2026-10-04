@@ -99,6 +99,7 @@ pub fn layout_text_into(
 /// Split and wrap text while reusing both output line strings and scratch
 /// storage. This lower-level entry point is useful to callers that need line
 /// counts or widths without positioning paint output.
+#[allow(clippy::too_many_arguments)]
 pub fn layout_text_lines_into(
     metrics: &dyn TextMetrics,
     font_css: &str,
@@ -121,6 +122,7 @@ pub fn layout_text_lines_into(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn position_lines(
     lines: &mut [TextLine],
     h_align: TextAlign,
@@ -173,6 +175,7 @@ fn lines_escape_clip(lines: &[TextLine], usable_w: f64, rect: PixelRect, line_he
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_lines_into(
     metrics: &dyn TextMetrics,
     font_css: &str,

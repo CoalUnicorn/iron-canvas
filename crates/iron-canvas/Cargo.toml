@@ -1,0 +1,13 @@
+[package]
+name = "iron-canvas"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+
+[dependencies]
+iron-canvas-core = { path = "../iron-canvas-core" }
+iron-canvas-ironcalc = { path = "../iron-canvas-ironcalc" }
+ironcalc_base.workspace = true
+
+[dev-dependencies]
+ironcalc_base.workspace = true

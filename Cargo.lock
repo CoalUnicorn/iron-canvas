@@ -287,6 +287,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron-canvas"
+version = "0.1.0-beta.2"
+dependencies = [
+ "iron-canvas-core",
+ "iron-canvas-ironcalc",
+ "ironcalc_base",
+]
+
+[[package]]
 name = "iron-canvas-canvas2d"
 version = "0.1.0-beta.2"
 dependencies = [
