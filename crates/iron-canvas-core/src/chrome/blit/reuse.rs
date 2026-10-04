@@ -129,25 +129,10 @@ pub(super) fn try_blit_reuse(
     inputs: &FrameInputs,
     plan: &BlitPlan,
 ) -> PreparedBlitOutcome {
-    // Hidden row headers previously always used Fresh. Fractional-DPR headers
-    // and frozen separators can blend again over copied pixels. Keep Fresh
-    // for those cases, and require aligned copy/strip edges in the others.
+    // Fractional-DPR headers and frozen separators can blend again over copied
+    // pixels. Headers are always visible, so fractional chrome always uses Fresh.
     let dpr = inputs.dpr();
-    let fractional_chrome = dpr.fract() != 0.0
-        && (inputs.show_col_headers()
-            || !prev.pane_set.rows.frozen.is_empty()
-            || !prev.pane_set.cols.frozen.is_empty());
-    if !inputs.show_row_headers()
-        && (fractional_chrome
-            || [plan.shift.src, plan.shift.dst, plan.pixel_strip]
-                .into_iter()
-                .any(|rect| {
-                    let (x, y, w, h) = rect.as_f64_tuple();
-                    [x, y, w, h]
-                        .into_iter()
-                        .any(|value| (value * dpr).fract() != 0.0)
-                }))
-    {
+    if dpr.fract() != 0.0 {
         return PreparedBlitOutcome::FreshFallback(prev);
     }
     // `inputs.view()` is this attempt's one already-validated read (see
@@ -186,12 +171,7 @@ pub(super) fn try_blit_reuse(
                 Some(rows) => rows,
                 None => return PreparedBlitOutcome::FreshFallback(prev),
             };
-            let thickness = row_header_thickness_for(
-                &rows,
-                frozen_rows_count,
-                new_top,
-                inputs.show_row_headers(),
-            );
+            let thickness = row_header_thickness_for(&rows, frozen_rows_count, new_top);
             if thickness != prev.row_header_thickness {
                 return PreparedBlitOutcome::FreshFallback(prev);
             }
@@ -209,12 +189,8 @@ pub(super) fn try_blit_reuse(
             };
             // Cross-axis rows band is unchanged across a column scroll; read it
             // (not taken yet) for the gate.
-            let thickness = row_header_thickness_for(
-                &prev.pane_set.rows.scroll,
-                frozen_rows_count,
-                new_top,
-                inputs.show_row_headers(),
-            );
+            let thickness =
+                row_header_thickness_for(&prev.pane_set.rows.scroll, frozen_rows_count, new_top);
             if thickness != prev.row_header_thickness {
                 return PreparedBlitOutcome::FreshFallback(prev);
             }
@@ -245,8 +221,6 @@ pub(super) fn try_blit_reuse(
         theme: prev.theme,
         metrics: prev.metrics,
         model_generation: prev.model_generation,
-        show_row_headers: prev.show_row_headers,
-        show_col_headers: prev.show_col_headers,
         kind: prev.kind,
         links: Rc::clone(&prev.links),
         merges: Rc::clone(&prev.merges),
@@ -285,8 +259,6 @@ pub(super) fn try_blit_reuse(
         metrics: inputs.metrics(),
         theme: Rc::clone(inputs.theme()),
         model_generation: inputs.model_generation(),
-        show_row_headers: inputs.show_row_headers(),
-        show_col_headers: inputs.show_col_headers(),
         kind: FrameKindTag::Blitted,
         // Links never change on a blit path (`plan_frame` bars the blit when
         // the link digest changed), so the captured index equals the one

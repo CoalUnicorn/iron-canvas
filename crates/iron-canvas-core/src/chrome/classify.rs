@@ -94,13 +94,12 @@ impl Chrome {
     /// 5. model generation -> `Model`
     /// 6. sheet -> `Sheet`
     /// 7. frozen row/column counts -> `Freeze`
-    /// 8. header visibility -> `Headers`
-    /// 9. effective top/left scroll origin (see below)
+    /// 8. effective top/left scroll origin (see below)
     ///
-    /// Steps 1-8 are hard breaks — any divergence rebuilds outright, the
+    /// Steps 1-7 are hard breaks — any divergence rebuilds outright, the
     /// same theme/canvas-size/sheet/freeze rejections `is_still_valid` and
     /// `screen_for_blit` used to duplicate across two functions, plus the
-    /// DPR/model-generation/header comparisons neither of them made.
+    /// DPR/model-generation comparisons neither of them made.
     ///
     /// Step 9 is not itself a hard break; it forks the geometric scroll
     /// question:
@@ -158,12 +157,6 @@ impl Chrome {
         {
             return FrameDelta::Rebuild(RebuildReason::Freeze);
         }
-        if inputs.show_row_headers() != prev.show_row_headers
-            || inputs.show_col_headers() != prev.show_col_headers
-        {
-            return FrameDelta::Rebuild(RebuildReason::Headers);
-        }
-
         let view = inputs.view();
         let new_top = scroll_first(frozen_rows, view.top_row);
         let new_left = scroll_first(frozen_cols, view.left_column);

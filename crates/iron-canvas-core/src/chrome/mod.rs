@@ -83,12 +83,6 @@ pub struct Chrome {
     /// `Chrome::classify` can detect a `set_model` replacement without
     /// comparing trait-object pointers.
     pub model_generation: u64,
-    /// Row/column header visibility captured with this frame. Both already
-    /// determine `row_header_thickness`/`col_header_thickness` at build
-    /// time; committing the source booleans too keeps them available to
-    /// `Chrome::classify` without re-deriving them from thickness alone.
-    pub show_row_headers: bool,
-    pub show_col_headers: bool,
     /// Which constructor produced this frame. Renderer diagnostics and
     /// paint-skip gating read it; `FrameKindTag::reuses_slots()` is the
     /// "slot vecs inherited from prev" predicate.

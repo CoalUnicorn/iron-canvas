@@ -6,7 +6,7 @@
 //!
 //! Every `RebuildReason` variant gets its own case here, plus the `Stable`
 //! and `Scroll` outcomes — this file is the classifier's spec, independent
-//! of the blit-mechanics fixtures in `scroll_blit.rs` / `header_visibility.rs`
+//! of the blit-mechanics fixtures in `scroll_blit.rs` / `header_geometry.rs`
 //! / `blit_fallback.rs` (which repoint the same `Chrome::classify` entry
 //! point but assert on pixel/pane geometry, not the reason taxonomy).
 
@@ -215,32 +215,6 @@ fn frozen_rows_change_with_compensating_scroll_still_rebuilds() {
         matches!(delta, FrameDelta::Rebuild(RebuildReason::Freeze)),
         "frozen count change must rebuild regardless of compensating scroll"
     );
-}
-
-#[test]
-fn row_header_visibility_change_forces_rebuild() {
-    let shown = TestModel::synthetic_grid();
-    let hidden = TestModel::synthetic_grid().with_hidden_row_headers();
-    let theme = light();
-    let inputs0 = test_inputs(&shown, canvas_default(), &theme);
-    let frame = Chrome::next(None, &shown, &inputs0, FramePath::Fresh);
-    let inputs1 = test_inputs(&hidden, canvas_default(), &theme);
-    // `Headers` fires before `model` is ever read, so passing `hidden` here
-    // (rather than `shown`) is inert — see `Chrome::classify`'s doc.
-    let delta = Chrome::classify(Some(&frame), &hidden, &inputs1, None);
-    assert!(matches!(delta, FrameDelta::Rebuild(RebuildReason::Headers)));
-}
-
-#[test]
-fn col_header_visibility_change_forces_rebuild() {
-    let shown = TestModel::synthetic_grid();
-    let hidden = TestModel::synthetic_grid().with_hidden_col_headers();
-    let theme = light();
-    let inputs0 = test_inputs(&shown, canvas_default(), &theme);
-    let frame = Chrome::next(None, &shown, &inputs0, FramePath::Fresh);
-    let inputs1 = test_inputs(&hidden, canvas_default(), &theme);
-    let delta = Chrome::classify(Some(&frame), &hidden, &inputs1, None);
-    assert!(matches!(delta, FrameDelta::Rebuild(RebuildReason::Headers)));
 }
 
 #[test]

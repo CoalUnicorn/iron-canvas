@@ -122,7 +122,7 @@ fn blit_inside_stable_digit_band_keeps_blitted_kind() {
 }
 
 #[test]
-fn hidden_row_headers_keep_both_scroll_axes_on_blit_path() {
+fn worksheet_headers_keep_both_scroll_axes_on_blit_path() {
     use iron_canvas_core::geometry::prim::Axis;
 
     for axis in [Axis::Row, Axis::Column] {
@@ -130,7 +130,6 @@ fn hidden_row_headers_keep_both_scroll_axes_on_blit_path() {
             let model = Rc::new(
                 TestModel::synthetic_grid()
                     .with_frozen(frozen_rows, frozen_cols)
-                    .with_hidden_row_headers()
                     .with_top_row(10)
                     .with_left_column(5)
                     .with_active(10, 5),
@@ -148,7 +147,7 @@ fn hidden_row_headers_keep_both_scroll_axes_on_blit_path() {
             assert_eq!(
                 trace.effective,
                 Some(RenderStrategy::ScrollBlit),
-                "hidden row headers must not force a rebuild: {axis:?}, frozen {frozen_rows}/{frozen_cols}"
+                "header geometry remains compatible with the scroll: {axis:?}, frozen {frozen_rows}/{frozen_cols}"
             );
         }
     }

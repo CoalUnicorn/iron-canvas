@@ -190,8 +190,6 @@ impl CanvasModel for ObservedModel {
         fn get_show_selection(&self) -> bool;
         fn last_row(&self, sheet: u32) -> i32;
         fn last_column(&self, sheet: u32) -> i32;
-        fn get_show_row_headers(&self, sheet: u32) -> Option<bool>;
-        fn get_show_col_headers(&self, sheet: u32) -> Option<bool>;
         fn get_row_header_text(&self, sheet: u32, row: i32) -> Option<String>;
         fn get_column_header_text(&self, sheet: u32, col: i32) -> Option<String>;
         fn get_sheet_links(&self, sheet: u32) -> Option<Vec<CellLink>>;

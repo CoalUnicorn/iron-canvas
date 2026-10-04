@@ -100,15 +100,13 @@ impl PreparedBlitFrame {
             theme,
             metrics,
             model_generation,
-            show_row_headers,
-            show_col_headers,
             kind,
             links,
             merges,
         } = rollback;
-        // `theme`/`metrics`/`model_generation`/`show_row_headers`/
-        // `show_col_headers`/`kind`/`links` all came from `inputs`/`FrameKindTag::Blitted`
-        // when `candidate` was built, not from `prev` — dropped here in
+        // `theme`/`metrics`/`model_generation`/`kind`/`links` all came from
+        // `inputs`/`FrameKindTag::Blitted` when `candidate` was built, not from
+        // `prev` — dropped here in
         // favor of `rollback`'s saved originals, bound above.
         let Chrome {
             sheet,
@@ -127,8 +125,6 @@ impl PreparedBlitFrame {
             metrics,
             theme,
             model_generation,
-            show_row_headers,
-            show_col_headers,
             kind,
             links,
             merges,
@@ -157,8 +153,6 @@ struct BlitRollback {
     theme: Rc<CanvasTheme>,
     metrics: CanvasMetrics,
     model_generation: u64,
-    show_row_headers: bool,
-    show_col_headers: bool,
     kind: FrameKindTag,
     /// The committed link index `prev` carried, saved because the candidate
     /// refreshes it from `inputs` (a blit can only be selected when the link

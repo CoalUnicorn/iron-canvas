@@ -87,8 +87,6 @@ pub struct FrameInputs {
     view: CanvasView,
     frozen_rows: FrozenCount,
     frozen_cols: FrozenCount,
-    show_row_headers: bool,
-    show_col_headers: bool,
     show_selection: bool,
     /// Committed worksheet metadata candidate for this attempt — the link
     /// index and merge table captured together. `Rc` so the orchestrator hands
@@ -106,9 +104,8 @@ pub struct FrameInputs {
 ///
 /// The discriminant is the wire code a `.icr` recording stores (the recorder
 /// writes `failure as u8` and validates the decoded value against
-/// [`Self::LAST_CODE`]). The values are explicit and append-only: renumbering
-/// would silently relabel every recorded frame. Declaration order is the read
-/// order of `capture`, which is why the numbers are not in ascending order.
+/// [`Self::is_valid_code`]). The values are explicit: renumbering would
+/// silently relabel every recorded frame.
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FrameInputFailure {
@@ -129,8 +126,6 @@ pub enum FrameInputFailure {
     /// Column mirror of [`Self::InvalidFrozenRowCount`], bounded by
     /// `LAST_COLUMN`.
     InvalidFrozenColumnCount = 8,
-    RowHeaderVisibility = 5,
-    ColumnHeaderVisibility = 6,
     /// The sheet's link-list read failed, or the list it returned is not a
     /// valid [`LinkIndex`](crate::LinkIndex) (a non-single-cell range,
     /// an out-of-bounds address, or a duplicate address).
@@ -142,11 +137,14 @@ pub enum FrameInputFailure {
 }
 
 impl FrameInputFailure {
-    /// Highest wire code. The variants carry every code in `0..=LAST_CODE`
-    /// (in declaration order 0-4, 7, 8, 5, 6, 9, 10), so `code > LAST_CODE` is
-    /// exactly "no variant carries this code" — the check a reader applies to
-    /// a decoded recording.
+    /// Highest wire code. Codes 5 and 6 are intentionally unassigned after
+    /// removing header-visibility failures from the capture contract.
     pub const LAST_CODE: u8 = Self::MergedRanges as u8;
+
+    /// Whether `code` identifies a surviving failure variant.
+    pub const fn is_valid_code(code: u8) -> bool {
+        matches!(code, 0..=4 | 7..=10)
+    }
 }
 
 impl FrameInputs {
@@ -157,18 +155,14 @@ impl FrameInputs {
     /// 2. selected view (asserted to agree with the sheet);
     /// 3. frozen row count;
     /// 4. frozen column count;
-    /// 5. row-header visibility;
-    /// 6. column-header visibility;
-    /// 7. selection visibility;
-    /// 8. the sheet's link list;
-    /// 9. the sheet's merged-range list.
+    /// 5. selection visibility;
+    /// 6. the sheet's link list;
+    /// 7. the sheet's merged-range list.
     ///
-    /// Steps 1-7 are scalar reads. Step 8 is the one allocating, fallible
-    /// list read: it builds a validated [`LinkIndex`] from the model's whole
-    /// link list once per attempt, so the renderer never crosses the bridge
-    /// per cell. A `None` from the model, or a list
-    /// [`LinkIndex::from_cells`](crate::LinkIndex::from_cells)
-    /// rejects, is `FrameInputFailure::SheetLinks` and holds the attempt.
+    /// Steps 1-5 are scalar reads. Steps 6-7 read the sheet's link and merged
+    /// range lists and validate them once per attempt, so the renderer never
+    /// crosses the bridge per cell. A failed read or invalid list holds the
+    /// attempt rather than substituting empty metadata.
     ///
     /// `metrics`, `theme`, and `model_generation` come from the caller
     /// (`Orchestrator`) rather than the model — they are host/orchestrator
@@ -191,7 +185,7 @@ impl FrameInputs {
 
     /// [`Self::capture`] with the orchestrator's metadata snapshot cache.
     ///
-    /// The scalar reads (steps 1-7) always run. The two allocating list reads —
+    /// The scalar reads (steps 1-5) always run. The two allocating list reads —
     /// the link list and the merged-range list — are skipped when all three of
     /// these hold:
     ///
@@ -251,14 +245,8 @@ impl FrameInputs {
             LAST_COLUMN,
             FrameInputFailure::InvalidFrozenColumnCount,
         )?;
-        let show_row_headers = model
-            .get_show_row_headers(sheet)
-            .ok_or(FrameInputFailure::RowHeaderVisibility)?;
-        let show_col_headers = model
-            .get_show_col_headers(sheet)
-            .ok_or(FrameInputFailure::ColumnHeaderVisibility)?;
         let show_selection = model.get_show_selection();
-        // Steps 8 and 9: the sheet's links and merged ranges. `Some(empty)` is
+        // Steps 6 and 7: the sheet's links and merged ranges. `Some(empty)` is
         // a known empty set; a `None` read or a list the index rejects is a
         // hold, never empty data — silently painting no link would leave a
         // visible link unclickable, and painting no merge would render the
@@ -275,8 +263,6 @@ impl FrameInputs {
             view,
             frozen_rows,
             frozen_cols,
-            show_row_headers,
-            show_col_headers,
             show_selection,
             metadata,
         })
@@ -309,14 +295,6 @@ impl FrameInputs {
 
     pub fn frozen_cols(&self) -> i32 {
         self.frozen_cols.get()
-    }
-
-    pub fn show_row_headers(&self) -> bool {
-        self.show_row_headers
-    }
-
-    pub fn show_col_headers(&self) -> bool {
-        self.show_col_headers
     }
 
     pub fn show_selection(&self) -> bool {

@@ -7,14 +7,14 @@
 //! (`tests/fixtures/fresh_paint.icr` via `ICR_REGEN=1 cargo test
 //! -p iron-canvas-recorder --test golden_fixture`).
 //!
-//! # On-disk layout (v11)
+//! # On-disk layout (v12)
 //!
 //! UTF-8 bytes. One JSON object — a `Recording` with `header` and
 //! `frames` fields. Standard JSON, so `jq .` and any JSON validator
 //! reads it without special-casing:
 //!
 //! ```text
-//! {"header":{"schema_version":11,"iron_canvas_version":"0.1.0-alpha.1",...},
+//! {"header":{"schema_version":12,"iron_canvas_version":"0.1.0-alpha.1",...},
 //!  "frames":[
 //!    {"frame_idx":0,"t_ms":0,"origin":"forced_baseline",...},
 //!    {"frame_idx":1,"t_ms":17,"origin":"live",...}
@@ -27,7 +27,7 @@
 //!
 //! | Field                 | Type            | Meaning                                                              |
 //! | --------------------- | --------------- | -------------------------------------------------------------------- |
-//! | `schema_version`      | `u32`           | Always `ICR_SCHEMA_VERSION` (currently `11`). Mismatch -> load fails. |
+//! | `schema_version`      | `u32`           | Always `ICR_SCHEMA_VERSION` (currently `12`). Mismatch -> load fails. |
 //! | `iron_canvas_version` | `String`        | `env!("CARGO_PKG_VERSION")` at serialize time. Mismatch -> warn-only. |
 //! | `canvas_w` / `canvas_h` | `f64`         | Canvas dimensions at recording start. The viewer auto-sizes to these.|
 //! | `theme`               | `ThemeSnapshot` | Owned-string mirror of `CanvasTheme`'s 14 palette fields.            |
@@ -83,12 +83,10 @@ use crate::DrawOp;
 /// Bumped only on breaking changes to the on-disk shape (added fields
 /// with defaults don't bump). The loader rejects mismatched versions.
 ///
-/// v9 adds the `DrawOp::FillCircle` variant. v10 changes `DrawOp::FillPath`
-/// from integer `points` to a float `path` command list (curve support). v11
-/// adds the `DrawOp::StrokePath` variant with an owned stroke style. An older
-/// reader rejects the file rather than dropping the op or misreading the shape
-/// geometry.
-pub const ICR_SCHEMA_VERSION: u32 = 11;
+/// v9 adds `DrawOp::FillCircle`; v10 changes `DrawOp::FillPath` to a float
+/// command list; v11 adds `DrawOp::StrokePath`; v12 removes header-visibility
+/// fields and rejects the now-unused input-failure codes 5 and 6.
+pub const ICR_SCHEMA_VERSION: u32 = 12;
 
 /// Why an attempt entered the recording timeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -297,7 +295,7 @@ fn validate_frames(frames: &[Frame]) -> Result<(), IcrError> {
         }
         previous_t_ms = Some(frame.t_ms);
         if let TraceOutcome::HeldOnInputFailure { failure } = frame.trace.outcome
-            && failure > FrameInputFailure::LAST_CODE
+            && !FrameInputFailure::is_valid_code(failure)
         {
             return Err(IcrError::Format(format!(
                 "frame {index}: held on input-failure code {failure}, which names no \
@@ -674,10 +672,10 @@ mod tests {
             (FrameInputFailure::SheetMismatch, 2),
             (FrameInputFailure::FrozenRows, 3),
             (FrameInputFailure::FrozenColumns, 4),
-            (FrameInputFailure::RowHeaderVisibility, 5),
-            (FrameInputFailure::ColumnHeaderVisibility, 6),
             (FrameInputFailure::InvalidFrozenRowCount, 7),
             (FrameInputFailure::InvalidFrozenColumnCount, 8),
+            (FrameInputFailure::SheetLinks, 9),
+            (FrameInputFailure::MergedRanges, 10),
         ];
         for (failure, code) in cases {
             // The wire code is the discriminant, so this pins the numbering
@@ -710,7 +708,25 @@ mod tests {
     /// A code no variant carries is a corrupt frame, not a diagnostic to
     /// render: the reader rejects the whole recording.
     #[test]
-    fn validated_recording_rejects_unknown_input_failure_code() {
+    fn validated_recording_rejects_removed_input_failure_codes() {
+        for failure in [5, 6] {
+            let mut rec = Recording::new(header());
+            let mut held = anchored_frame(0, 0, Vec::new());
+            held.trace.outcome = TraceOutcome::HeldOnInputFailure { failure };
+            held.trace.committed_seq = None;
+            held.trace.effective = None;
+            held.result = RecordedPaintResult::Retry;
+            rec.push_frame(held);
+
+            assert!(
+                ValidatedRecording::try_from(rec).is_err(),
+                "removed failure code {failure} must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn validated_recording_rejects_out_of_range_input_failure_code() {
         let mut rec = Recording::new(header());
         let mut held = anchored_frame(0, 0, Vec::new());
         held.trace.outcome = TraceOutcome::HeldOnInputFailure {
@@ -778,11 +794,16 @@ mod tests {
 
     #[test]
     fn schema_version_mismatch_is_rejected() {
-        let mut rec = Recording::new(header());
-        rec.header.schema_version = 99;
-        let bytes = rec.serialize().expect("serialize");
-        let err = Recording::deserialize(&bytes).expect_err("should reject");
-        assert!(matches!(err, IcrError::Format(_)));
+        for schema_version in [ICR_SCHEMA_VERSION - 1, ICR_SCHEMA_VERSION + 1, 99] {
+            let mut rec = Recording::new(header());
+            rec.header.schema_version = schema_version;
+            let bytes = rec.serialize().expect("serialize");
+            let err = Recording::deserialize(&bytes).expect_err("should reject");
+            assert!(
+                matches!(err, IcrError::Format(_)),
+                "schema {schema_version} must be rejected"
+            );
+        }
     }
 
     #[test]
@@ -886,6 +907,14 @@ mod tests {
         let mut rec = Recording::new(header());
         rec.push_frame(anchored_frame(0, 0, Vec::new()));
         rec.header.schema_version = ICR_SCHEMA_VERSION + 1;
+        assert!(ValidatedRecording::try_from(rec).is_err());
+    }
+
+    #[test]
+    fn validated_recording_rejects_previous_schema() {
+        let mut rec = Recording::new(header());
+        rec.push_frame(anchored_frame(0, 0, Vec::new()));
+        rec.header.schema_version = ICR_SCHEMA_VERSION - 1;
         assert!(ValidatedRecording::try_from(rec).is_err());
     }
 

@@ -140,15 +140,15 @@ pub trait CellContentQuery {
 /// the engine echoes `get_selected_sheet()` back into the per-sheet accessors
 /// so a multi-surface model can route the query, and equality-compares it
 /// across frames (a changed value invalidates the cached frame). It is never
-/// interpreted beyond that. Single-surface models (the datagrid impl, for
-/// one) return a constant and ignore the parameter.
+/// interpreted beyond that. Single-surface models return a constant and
+/// ignore the parameter.
 ///
 /// The geometry/config accessors that carry an "absent override vs failed
 /// read" distinction (`get_row_height`, `get_column_width`,
 /// `get_show_grid_lines`) return [`Fetched<T>`]: only `Absent` may select the
 /// engine's documented default, and `BridgeFailed` must hold and retry the
 /// attempt. The scalar selection accessors (`get_selected_sheet`,
-/// `get_selected_view`, frozen counts, header visibility) return `Option` —
+/// `get_selected_view`, frozen counts) return `Option` —
 /// `None` there is a transient JS-bridge failure (the next animation frame
 /// re-queries), which `FrameInputs::capture` turns into a hold. The
 /// `get_*_header_text` overrides use `None` for "no override, fall back to the
@@ -252,20 +252,6 @@ pub trait CanvasModel: CellContentQuery {
         LAST_COLUMN
     }
 
-    /// Whether the row-header strip (1, 2, 3...) is visible on `sheet`.
-    /// `Some(true)` default; `None` carries the same fetch-failed meaning
-    /// as the other accessors. `false` collapses the strip to zero width.
-    fn get_show_row_headers(&self, _sheet: u32) -> Option<bool> {
-        Some(true)
-    }
-
-    /// Whether the column-header strip (A, B, C...) is visible on `sheet`.
-    /// `Some(true)` default; `None` carries the same fetch-failed meaning
-    /// as the other accessors. `false` collapses the strip to zero height.
-    fn get_show_col_headers(&self, _sheet: u32) -> Option<bool> {
-        Some(true)
-    }
-
     /// Override text for a row header slot. `None` means use the default
     /// numeric label (1, 2, 3...). Implementations that don't support custom
     /// header text omit the override.
@@ -285,9 +271,8 @@ pub trait CanvasModel: CellContentQuery {
 /// of carrying a hand-written shim per method per trait.
 ///
 /// The accessor is the one thing each wrapper must supply: `Rc<T>` forwards
-/// through the private `RcForwardee` accessor (below), the datagrid's
-/// `DataGridModel` returns its `RefCell` guard, and the core stage-6 observer
-/// returns the model it wraps. The accessor keeps the generated `self` binding
+/// through the private `RcForwardee` accessor (below), and the core stage-6
+/// observer returns the model it wraps. The accessor keeps the generated `self` binding
 /// and its use in the same macro context. A receiver expression can also work,
 /// but the macro must capture the receiver identifier from each signature and
 /// use it in the generated binding. A literal generated `self` cannot bind a
@@ -374,8 +359,6 @@ impl<T: CanvasModel + ?Sized> CanvasModel for Rc<T> {
         fn get_show_selection(&self) -> bool;
         fn last_row(&self, sheet: u32) -> i32;
         fn last_column(&self, sheet: u32) -> i32;
-        fn get_show_row_headers(&self, sheet: u32) -> Option<bool>;
-        fn get_show_col_headers(&self, sheet: u32) -> Option<bool>;
         fn get_row_header_text(&self, sheet: u32, row: i32) -> Option<String>;
         fn get_column_header_text(&self, sheet: u32, col: i32) -> Option<String>;
     });

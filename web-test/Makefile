@@ -17,11 +17,7 @@ FEATURES  ?=
 PROFILE_FLAG  := $(if $(filter dev,$(PROFILE)),--dev,$(if $(filter profiling,$(PROFILE)),--profiling,--release))
 FEATURES_FLAG := $(if $(strip $(FEATURES)),--features "$(FEATURES)",)
 
-DG_CRATE := iron-canvas-datagrid-web
-DG_DIR   := ../crates/$(DG_CRATE)
-DG_PKG   := $(DG_DIR)/pkg
-
-.PHONY: build demos sync serve check browser-test browser-test-all clean datagrid datagrid-serve
+.PHONY: build demos sync serve check browser-test browser-test-all clean
 
 build:
 	cd $(IC_DIR) && wasm-pack build --target web $(PROFILE_FLAG) --no-opt $(FEATURES_FLAG)
@@ -62,15 +58,5 @@ browser-test-all: sync check
 	WORKBOOK=sales_dashboard node browser-smoke.mjs
 
 clean:
-	rm -rf vendor/iron-canvas vendor/ironcalc vendor/iron-canvas-datagrid
+	rm -rf vendor/iron-canvas vendor/ironcalc
 	rm -f $(DEMO_ICALC)
-
-datagrid:
-	cd $(DG_DIR) && wasm-pack build --target web $(PROFILE_FLAG) --no-opt
-	mkdir -p vendor
-	rm -rf vendor/iron-canvas-datagrid
-	cp -r $(DG_PKG) vendor/iron-canvas-datagrid
-	# No ironcalc vendor needed: the datagrid bundle is engine-agnostic.
-
-datagrid-serve: datagrid
-	python3 -m http.server $(PORT)

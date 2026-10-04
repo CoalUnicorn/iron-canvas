@@ -16,6 +16,3 @@ pdf = []
 base64 = { workspace = true }
 iron-canvas-core = { path = "../iron-canvas-core" }
 ttf-parser = { workspace = true }
-
-[dev-dependencies]
-iron-canvas-datagrid = { path = "../iron-canvas-datagrid" }

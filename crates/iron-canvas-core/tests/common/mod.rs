@@ -52,8 +52,6 @@ pub struct TestModel {
     active_col: Cell<i32>,
     selection: Cell<RCRange>,
     show_grid: Cell<bool>,
-    show_row_headers: Cell<bool>,
-    show_col_headers: Cell<bool>,
     /// Overrides `CanvasModel::get_show_selection`'s default-`true`. Lets a
     /// test isolate `PendingWork`'s own `overlay` bit from `plan_frame`'s
     /// `content_overlay = work.has_overlay() || show_selection` OR-clause —
@@ -152,8 +150,6 @@ impl Default for TestModel {
                 c2: 1,
             }),
             show_grid: Cell::new(true),
-            show_row_headers: Cell::new(true),
-            show_col_headers: Cell::new(true),
             show_selection: Cell::new(true),
             value_bridge_fail: Cell::new(false),
             style_bridge_fail_at: Cell::new(None),
@@ -272,14 +268,6 @@ impl TestModel {
     }
     pub fn with_merged_ranges(self, ranges: Vec<RCRange>) -> Self {
         *self.merged_ranges.borrow_mut() = ranges;
-        self
-    }
-    pub fn with_hidden_row_headers(self) -> Self {
-        self.show_row_headers.set(false);
-        self
-    }
-    pub fn with_hidden_col_headers(self) -> Self {
-        self.show_col_headers.set(false);
         self
     }
     pub fn with_show_selection(self, b: bool) -> Self {
@@ -533,18 +521,6 @@ impl CanvasModel for TestModel {
     }
     fn last_column(&self, _: u32) -> i32 {
         self.last_column.get()
-    }
-    fn get_show_row_headers(&self, _: u32) -> Option<bool> {
-        if self.capture_fail.get() == Some(FrameInputFailure::RowHeaderVisibility) {
-            return None;
-        }
-        Some(self.show_row_headers.get())
-    }
-    fn get_show_col_headers(&self, _: u32) -> Option<bool> {
-        if self.capture_fail.get() == Some(FrameInputFailure::ColumnHeaderVisibility) {
-            return None;
-        }
-        Some(self.show_col_headers.get())
     }
     fn get_show_selection(&self) -> bool {
         self.show_selection.get()

@@ -50,7 +50,7 @@ impl Chrome {
     ///     [module docs](crate::chrome) for build phases A-E.
     ///   * `SlotsReuse` — prev's slot vecs and header labels survive
     ///     verbatim; only the captured per-attempt scalars (theme, dpr,
-    ///     model generation, header visibility) are refreshed. Caller
+    ///     model generation) are refreshed. Caller
     ///     refreshes overlay state separately (`SelectionLayer::refresh` in
     ///     the orchestrator).
     ///
@@ -103,8 +103,6 @@ impl Chrome {
                 prev.theme = Rc::clone(inputs.theme());
                 prev.metrics = inputs.metrics();
                 prev.model_generation = inputs.model_generation();
-                prev.show_row_headers = inputs.show_row_headers();
-                prev.show_col_headers = inputs.show_col_headers();
                 prev.kind = FrameKindTag::SlotsReused;
                 // The candidate carries this attempt's captured link index.
                 // A caller that holds this candidate must restore the
@@ -130,8 +128,8 @@ impl Chrome {
         inputs: &FrameInputs,
         recycled: RecycledSlots,
     ) -> FreshBuild {
-        // `inputs` is a `FrameInputs::capture` snapshot: sheet, view, freeze
-        // counts, and header visibility already read exactly once and
+        // `inputs` is a `FrameInputs::capture` snapshot: sheet, view, and freeze
+        // counts already read exactly once and
         // validated (a bridge failure on any of them holds the whole paint
         // attempt before `Chrome::build` is ever called — see
         // `Orchestrator::render_pending`). No fallback default is needed or
@@ -147,13 +145,6 @@ impl Chrome {
         let view = inputs.view();
         let sheet = inputs.sheet();
 
-        // Visibility is modelled as thickness 0. CELL_AREA_INSET only reserves
-        // the 1-px chrome border that draw_corner_box strokes; a hidden strip
-        // paints no such border, so its thickness AND inset collapse to 0 and
-        // cells reclaim the full edge (cell_origin follows from origin_x/_y).
-        let show_row = inputs.show_row_headers();
-        let show_col = inputs.show_col_headers();
-
         // Phase A — frozen counts, already captured.
         let frozen_row_count = inputs.frozen_rows();
         let frozen_col_count = inputs.frozen_cols();
@@ -166,11 +157,7 @@ impl Chrome {
         let (canvas_w, canvas_h) = canvas.to_logical_extent();
         let last_row = model.last_row(sheet);
         let last_column = model.last_column(sheet);
-        let origin_y = if show_col {
-            HEADER_ROW_HEIGHT + CELL_AREA_INSET
-        } else {
-            0
-        };
+        let origin_y = HEADER_ROW_HEIGHT + CELL_AREA_INSET;
         if !pane_set.fill_rows(
             model,
             sheet,
@@ -184,19 +171,11 @@ impl Chrome {
         }
 
         // Phase C — measure row_header_thickness from the last visible row label.
-        let row_header_thickness = row_header_thickness_for(
-            &pane_set.rows.scroll,
-            frozen_row_count,
-            view.top_row,
-            show_row,
-        );
+        let row_header_thickness =
+            row_header_thickness_for(&pane_set.rows.scroll, frozen_row_count, view.top_row);
 
         // Phase D — col walk uses the measured width to anchor `origin_x`.
-        let origin_x = if show_row {
-            row_header_thickness + CELL_AREA_INSET
-        } else {
-            0
-        };
+        let origin_x = row_header_thickness + CELL_AREA_INSET;
         if !pane_set.fill_cols(
             model,
             sheet,
@@ -218,7 +197,7 @@ impl Chrome {
 
         // Phase E — assemble. `cell_origin` reuses the locals from B/D so
         // there's a single source of truth for the cell-area top-left.
-        let col_header_thickness = if show_col { HEADER_ROW_HEIGHT } else { 0 };
+        let col_header_thickness = HEADER_ROW_HEIGHT;
         let cell_origin = Point {
             x: origin_x,
             y: origin_y,
@@ -233,8 +212,6 @@ impl Chrome {
             metrics: inputs.metrics(),
             theme: Rc::clone(inputs.theme()),
             model_generation: inputs.model_generation(),
-            show_row_headers: show_row,
-            show_col_headers: show_col,
             kind: FrameKindTag::Fresh,
             // The candidate carries this attempt's captured link index, so
             // prepare (fingerprints) and paint read one source. A held

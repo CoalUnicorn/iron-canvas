@@ -667,7 +667,6 @@ mod dev_wire {
         Model,
         Sheet,
         Freeze,
-        Headers,
         TwoAxisScroll,
         MissingActiveSnapshot,
         ActiveCellChangedOrUnknown,
@@ -684,7 +683,6 @@ mod dev_wire {
                 RebuildReason::Model => Self::Model,
                 RebuildReason::Sheet => Self::Sheet,
                 RebuildReason::Freeze => Self::Freeze,
-                RebuildReason::Headers => Self::Headers,
                 RebuildReason::TwoAxisScroll => Self::TwoAxisScroll,
                 RebuildReason::MissingActiveSnapshot => Self::MissingActiveSnapshot,
                 RebuildReason::ActiveCellChangedOrUnknown => Self::ActiveCellChangedOrUnknown,
@@ -723,8 +721,6 @@ mod dev_wire {
         SheetMismatch,
         FrozenRows,
         FrozenColumns,
-        RowHeaderVisibility,
-        ColumnHeaderVisibility,
         InvalidFrozenRowCount,
         InvalidFrozenColumnCount,
         SheetLinks,
@@ -739,8 +735,6 @@ mod dev_wire {
                 FrameInputFailure::SheetMismatch => Self::SheetMismatch,
                 FrameInputFailure::FrozenRows => Self::FrozenRows,
                 FrameInputFailure::FrozenColumns => Self::FrozenColumns,
-                FrameInputFailure::RowHeaderVisibility => Self::RowHeaderVisibility,
-                FrameInputFailure::ColumnHeaderVisibility => Self::ColumnHeaderVisibility,
                 FrameInputFailure::InvalidFrozenRowCount => Self::InvalidFrozenRowCount,
                 FrameInputFailure::InvalidFrozenColumnCount => Self::InvalidFrozenColumnCount,
                 FrameInputFailure::SheetLinks => Self::SheetLinks,
@@ -843,8 +837,6 @@ mod dev_wire {
         pub frozen_cols: i32,
         pub row_header_thickness: i32,
         pub col_header_thickness: i32,
-        pub show_row_headers: bool,
-        pub show_col_headers: bool,
         pub shape: GridShapeWire,
         pub segments: Vec<DiagSegmentWire>,
     }
@@ -870,8 +862,6 @@ mod dev_wire {
                 frozen_cols: geometry.shape.frozen_cols(),
                 row_header_thickness: geometry.row_header_thickness,
                 col_header_thickness: geometry.col_header_thickness,
-                show_row_headers: geometry.show_row_headers,
-                show_col_headers: geometry.show_col_headers,
                 shape: GridShapeWire::from(geometry.shape),
                 segments: geometry
                     .segments
@@ -1385,14 +1375,6 @@ mod tests {
             (FrameInputFailure::FrozenRows, "frozenRows"),
             (FrameInputFailure::FrozenColumns, "frozenColumns"),
             (
-                FrameInputFailure::RowHeaderVisibility,
-                "rowHeaderVisibility",
-            ),
-            (
-                FrameInputFailure::ColumnHeaderVisibility,
-                "columnHeaderVisibility",
-            ),
-            (
                 FrameInputFailure::InvalidFrozenRowCount,
                 "invalidFrozenRowCount",
             ),
@@ -1509,7 +1491,7 @@ mod tests {
         let wire = FrameDiagnosticsWire::from(&diag);
         let json = serde_json::to_value(&wire).expect("wire serializes");
 
-        assert_eq!(json["schemaVersion"], 4);
+        assert_eq!(json["schemaVersion"], 5);
         assert_eq!(json["attemptSeq"], 7);
         assert_eq!(json["committedSeq"], 6);
         assert_eq!(json["selected"], "changedCells");
@@ -1587,8 +1569,6 @@ mod tests {
                 left_column: 1,
                 row_header_thickness: 40,
                 col_header_thickness: 40,
-                show_row_headers: true,
-                show_col_headers: true,
                 shape: GridShape::from_lens([1, 19], [1, 9]),
                 segments: vec![iron_canvas_core::DiagSegment {
                     region: PaneRegion::BottomRight,
@@ -1629,7 +1609,7 @@ mod tests {
         );
         let json: serde_json::Value = serde_json::from_str(&text).expect("valid JSON");
 
-        assert_eq!(json["schemaVersion"], 4);
+        assert_eq!(json["schemaVersion"], 5);
         assert_eq!(
             json["geometry"]["backingSize"],
             serde_json::json!({ "w": 1600, "h": 800 })

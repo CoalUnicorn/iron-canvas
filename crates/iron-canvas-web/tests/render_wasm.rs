@@ -472,14 +472,12 @@ fn backward_scroll_after_one_failed_measure_matches_fresh() {
 }
 
 #[wasm_bindgen_test]
-fn hidden_row_header_blits_match_fresh_on_both_axes() {
+fn header_geometry_scrolls_match_fresh_on_both_axes() {
     use iron_canvas_core::geometry::prim::Axis;
 
     for dpr in [1.0, 1.25, 1.5] {
         for axis in [Axis::Row, Axis::Column] {
-            for (frozen, show_col_headers) in
-                [(false, true), (true, true), (false, false), (true, false)]
-            {
+            for frozen in [false, true] {
                 let top = Rc::new(Cell::new(3));
                 let left = Rc::new(Cell::new(3));
                 let handle: js_sys::Object = make_scrollable_fixture_model(
@@ -489,18 +487,6 @@ fn hidden_row_header_blits_match_fresh_on_both_axes() {
                     None,
                 )
                 .unchecked_into();
-                set_prop(
-                    &handle,
-                    "getShowRowHeaders",
-                    &js_sys::Function::new_no_args("return false;"),
-                );
-                if !show_col_headers {
-                    set_prop(
-                        &handle,
-                        "getShowColHeaders",
-                        &js_sys::Function::new_no_args("return false;"),
-                    );
-                }
                 if frozen {
                     set_prop(
                         &handle,
@@ -516,7 +502,7 @@ fn hidden_row_header_blits_match_fresh_on_both_axes() {
                 let grid = make_canvas();
                 let overlay = make_canvas();
                 let mut canvas = IronCanvas::create(grid.clone(), overlay.clone())
-                    .expect("create hidden-header canvas");
+                    .expect("create worksheet canvas");
                 canvas
                     .set_model_js(handle.clone().into())
                     .expect("valid fixture");
@@ -532,10 +518,10 @@ fn hidden_row_header_blits_match_fresh_on_both_axes() {
                     assert_eq!(canvas.render_pending(), RenderResult::Rendered);
                     let trace = canvas.frame_trace();
                     assert!(trace.contains("ScrollBlit"), "{trace}");
-                    if dpr == 1.0 || (!frozen && !show_col_headers) {
-                        stage6_assert_verdict(&trace, "grid:strip", "aligned hidden-header blit");
+                    if dpr == 1.0 {
+                        stage6_assert_verdict(&trace, "grid:strip", "aligned header blit");
                     } else {
-                        stage6_assert_verdict(&trace, "grid:FULL", "fractional header boundary");
+                        stage6_assert_verdict(&trace, "grid:FULL", "fractional header geometry");
                     }
                     let fresh_grid = make_canvas();
                     let fresh_overlay = make_canvas();
@@ -558,7 +544,7 @@ fn hidden_row_header_blits_match_fresh_on_both_axes() {
                         .collect();
                     assert!(
                         differences.is_empty(),
-                        "grid: {axis:?}, origin {origin}, frozen {frozen}, col headers {show_col_headers}, DPR {dpr}: {} bytes differ from Fresh; first {:?}",
+                        "grid: {axis:?}, origin {origin}, frozen {frozen}, DPR {dpr}: {} bytes differ from Fresh; first {:?}",
                         differences.len(),
                         differences.first()
                     );
@@ -714,24 +700,6 @@ fn model_with_methods(methods: &[(&str, &js_sys::Function)]) -> JsBackedModel {
         panic!("object passes the setModel duck-test");
     };
     model
-}
-
-#[wasm_bindgen_test]
-fn header_visibility_defaults_to_visible_when_methods_absent() {
-    let model = model_with_methods(&[]);
-    assert_eq!(model.get_show_row_headers(0), Some(true));
-    assert_eq!(model.get_show_col_headers(0), Some(true));
-}
-
-#[wasm_bindgen_test]
-fn header_visibility_reads_supplied_false() {
-    let ret_false = js_sys::Function::new_no_args("return false;");
-    let model = model_with_methods(&[
-        ("getShowRowHeaders", &ret_false),
-        ("getShowColHeaders", &ret_false),
-    ]);
-    assert_eq!(model.get_show_row_headers(0), Some(false));
-    assert_eq!(model.get_show_col_headers(0), Some(false));
 }
 
 // ==============================================================================
@@ -3878,7 +3846,7 @@ fn stage6_frame_diagnostics_wire_smoke() {
     assert!(!value.is_undefined(), "enabled capture must publish");
 
     let diag: DiagWireMirror = serde_wasm_bindgen::from_value(value).expect("snapshot parses");
-    assert_eq!(diag.schema_version, 4);
+    assert_eq!(diag.schema_version, 5);
     assert_eq!(diag.attempt_seq, 2);
     assert!(matches!(diag.outcome, FrameOutcomeMirror::Painted));
     let geo = diag

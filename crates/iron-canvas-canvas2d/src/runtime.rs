@@ -86,7 +86,7 @@ where
     /// Resize both surfaces and keep the playback/recording DPR beside the
     /// same operation that updates the backing stores.
     /// Resize the canvas runtime and both backing stores in one call.
-    /// `metrics` was parsed by the caller (the wasm facade or the datagrid
+    /// `metrics` was parsed by the caller (the wasm facade or another host
     /// runtime), so every backend receives a validated pair.
     pub fn resize(&mut self, metrics: CanvasMetrics) {
         self.dpr = metrics.dpr();

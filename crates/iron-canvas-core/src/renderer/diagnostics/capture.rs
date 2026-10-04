@@ -69,8 +69,6 @@ impl<P: crate::painter::Painter> crate::renderer::RendererCore<P> {
             left_column: frame.pane_set.left_column(),
             row_header_thickness: frame.row_header_thickness,
             col_header_thickness: frame.col_header_thickness,
-            show_row_headers: frame.show_row_headers,
-            show_col_headers: frame.show_col_headers,
             shape: layout.shape(),
             segments: layout
                 .segments()

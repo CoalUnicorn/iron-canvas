@@ -42,7 +42,6 @@ pub enum RebuildReason {
     Model,
     Sheet,
     Freeze,
-    Headers,
     TwoAxisScroll,
     MissingActiveSnapshot,
     ActiveCellChangedOrUnknown,

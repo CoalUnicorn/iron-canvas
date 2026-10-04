@@ -2,7 +2,7 @@
 //! scalar snapshot. Two concerns:
 //!
 //! - the counting model proves `capture` reads each scalar accessor exactly
-//!   once (the fixed 8-step order the plan requires never double-reads or
+//!   once (the fixed input order never double-reads or
 //!   skips a step);
 //! - the table tests prove every `FrameInputFailure` variant is reachable,
 //!   holds the attempt (`Err`, not a substituted default), and that a
@@ -33,8 +33,6 @@ struct CountingModel {
     view_calls: Cell<u32>,
     frozen_rows_calls: Cell<u32>,
     frozen_cols_calls: Cell<u32>,
-    show_row_headers_calls: Cell<u32>,
-    show_col_headers_calls: Cell<u32>,
     show_selection_calls: Cell<u32>,
     sheet_links_calls: Cell<u32>,
 }
@@ -76,16 +74,6 @@ impl CanvasModel for CountingModel {
     }
     fn get_show_grid_lines(&self, sheet: u32) -> Fetched<bool> {
         self.inner.get_show_grid_lines(sheet)
-    }
-    fn get_show_row_headers(&self, sheet: u32) -> Option<bool> {
-        self.show_row_headers_calls
-            .set(self.show_row_headers_calls.get() + 1);
-        self.inner.get_show_row_headers(sheet)
-    }
-    fn get_show_col_headers(&self, sheet: u32) -> Option<bool> {
-        self.show_col_headers_calls
-            .set(self.show_col_headers_calls.get() + 1);
-        self.inner.get_show_col_headers(sheet)
     }
     fn get_show_selection(&self) -> bool {
         self.show_selection_calls
@@ -132,16 +120,6 @@ fn frame_inputs_capture_reads_each_scalar_exactly_once() {
         "frozen column count read exactly once"
     );
     assert_eq!(
-        model.show_row_headers_calls.get(),
-        1,
-        "row-header visibility read exactly once"
-    );
-    assert_eq!(
-        model.show_col_headers_calls.get(),
-        1,
-        "column-header visibility read exactly once"
-    );
-    assert_eq!(
         model.show_selection_calls.get(),
         1,
         "selection visibility read exactly once"
@@ -156,8 +134,6 @@ fn frame_inputs_capture_reads_each_scalar_exactly_once() {
     assert_eq!(inputs.sheet(), 2);
     assert_eq!(inputs.frozen_rows(), 1);
     assert_eq!(inputs.frozen_cols(), 3);
-    assert!(inputs.show_row_headers());
-    assert!(inputs.show_col_headers());
     assert!(inputs.show_selection());
 }
 
@@ -225,24 +201,6 @@ fn frame_inputs_failure_frozen_columns() {
     assert!(matches!(
         capture(&model),
         Err(FrameInputFailure::FrozenColumns)
-    ));
-}
-
-#[test]
-fn frame_inputs_failure_row_header_visibility() {
-    let model = base_model().with_capture_fail(FrameInputFailure::RowHeaderVisibility);
-    assert!(matches!(
-        capture(&model),
-        Err(FrameInputFailure::RowHeaderVisibility)
-    ));
-}
-
-#[test]
-fn frame_inputs_failure_column_header_visibility() {
-    let model = base_model().with_capture_fail(FrameInputFailure::ColumnHeaderVisibility);
-    assert!(matches!(
-        capture(&model),
-        Err(FrameInputFailure::ColumnHeaderVisibility)
     ));
 }
 

@@ -122,14 +122,6 @@ extern "C" {
     #[wasm_bindgen(catch, method, js_name = "getShowGridLines")]
     fn get_show_grid_lines(this: &IronCalcModelHandle, sheet: u32) -> Result<bool, JsValue>;
 
-    // Optional on the host — probed once in `new`. Absence means the host
-    // wants standard header chrome, mirroring the trait default.
-    #[wasm_bindgen(catch, method, js_name = "getShowRowHeaders")]
-    fn get_show_row_headers(this: &IronCalcModelHandle, sheet: u32) -> Result<bool, JsValue>;
-
-    #[wasm_bindgen(catch, method, js_name = "getShowColHeaders")]
-    fn get_show_col_headers(this: &IronCalcModelHandle, sheet: u32) -> Result<bool, JsValue>;
-
     #[wasm_bindgen(catch, method, js_name = "getCellStyle")]
     fn get_cell_style(
         this: &IronCalcModelHandle,
@@ -226,8 +218,6 @@ pub struct JsBackedModel {
     has_get_theme: bool,
     has_get_links: bool,
     has_get_merged_cells: bool,
-    has_show_row_headers: bool,
-    has_show_col_headers: bool,
     // Geometry/config accessors are optional on the host. A method that is
     // *statically absent* means the host has no override data for that
     // dimension — `Absent`, so the engine's documented default applies. A
@@ -253,8 +243,6 @@ impl JsBackedModel {
         let has_get_theme = Self::has_method(&handle, "getTheme");
         let has_get_links = Self::has_method(&handle, "getLinks");
         let has_get_merged_cells = Self::has_method(&handle, "getMergedCells");
-        let has_show_row_headers = Self::has_method(&handle, "getShowRowHeaders");
-        let has_show_col_headers = Self::has_method(&handle, "getShowColHeaders");
         let has_row_height = Self::has_method(&handle, "getRowHeight");
         let has_column_width = Self::has_method(&handle, "getColumnWidth");
         let has_show_grid_lines = Self::has_method(&handle, "getShowGridLines");
@@ -268,8 +256,6 @@ impl JsBackedModel {
             has_get_theme,
             has_get_links,
             has_get_merged_cells,
-            has_show_row_headers,
-            has_show_col_headers,
             has_row_height,
             has_column_width,
             has_show_grid_lines,
@@ -334,9 +320,7 @@ impl JsBackedModel {
     /// `getFrozenColumnsCount` — every one of which `FrameInputs::capture`
     /// reads on every paint attempt. Rejecting a permanently incomplete
     /// handle here is better than arming an endless capture-failure Retry
-    /// loop. Header-visibility methods stay optional: their static absence
-    /// means "assume visible" (`Some(true)`), a genuinely different case
-    /// from a throw on a present method.
+    /// loop.
     pub fn try_from_js_value(value: JsValue) -> Result<Self, JsError> {
         for method in [
             "getSelectedView",
@@ -525,20 +509,6 @@ impl CanvasModel for JsBackedModel {
             Some(v) => Fetched::Value(v),
             None => Fetched::BridgeFailed,
         }
-    }
-
-    fn get_show_row_headers(&self, sheet: u32) -> Option<bool> {
-        if !self.has_show_row_headers {
-            return Some(true);
-        }
-        self.note_throw("getShowRowHeaders", self.handle.get_show_row_headers(sheet))
-    }
-
-    fn get_show_col_headers(&self, sheet: u32) -> Option<bool> {
-        if !self.has_show_col_headers {
-            return Some(true);
-        }
-        self.note_throw("getShowColHeaders", self.handle.get_show_col_headers(sheet))
     }
 
     /// A host without `getLinks` has no link data at all — a structural fact,

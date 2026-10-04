@@ -41,7 +41,7 @@ fn enable_then_disable_round_trips() {
     orch.set_frame_diagnostics_enabled(true);
     assert_eq!(orch.render_pending(), PaintResult::Rendered);
     let diag = orch.frame_diagnostics().expect("enabled capture publishes");
-    assert_eq!(diag.schema_version, 4);
+    assert_eq!(diag.schema_version, 5);
     assert_eq!(diag.attempt_seq, 1);
     assert_eq!(diag.committed_seq, Some(1));
     orch.set_frame_diagnostics_enabled(false);

@@ -24,8 +24,9 @@ use crate::geometry::prim::Axis;
 /// Schema 3 replaced `overlay`, `viewport`, `slotsReuse`, `fresh`, and
 /// `damage` with the camelCase `RenderStrategy` names `overlayOnly`,
 /// `scrollBlit`, `changedCells`, `fullRebuild`, and `damagedRows`.
-/// Schema 4 removed the `probe` and `probeSegments` fields.
-pub const DIAG_SCHEMA_VERSION: u8 = 4;
+/// Schema 4 removed the `probe` and `probeSegments` fields. Schema 5 removes
+/// row- and column-header visibility from geometry.
+pub const DIAG_SCHEMA_VERSION: u8 = 5;
 
 /// Classification verdict for this attempt, as `Chrome::classify` decided.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,8 +181,6 @@ pub struct DiagGeometry {
     pub left_column: i32,
     pub row_header_thickness: i32,
     pub col_header_thickness: i32,
-    pub show_row_headers: bool,
-    pub show_col_headers: bool,
     pub shape: GridShape,
     pub segments: Vec<DiagSegment>,
 }

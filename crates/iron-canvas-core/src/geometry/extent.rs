@@ -58,7 +58,7 @@ impl std::error::Error for CanvasMetricError {}
 /// backing-store dimensions.
 ///
 /// [`CanvasSize`] stays permissive on purpose — it is the general coordinate
-/// value the geometry and hit-testing layers pass around, and the datagrid,
+/// value the geometry and hit-testing layers pass around, and finite models,
 /// export, and diagnostics paths all hand-construct it. The host boundary is
 /// different: a `NaN` extent, a zero/negative/`NaN` DPR, or a DPR-scaled
 /// backing store past `u32` all produce a canvas whose pixels no length of

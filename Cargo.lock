@@ -307,38 +307,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "iron-canvas-datagrid"
-version = "0.1.0-beta.2"
-dependencies = [
- "iron-canvas-core",
- "iron-canvas-recorder",
-]
-
-[[package]]
-name = "iron-canvas-datagrid-web"
-version = "0.1.0-beta.2"
-dependencies = [
- "iron-canvas-canvas2d",
- "iron-canvas-core",
- "iron-canvas-datagrid",
- "iron-canvas-export",
- "iron-canvas-recorder",
- "js-sys",
- "serde",
- "serde-wasm-bindgen",
- "serde_json",
- "wasm-bindgen",
- "wasm-bindgen-test",
- "web-sys",
-]
-
-[[package]]
 name = "iron-canvas-export"
 version = "0.1.0-beta.2"
 dependencies = [
  "base64",
  "iron-canvas-core",
- "iron-canvas-datagrid",
  "ttf-parser",
 ]
 

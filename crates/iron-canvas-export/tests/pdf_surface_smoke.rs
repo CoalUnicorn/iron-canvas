@@ -12,10 +12,12 @@ use std::rc::Rc;
 
 use iron_canvas_core::CanvasTheme;
 use iron_canvas_core::geometry::CanvasSize;
-use iron_canvas_datagrid::{Column, DataGrid};
 use iron_canvas_export::PdfSurface;
 use iron_canvas_export::pdf::PdfDocument as ReexportedDoc;
 use iron_canvas_export::pdf::doc::{ContentStream, PdfDocument, font, object, page};
+
+mod common;
+use common::TestModel;
 
 const PAGE_W: u32 = 200;
 const PAGE_H: u32 = 100;
@@ -187,18 +189,11 @@ fn pdf_render_discards_overlay() {
     let size = CanvasSize { w: 300.0, h: 200.0 };
     let theme = CanvasTheme::light();
 
-    let plain = DataGrid::builder()
-        .column(Column::new("A"))
-        .row(vec!["hello".to_string()])
-        .build();
+    let plain = TestModel::new("hello").with_selection(false);
     let a = PdfSurface::render(Rc::new(plain), &theme, size)
         .expect("a one-shot export of a readable model commits a frame");
 
-    let mut selected = DataGrid::builder()
-        .column(Column::new("A"))
-        .row(vec!["hello".to_string()])
-        .build();
-    selected.set_selection(1, 1, 3, 3); // overlay-only difference
+    let selected = TestModel::new("hello").with_selection(true);
     let b = PdfSurface::render(Rc::new(selected), &theme, size)
         .expect("a one-shot export of a readable model commits a frame");
 

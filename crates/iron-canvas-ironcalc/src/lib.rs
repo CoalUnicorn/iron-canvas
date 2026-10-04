@@ -5,7 +5,7 @@
 //! foreign trait (`CanvasModel`) for a foreign type (`UserModel`) outside of
 //! the crate that defines the trait, so the direct impl lives here.  This is
 //! the IronCalc-specific adapter: constructing an `IronCalcModel` requires
-//! naming `ironcalc_base::UserModel`.  The engine-agnostic path is `DataGrid`.
+//! naming `ironcalc_base::UserModel`. The engine-agnostic path uses `CanvasModel`.
 
 pub mod convert;
 
