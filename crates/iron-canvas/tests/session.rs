@@ -215,4 +215,21 @@ fn committed_frame_exposes_cell_rects_scroll_pane_and_autofill_handle() {
         .scroll_to_show(&workbook, 60, 60)
         .expect("far target");
     assert!(row > 4 && col > 4);
+
+    // Auto-fit measures the committed sheet with the backend's text metrics.
+    let width = session
+        .fit_column_width(&workbook, 1, 1, 1)
+        .expect("fit width");
+    assert!(width.is_some_and(|w| w > 0.0));
+    let height = session
+        .fit_row_height(&workbook, 1, 1, 1)
+        .expect("fit height");
+    assert!(height.is_some_and(|h| h > 0.0));
+    // An empty column has nothing to fit to.
+    assert_eq!(
+        session
+            .fit_column_width(&workbook, 50, 1, 1)
+            .expect("empty"),
+        None
+    );
 }

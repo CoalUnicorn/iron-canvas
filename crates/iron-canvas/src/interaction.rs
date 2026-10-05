@@ -4,7 +4,10 @@ use iron_canvas_core::{
     CellCoord, PixelRect, Point,
     scene_geometry::{GridGeometry, GridHit, GridRange, GridResize, RangeFragment, contains},
 };
-use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetViewport};
+use iron_canvas_ironcalc::{
+    PreparedWorksheet, WorksheetViewport,
+    autofit::{self, AutoFitError},
+};
 use ironcalc_base::{UserModel, links::CellLinkView, types::MergedCell};
 
 /// Autofill-handle size in canvas pixels, applied on each side of the
@@ -180,6 +183,50 @@ impl<B: RenderBackend> CanvasSession<B> {
         let top = origin_showing(row, origin.row, frozen_rows, pane.height, height)?;
         let left = origin_showing(column, origin.col, frozen_cols, pane.width, width)?;
         ((top, left) != (origin.row, origin.col)).then_some((top, left))
+    }
+    /// Widest formatted value across `col` over `[first_row, last_row]`, plus
+    /// padding, measured with the committed backend's text metrics.
+    pub fn fit_column_width(
+        &self,
+        workbook: &UserModel<'_>,
+        col: i32,
+        first_row: i32,
+        last_row: i32,
+    ) -> Result<Option<f64>, AutoFitError> {
+        let sheet = self.committed_sheet()?;
+        autofit::fit_width(
+            workbook,
+            self.backend.metrics(),
+            sheet,
+            col,
+            first_row,
+            last_row,
+        )
+    }
+    /// Tallest wrapped text block across `row` over `[first_col, last_col]`,
+    /// plus padding, measured with the committed backend's text metrics.
+    pub fn fit_row_height(
+        &self,
+        workbook: &UserModel<'_>,
+        row: i32,
+        first_col: i32,
+        last_col: i32,
+    ) -> Result<Option<f64>, AutoFitError> {
+        let sheet = self.committed_sheet()?;
+        autofit::fit_height(
+            workbook,
+            self.backend.metrics(),
+            sheet,
+            row,
+            first_col,
+            last_col,
+        )
+    }
+    fn committed_sheet(&self) -> Result<u32, AutoFitError> {
+        self.committed_frame
+            .as_ref()
+            .map(|frame| frame.sheet)
+            .ok_or(AutoFitError::Sheet)
     }
     fn committed_geometry(&self) -> Option<&GridGeometry> {
         self.committed_frame.as_ref()?.worksheet.geometry.as_deref()

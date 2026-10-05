@@ -3,6 +3,7 @@
 //! The default `legacy` feature retains `IronCalcModel` and style converters
 //! for the old renderer until M4. The shared session disables this feature.
 
+pub mod autofit;
 pub mod compiler;
 #[cfg(feature = "legacy")]
 pub mod convert;
