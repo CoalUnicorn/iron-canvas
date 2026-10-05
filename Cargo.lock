@@ -291,6 +291,7 @@ name = "iron-canvas"
 version = "0.1.0-beta.2"
 dependencies = [
  "iron-canvas-core",
+ "iron-canvas-export",
  "iron-canvas-ironcalc",
  "ironcalc_base",
 ]
@@ -347,6 +348,7 @@ dependencies = [
 name = "iron-canvas-web"
 version = "0.1.0-beta.2"
 dependencies = [
+ "iron-canvas",
  "iron-canvas-canvas2d",
  "iron-canvas-core",
  "iron-canvas-export",

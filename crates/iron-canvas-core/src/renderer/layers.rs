@@ -257,7 +257,7 @@ impl<P: Painter> OverlayRenderer<P> {
     pub fn repaint_active_cell(
         &self,
         model: &dyn CanvasModel,
-        cell: crate::address::CellCoord,
+        cell: crate::CellCoord,
         frame: &Chrome,
     ) {
         self.core.repaint_active_cell(model, cell, frame);

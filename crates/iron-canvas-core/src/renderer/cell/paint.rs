@@ -14,7 +14,6 @@ use super::cf::CfDecorationPaint;
 use super::text::TextPaint;
 use crate::CanvasModel;
 
-use crate::address::{CellCoord, RCRange};
 use crate::chrome::{Chrome, PaneRegion};
 use crate::geometry::pixel_rect::PixelRect;
 use crate::geometry::prim::Point;
@@ -24,6 +23,7 @@ use crate::renderer::RendererCore;
 use crate::renderer::cache::ColorIntern;
 use crate::style::{CellKind, CellStyle};
 use crate::theme::CanvasTheme;
+use crate::{CellCoord, RCRange};
 
 pub struct CellPaint {
     pub row: i32,

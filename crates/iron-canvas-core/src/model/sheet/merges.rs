@@ -19,8 +19,8 @@
 
 use std::hash::{Hash, Hasher};
 
-use crate::address::{CellCoord, RCRange};
 use crate::geometry::constants::{LAST_COLUMN, LAST_ROW};
+use crate::{CellCoord, RCRange};
 
 /// One merged range. `range` is the full logical rectangle; `anchor` is its
 /// top-left cell, the only cell a user can edit.

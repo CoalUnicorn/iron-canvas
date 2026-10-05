@@ -1,20 +1,17 @@
-//! Engine-backed conditional-formatting verification.
-//!
-//! Loads the two workbooks the `2026-09-27` support-gap audit used and checks
-//! the *evaluated decorations* the adapter hands the canvas — not just rule
-//! counts. This is the Rust half of the review's "Engine/import" acceptance
-//! check; the browser pixel comparison is still owed.
+//! Engine CF fixture checks for both the legacy adapter and the M1 compiler.
+//! The SVG test uses the resolved scene backend. Browser pixels are covered
+//! by `iron-canvas-web/tests/cf_fixture_canvas2d.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use iron_canvas_core::{CanvasSize, CanvasTheme};
+use iron_canvas_core::scene::{Primitive, RenderBackend};
+use iron_canvas_core::{CanvasTheme, CellCoord};
 use iron_canvas_core::{CellDecoration, IconGlyph, RatingStyle};
-use iron_canvas_export::SvgSurface;
+use iron_canvas_export::SvgSceneBackend;
 use iron_canvas_ironcalc::convert::cell_decoration_from_extended;
-use iron_canvas_ironcalc::{IronCalcModel, WorksheetCompiler, color_resolver};
+use iron_canvas_ironcalc::{WorksheetCompiler, WorksheetViewport, color_resolver};
 use ironcalc::import::{load_from_xlsx, load_from_xlsx_bytes};
 use ironcalc_base::{Model, UserModel};
-use std::rc::Rc;
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cf_tests.xlsx");
 
@@ -65,28 +62,6 @@ fn icons_with_show_value_zero_reach_the_canvas_hidden() {
     assert!(
         !icon.show_value,
         "showValue=0 must survive as show_value=false"
-    );
-}
-
-#[test]
-fn compiler_uses_one_extended_style_for_style_and_decoration() {
-    let model = load(FIXTURE);
-    let coordinate = iron_canvas_core::CellCoord { row: 17, col: 2 };
-    let prepared = WorksheetCompiler::new()
-        .prepare_cells(&model, 0, [coordinate, coordinate])
-        .expect("cell compiles");
-
-    assert_eq!(prepared.len(), 1, "duplicate requests compile once");
-    let compiled = &prepared[0];
-    let icon = compiled
-        .decoration
-        .as_ref()
-        .and_then(|decoration| decoration.icon.as_ref())
-        .expect("B17 has a conditional-formatting icon");
-    assert!(!icon.show_value);
-    assert!(
-        compiled.style.font.size > 0.0,
-        "the same extended style also supplies ordinary cell style"
     );
 }
 
@@ -162,19 +137,54 @@ fn cf_fixture_renders_through_svg_backend() {
     let model = UserModel::from_model(
         Model::from_workbook(workbook, "en").expect("fixture model constructs"),
     );
-    let svg = SvgSurface::render(
-        Rc::new(IronCalcModel(model)),
-        &CanvasTheme::light(),
-        CanvasSize {
-            w: 1100.0,
-            h: 700.0,
-        },
-    )
-    .expect("fixture renders to SVG");
-
-    assert!(svg.starts_with("<svg "));
+    let mut backend = SvgSceneBackend::new();
+    let prepared = WorksheetCompiler::new()
+        .prepare(
+            &model,
+            0,
+            WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 1100,
+                height: 700,
+            },
+            backend.metrics(),
+            &CanvasTheme::light(),
+        )
+        .unwrap();
+    assert_eq!(prepared.extended_style_reads, prepared.cells.len());
     assert!(
-        svg.contains("<linearGradient"),
-        "the fixture's gradient data bars should use SVG gradients"
+        prepared.scene.passes[1]
+            .iter()
+            .any(|p| matches!(p, Primitive::Gradient { .. }))
     );
+    let staged = backend.stage_frame(&prepared.scene).unwrap();
+    backend.commit_frame(staged).unwrap();
+    let svg = backend.document().unwrap();
+    assert!(svg.starts_with("<svg "));
+    assert!(svg.contains("<linearGradient"));
+}
+
+#[test]
+fn compiler_suppresses_hidden_values_but_keeps_icon_primitives() {
+    let model = load(FIXTURE);
+    let backend = SvgSceneBackend::new();
+    let prepared = WorksheetCompiler::new()
+        .prepare(
+            &model,
+            0,
+            WorksheetViewport {
+                first_cell: CellCoord { row: 17, col: 2 },
+                width: 10,
+                height: 10,
+            },
+            backend.metrics(),
+            &CanvasTheme::light(),
+        )
+        .unwrap();
+    assert_eq!(prepared.extended_style_reads, 1);
+    assert!(prepared.scene.passes[4].is_empty());
+    assert!(prepared.scene.passes[1].iter().any(|p| matches!(
+        p,
+        Primitive::FillPath { .. } | Primitive::Circle { .. } | Primitive::StrokePath { .. }
+    )));
 }

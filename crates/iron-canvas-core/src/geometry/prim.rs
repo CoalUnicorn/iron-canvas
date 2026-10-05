@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{RCRange, geometry::pixel_rect::PixelRect};
+#[cfg(feature = "legacy")]
+use crate::RCRange;
+use crate::geometry::pixel_rect::PixelRect;
 
 /// A point in logical (CSS) pixels on the canvas.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -140,6 +142,7 @@ impl Axis {
 
     /// Inclusive `(start, end)` of the user's selection along this axis,
     /// read from ironcalc's `SelectedView.range`
+    #[cfg(feature = "legacy")]
     pub fn selection_range(self, view_range: RCRange) -> (i32, i32) {
         let norm = view_range.normalized();
         match self {
@@ -193,7 +196,7 @@ impl Side {
 /// Cardinal side of a rectangle.
 ///
 /// Formula-reference hit testing uses it through
-/// [`RefZone::Edge`](crate::chrome::hit::RefZone::Edge); border
+/// `RefZone::Edge`; border
 /// paint uses [`Side::line`] to project the side onto a stroke segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {

@@ -5,9 +5,10 @@ authors.workspace = true
 edition.workspace = true
 
 [dependencies]
-iron-canvas-core = { path = "../iron-canvas-core" }
-iron-canvas-ironcalc = { path = "../iron-canvas-ironcalc" }
+iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core", default-features = false }
+iron-canvas-ironcalc = { version = "0.1.0-beta.2", path = "../iron-canvas-ironcalc", default-features = false }
 ironcalc_base.workspace = true
 
 [dev-dependencies]
+iron-canvas-export = { path = "../iron-canvas-export" }
 ironcalc_base.workspace = true

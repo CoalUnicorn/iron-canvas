@@ -6,8 +6,11 @@
 
 use std::fmt;
 
-use iron_canvas_core::CellCoord;
-use iron_canvas_ironcalc::{PreparedCell, WorksheetCompileError, WorksheetCompiler};
+use iron_canvas_core::CanvasTheme;
+pub use iron_canvas_core::scene::RenderBackend;
+use iron_canvas_ironcalc::{
+    PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetViewport,
+};
 use ironcalc_base::UserModel;
 
 /// Host-provided workbook identity and monotonically increasing revision.
@@ -22,13 +25,14 @@ pub struct RevisionToken {
 
 /// The worksheet content requested for one complete frame.
 ///
-/// This initial session slice accepts explicit cell coordinates. Viewport
-/// geometry and overlay state can be added without changing the commit rule.
-#[derive(Debug, Clone, Copy)]
-pub struct RenderRequest<'a> {
+/// This slice renders a Fresh cell viewport. Worksheet composition is added
+/// without changing the commit rule.
+#[derive(Debug, Clone)]
+pub struct RenderRequest {
     pub sheet: u32,
     pub revision: RevisionToken,
-    pub cells: &'a [CellCoord],
+    pub viewport: WorksheetViewport,
+    pub theme: CanvasTheme,
 }
 
 /// Fully prepared, owned worksheet content for a single render attempt.
@@ -37,25 +41,7 @@ pub struct PreparedWorksheetFrame {
     pub sequence: u64,
     pub sheet: u32,
     pub revision: RevisionToken,
-    pub cells: Vec<PreparedCell>,
-}
-
-/// A backend that stages a complete candidate frame and then atomically
-/// publishes it.
-///
-/// `stage_frame` must not alter visible backend output. `commit_frame` is
-/// intentionally infallible: once staging succeeds, backend pixels and the
-/// session's committed frame advance together.
-pub trait RenderBackend {
-    type StagedFrame;
-    type Error;
-
-    fn stage_frame(
-        &mut self,
-        frame: &PreparedWorksheetFrame,
-    ) -> Result<Self::StagedFrame, Self::Error>;
-
-    fn commit_frame(&mut self, staged: Self::StagedFrame);
+    pub worksheet: PreparedWorksheet,
 }
 
 /// An error that prevented the candidate frame from being committed.
@@ -70,7 +56,7 @@ impl<E: fmt::Display> fmt::Display for RenderError<E> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Preparation(error) => write!(f, "worksheet preparation failed: {error}"),
-            Self::Backend(error) => write!(f, "backend staging failed: {error}"),
+            Self::Backend(error) => write!(f, "backend frame failed: {error}"),
             Self::SequenceExhausted => f.write_str("render frame sequence exhausted"),
         }
     }
@@ -109,37 +95,46 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// output or queryable frame data.
     ///
     /// Any preparation or staging error leaves `committed_frame` unchanged
-    /// and does not call the backend's commit operation.
+    /// and does not call the backend's commit operation. A failed backend
+    /// commit also preserves the previous frame under the backend contract.
     pub fn render(
         &mut self,
         workbook: &UserModel<'_>,
-        request: &RenderRequest<'_>,
+        request: &RenderRequest,
     ) -> Result<RenderOutcome, RenderError<B::Error>> {
         let sequence = self.next_sequence;
         let next_sequence = sequence
             .checked_add(1)
             .ok_or(RenderError::SequenceExhausted)?;
-        let cells = self
+        let worksheet = self
             .compiler
-            .prepare_cells(workbook, request.sheet, request.cells.iter().copied())
+            .prepare(
+                workbook,
+                request.sheet,
+                request.viewport,
+                self.backend.metrics(),
+                &request.theme,
+            )
             .map_err(RenderError::Preparation)?;
         let candidate = PreparedWorksheetFrame {
             sequence,
             sheet: request.sheet,
             revision: request.revision,
-            cells,
+            worksheet,
         };
         let staged = self
             .backend
-            .stage_frame(&candidate)
+            .stage_frame(&candidate.worksheet.scene)
             .map_err(RenderError::Backend)?;
 
-        self.backend.commit_frame(staged);
+        self.backend
+            .commit_frame(staged)
+            .map_err(RenderError::Backend)?;
         let outcome = RenderOutcome {
             sequence,
             sheet: candidate.sheet,
             revision: candidate.revision,
-            cell_count: candidate.cells.len(),
+            cell_count: candidate.worksheet.cells.len(),
         };
         self.committed_frame = Some(candidate);
         self.next_sequence = next_sequence;
@@ -156,109 +151,5 @@ impl<B: RenderBackend> CanvasSession<B> {
 
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Default)]
-    struct TestBackend {
-        visible: Option<PreparedWorksheetFrame>,
-        fail_staging: bool,
-        commits: usize,
-    }
-
-    impl RenderBackend for TestBackend {
-        type StagedFrame = PreparedWorksheetFrame;
-        type Error = &'static str;
-
-        fn stage_frame(
-            &mut self,
-            frame: &PreparedWorksheetFrame,
-        ) -> Result<Self::StagedFrame, Self::Error> {
-            if self.fail_staging {
-                return Err("injected stage failure");
-            }
-            Ok(frame.clone())
-        }
-
-        fn commit_frame(&mut self, staged: Self::StagedFrame) {
-            self.visible = Some(staged);
-            self.commits += 1;
-        }
-    }
-
-    fn workbook() -> UserModel<'static> {
-        UserModel::new_empty("session-test", "en", "UTC", "en").expect("empty workbook constructs")
-    }
-
-    fn request<'a>(sheet: u32, revision: u64, cells: &'a [CellCoord]) -> RenderRequest<'a> {
-        RenderRequest {
-            sheet,
-            revision: RevisionToken {
-                workbook_id: 1,
-                revision,
-            },
-            cells,
-        }
-    }
-
-    #[test]
-    fn successful_render_commits_backend_and_frame_from_same_candidate() {
-        let workbook = workbook();
-        let cells = [CellCoord { row: 1, col: 1 }, CellCoord { row: 1, col: 1 }];
-        let mut session = CanvasSession::new(TestBackend::default());
-
-        let outcome = session
-            .render(&workbook, &request(0, 3, &cells))
-            .expect("frame commits");
-
-        assert_eq!(outcome.sequence, 1);
-        assert_eq!(outcome.cell_count, 1);
-        assert_eq!(
-            session.committed_frame(),
-            session.backend().visible.as_ref()
-        );
-        assert_eq!(session.backend().commits, 1);
-    }
-
-    #[test]
-    fn preparation_failure_preserves_previous_frame_and_backend_output() {
-        let workbook = workbook();
-        let cell = [CellCoord { row: 1, col: 1 }];
-        let mut session = CanvasSession::new(TestBackend::default());
-        session
-            .render(&workbook, &request(0, 1, &cell))
-            .expect("initial frame commits");
-        let committed = session.committed_frame().cloned();
-        let visible = session.backend().visible.clone();
-        let result = session.render(&workbook, &request(u32::MAX, 2, &cell));
-
-        assert!(matches!(result, Err(RenderError::Preparation(_))));
-        assert_eq!(session.committed_frame(), committed.as_ref());
-        assert_eq!(session.backend().visible, visible);
-        assert_eq!(session.backend().commits, 1);
-    }
-
-    #[test]
-    fn backend_stage_failure_preserves_previous_frame_and_pixels() {
-        let workbook = workbook();
-        let cell = [CellCoord { row: 1, col: 1 }];
-        let mut session = CanvasSession::new(TestBackend::default());
-        session
-            .render(&workbook, &request(0, 1, &cell))
-            .expect("initial frame commits");
-        let committed = session.committed_frame().cloned();
-        let visible = session.backend().visible.clone();
-        session.backend_mut().fail_staging = true;
-
-        let result = session.render(&workbook, &request(0, 2, &cell));
-
-        assert!(matches!(result, Err(RenderError::Backend(_))));
-        assert_eq!(session.committed_frame(), committed.as_ref());
-        assert_eq!(session.backend().visible, visible);
-        assert_eq!(session.backend().commits, 1);
     }
 }

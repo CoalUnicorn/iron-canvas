@@ -1,7 +1,6 @@
 //! Merge preparation: every model read completes before any painter op.
 
 use crate::CanvasModel;
-use crate::address::{CellCoord, RCRange};
 use crate::chrome::{Chrome, GridLayout};
 use crate::model::fetched::Fetched;
 use crate::model::sheet::merges::MergedRange;
@@ -9,6 +8,7 @@ use crate::painter::Painter;
 use crate::renderer::RendererCore;
 use crate::renderer::prepared::SegmentData;
 use crate::style::{CellDecoration, CellKind, CellStyle};
+use crate::{CellCoord, RCRange};
 
 use super::borders::build_perimeter;
 use super::geometry::{ExtentCache, intersect, merge_geometry};

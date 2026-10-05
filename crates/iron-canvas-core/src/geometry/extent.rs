@@ -99,6 +99,7 @@ impl CanvasMetrics {
     /// logical canvas at DPR 1.0, exactly the pre-validation defaults. Valid by
     /// construction (0 is finite and non-negative; 1.0 is finite and positive),
     /// so it is a real constructor rather than an unchecked literal.
+    #[cfg(feature = "legacy")]
     pub(crate) fn unresized() -> Self {
         Self {
             size: CanvasSize { w: 0.0, h: 0.0 },

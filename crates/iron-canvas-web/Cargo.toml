@@ -47,3 +47,4 @@ iron-canvas-ironcalc = { version = "0.1.0-beta.2", path = "../iron-canvas-ironca
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 ironcalc = { workspace = true }
+iron-canvas = { path = "../iron-canvas" }

@@ -15,13 +15,19 @@
 use std::rc::Rc;
 
 use crate::geometry::CanvasMetrics;
+#[cfg(feature = "legacy")]
 use crate::geometry::CanvasSize;
+#[cfg(feature = "legacy")]
 use crate::geometry::pixel_rect::PixelRect;
+#[cfg(feature = "legacy")]
 use crate::geometry::prim::Point;
 use crate::painter::{BlitPainter, Painter};
+#[cfg(feature = "legacy")]
 use crate::renderer::LayerOps;
 
+#[cfg(feature = "legacy")]
 mod grid;
+#[cfg(feature = "legacy")]
 mod overlay;
 
 /// Drawing target abstraction. Production wasm holds one Surface per
@@ -67,6 +73,7 @@ pub trait Surface {
     fn present(&self);
 }
 
+#[cfg(feature = "legacy")]
 pub struct LayerBase<S, R>
 where
     S: Surface,
@@ -76,6 +83,7 @@ where
     pub(crate) renderer: R,
 }
 
+#[cfg(feature = "legacy")]
 impl<S, R> LayerBase<S, R>
 where
     S: Surface,
@@ -100,6 +108,7 @@ where
 
 /// Full-canvas pixel rect. Layer-wide fill / clear converge here so the
 /// `f64` (CSS) -> `i32` (PixelRect) rounding lives in one place.
+#[cfg(feature = "legacy")]
 fn full_canvas_rect(size: CanvasSize) -> PixelRect {
     let (width, height) = size.to_logical_extent();
     PixelRect {

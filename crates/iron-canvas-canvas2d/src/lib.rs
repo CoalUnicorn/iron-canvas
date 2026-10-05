@@ -16,3 +16,6 @@ mod web_surface;
 pub use canvas_painter::CanvasPainter;
 pub use runtime::Canvas2dRuntime;
 pub use web_surface::WebSurface;
+
+mod scene;
+pub use scene::Canvas2dSceneBackend;

@@ -10,7 +10,7 @@ pub mod common;
 pub mod svg;
 
 #[cfg(feature = "svg")]
-pub use svg::{SvgPainter, SvgSurface};
+pub use svg::{SvgPainter, SvgSceneBackend, SvgSurface};
 
 #[cfg(feature = "pdf")]
 pub mod pdf;

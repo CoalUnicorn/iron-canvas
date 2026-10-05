@@ -4,6 +4,30 @@
 
 # iron-canvas architecture
 
+## M1 scene path (2026-10-04)
+
+The new `iron-canvas` crate owns `CanvasSession`. It borrows `&UserModel`
+while `WorksheetCompiler` samples the viewport and lowers engine styles
+into an owned `GridScene`. The compiler owns CF glyphs, rating policy,
+spreadsheet text alignment, and border policy. Core owns generic axis
+sampling, text layout, primitives, and scene execution.
+
+`SvgSceneBackend` and `Canvas2dSceneBackend` consume the same scene contract.
+They receive no workbook or spreadsheet DTOs. The session publishes its
+prepared worksheet only after the backend commits the staged output.
+Preparation, staging, and presentation errors preserve the previous frame
+under the backend contract. Canvas2D target dimensions are fixed per backend.
+
+Core and compiler retain a default `legacy` feature for the existing facade.
+The new session disables both defaults. A standalone core build without
+that feature exposes no `CanvasModel`, `CellDecoration`, or style mirrors.
+M4 removes the old renderer after the main worksheet integration migrates.
+
+The separate transition-playground route is `/playground/grid-core`, built
+with `dev-tools`. See the [M1 review](docs/reviews/2026-10-04-m1-grid-core.md)
+for validation and limits. The remainder of this document describes the
+legacy pipeline unless a section says otherwise.
+
 `iron-canvas` is the read-only rendering workspace used by RustyCalc. It
 paints worksheet data supplied through `CanvasModel`, but it never mutates
 that model. The live browser facade renders into two stacked canvases:

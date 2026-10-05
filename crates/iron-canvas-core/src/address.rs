@@ -1,6 +1,6 @@
 //! Cell-space addresses and areas.
 //!
-//! `RCRange`, `DenseRange`, `CellCoord`, `SheetArea`, `FormulaRef`,
+//! `RCRange`, `DenseRange`, `SheetArea`, `FormulaRef`,
 //! `FormulaRefKind`, and `AutofillTarget`.
 
 /// Inclusive rectangular range of cells. The two corners may be in either
@@ -189,17 +189,6 @@ impl From<RCRange> for DenseRange {
 /// Target cell of an in-progress autofill-handle drag.
 #[derive(Copy, Clone, PartialEq)]
 pub struct AutofillTarget {
-    pub row: i32,
-    pub col: i32,
-}
-
-/// Sheet coordinates of one cell, 1-based on both axes.
-///
-/// Named so a row/column pair that travels across module boundaries — selection
-/// state to the overlay paint pass — cannot be transposed the way two adjacent
-/// `i32` parameters can.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct CellCoord {
     pub row: i32,
     pub col: i32,
 }
