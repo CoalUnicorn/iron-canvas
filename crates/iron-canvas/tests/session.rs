@@ -44,6 +44,7 @@ fn request() -> RenderRequest {
             height: 80,
         },
         theme: CanvasTheme::light(),
+        overlays: Default::default(),
     }
 }
 #[test]

@@ -4,6 +4,11 @@
 //! prepares an owned candidate frame; backends stage that complete frame
 //! before the session publishes it.
 
+mod interaction;
+mod overlays;
+pub use interaction::{DisplayCell, HostIntent, PointerAction};
+pub use overlays::{FormulaOverlay, OverlayState};
+
 use std::fmt;
 
 use iron_canvas_core::CanvasTheme;
@@ -25,14 +30,14 @@ pub struct RevisionToken {
 
 /// The worksheet content requested for one complete frame.
 ///
-/// This slice renders a Fresh cell viewport. Worksheet composition is added
-/// without changing the commit rule.
+/// Headers are always visible. Empty overlays give a content-only export.
 #[derive(Debug, Clone)]
 pub struct RenderRequest {
     pub sheet: u32,
     pub revision: RevisionToken,
     pub viewport: WorksheetViewport,
     pub theme: CanvasTheme,
+    pub overlays: OverlayState,
 }
 
 /// Fully prepared, owned worksheet content for a single render attempt.
@@ -106,7 +111,7 @@ impl<B: RenderBackend> CanvasSession<B> {
         let next_sequence = sequence
             .checked_add(1)
             .ok_or(RenderError::SequenceExhausted)?;
-        let worksheet = self
+        let mut worksheet = self
             .compiler
             .prepare(
                 workbook,
@@ -116,6 +121,12 @@ impl<B: RenderBackend> CanvasSession<B> {
                 &request.theme,
             )
             .map_err(RenderError::Preparation)?;
+        overlays::compose(
+            &mut worksheet,
+            request.sheet,
+            &request.overlays,
+            &request.theme,
+        );
         let candidate = PreparedWorksheetFrame {
             sequence,
             sheet: request.sheet,

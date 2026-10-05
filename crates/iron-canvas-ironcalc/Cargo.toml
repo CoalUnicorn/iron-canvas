@@ -20,3 +20,6 @@ ironcalc_base = { workspace = true }
 # the audit used and assert the adapter's evaluated decorations.
 ironcalc = { workspace = true }
 iron-canvas-export = { path = "../iron-canvas-export" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+iron-canvas-native = { path = "../iron-canvas-native" }

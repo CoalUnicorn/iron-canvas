@@ -1,16 +1,22 @@
 //! Read-only IronCalc worksheet compilation. No legacy model adapter is used.
 mod borders;
 mod cf;
+mod composition;
 mod glyphs;
 mod text;
 
-use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect, Point};
+use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect};
 use iron_canvas_core::{
     painter::{PaintColor, TextMetrics},
     scene::{GridScene, SceneBuilder},
-    scene_geometry::{AxisError, sample_axis},
+    scene_geometry::GridGeometry,
 };
-use ironcalc_base::{UserModel, cf_types::ExtendedStyle, types::CellType};
+use ironcalc_base::{
+    UserModel,
+    cf_types::ExtendedStyle,
+    links::CellLinkView,
+    types::{CellType, MergedCell},
+};
 use std::{collections::HashMap, fmt};
 
 // The pinned engine keeps these limits private. Keep the worksheet limits
@@ -37,6 +43,9 @@ pub struct WorksheetViewport {
 pub struct PreparedWorksheet {
     pub scene: GridScene,
     pub cells: Vec<CellPlacement>,
+    pub geometry: Option<GridGeometry>,
+    pub merges: Vec<MergedCell>,
+    pub links: Vec<CellLinkView>,
     /// Actual calls to `get_extended_cell_style` in this preparation.
     pub extended_style_reads: usize,
 }
@@ -45,6 +54,9 @@ pub struct PreparedWorksheet {
 pub enum CellReadOperation {
     Request,
     Sheet,
+    Freeze,
+    Merges,
+    Links,
     RowHeight,
     ColumnWidth,
     ExtendedStyle,
@@ -77,8 +89,7 @@ impl WorksheetCompiler {
         Self
     }
 
-    /// Prepare a Fresh viewport. Header, merge, freeze, and overlay composition
-    /// belong to M2. The selected workbook view is never changed.
+    /// Compose a complete worksheet viewport with visible headers and frozen panes.
     pub fn prepare(
         &self,
         workbook: &UserModel<'_>,
@@ -87,66 +98,7 @@ impl WorksheetCompiler {
         metrics: &dyn TextMetrics,
         theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        let first = viewport.first_cell;
-        let error = |operation, message: String| WorksheetCompileError {
-            sheet,
-            cell: first,
-            operation,
-            message,
-        };
-        // Validate the sheet even for a zero-sized viewport.
-        workbook
-            .get_show_grid_lines(sheet)
-            .map_err(|e| error(CellReadOperation::Sheet, e))?;
-        if first.row < 1
-            || first.row > LAST_ROW
-            || first.col < 1
-            || first.col > LAST_COLUMN
-            || viewport.width < 0
-            || viewport.height < 0
-        {
-            return Err(error(
-                CellReadOperation::Request,
-                "invalid viewport bounds".into(),
-            ));
-        }
-        let axis_error = |e: AxisError<String>, operation| error(operation, format!("{e:?}"));
-        let rows = sample_axis(first.row, LAST_ROW, viewport.height, |row| {
-            workbook.get_row_height(sheet, row)
-        })
-        .map_err(|e| axis_error(e, CellReadOperation::RowHeight))?;
-        let cols = sample_axis(first.col, LAST_COLUMN, viewport.width, |col| {
-            workbook.get_column_width(sheet, col)
-        })
-        .map_err(|e| axis_error(e, CellReadOperation::ColumnWidth))?;
-        let cells = rows.iter().flat_map(|row| {
-            cols.iter().map(move |col| CellPlacement {
-                coordinate: CellCoord {
-                    row: row.index,
-                    col: col.index,
-                },
-                bounds: PixelRect {
-                    top_left: Point {
-                        x: col.start,
-                        y: row.start,
-                    },
-                    width: col.extent,
-                    height: row.extent,
-                },
-            })
-        });
-        self.prepare_cells(
-            workbook,
-            sheet,
-            PixelRect {
-                top_left: Point { x: 0, y: 0 },
-                width: viewport.width,
-                height: viewport.height,
-            },
-            cells,
-            metrics,
-            theme,
-        )
+        composition::prepare(workbook, sheet, viewport, metrics, theme)
     }
 
     /// Lower positioned cells into five shared paint buffers. Repeated
@@ -161,105 +113,19 @@ impl WorksheetCompiler {
         metrics: &dyn TextMetrics,
         theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        let err = |cell, operation, message| WorksheetCompileError {
-            sheet,
-            cell,
-            operation,
-            message,
-        };
-        let first = CellCoord { row: 1, col: 1 };
-        let show_grid = workbook
-            .get_show_grid_lines(sheet)
-            .map_err(|e| err(first, CellReadOperation::Sheet, e))?;
-        let valid_rect = |rect: PixelRect| {
-            rect.width >= 0
-                && rect.height >= 0
-                && rect.left().checked_add(rect.width).is_some()
-                && rect.top().checked_add(rect.height).is_some()
-        };
+        let mut attempt = Attempt::new(workbook, sheet, metrics, theme)?;
         if !valid_rect(clip) {
-            return Err(err(
-                first,
+            return Err(attempt.error(
+                CellCoord { row: 1, col: 1 },
                 CellReadOperation::Request,
                 "invalid viewport clip".into(),
             ));
         }
-        let passes: [SceneBuilder; 5] = std::array::from_fn(|_| SceneBuilder::default());
+        let passes = new_passes();
         passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
-        let mut reads = 0;
-        let mut cached: HashMap<(i32, i32), (ExtendedStyle, CellType, String)> = HashMap::new();
         let mut placements = Vec::new();
-        let mut lines = Vec::new();
-        let mut scratch = String::new();
         for placement in cells {
-            let coordinate = placement.coordinate;
-            if coordinate.row < 1
-                || coordinate.row > LAST_ROW
-                || coordinate.col < 1
-                || coordinate.col > LAST_COLUMN
-                || !valid_rect(placement.bounds)
-            {
-                return Err(err(
-                    coordinate,
-                    CellReadOperation::Request,
-                    "invalid cell placement".into(),
-                ));
-            }
-            let record = match cached.entry((coordinate.row, coordinate.col)) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    reads += 1;
-                    let style = workbook
-                        .get_extended_cell_style(sheet, coordinate.row, coordinate.col)
-                        .map_err(|e| {
-                            err(
-                                coordinate,
-                                CellReadOperation::ExtendedStyle,
-                                format!("{e:?}"),
-                            )
-                        })?;
-                    let kind = workbook
-                        .get_cell_type(sheet, coordinate.row, coordinate.col)
-                        .map_err(|e| err(coordinate, CellReadOperation::CellType, e))?;
-                    let text = workbook
-                        .get_formatted_cell_value(sheet, coordinate.row, coordinate.col)
-                        .map_err(|e| err(coordinate, CellReadOperation::FormattedValue, e))?;
-                    entry.insert((style, kind, text))
-                }
-            };
-            let (extended, kind, value) = record;
-            let rect = placement.bounds;
-            let style = &extended.style;
-            let fill = workbook.resolve_color(&style.fill.color);
-            if !fill.is_empty() {
-                passes[0].rect_fill(rect, PaintColor::Borrowed(&fill));
-            }
-            let cf = cf::CfDecorationPaint::resolve(extended, workbook);
-            cf.paint(&passes[1], rect);
-            borders::compile_borders(
-                &passes[3],
-                &passes[2],
-                workbook,
-                &style.border,
-                rect,
-                show_grid && fill.is_empty(),
-                theme,
-            );
-            if !cf.hides_value() {
-                text::compile_text(
-                    &passes[4],
-                    workbook,
-                    style,
-                    kind,
-                    value,
-                    rect,
-                    cf.reserved_left(rect),
-                    metrics,
-                    theme,
-                    &mut lines,
-                    &mut scratch,
-                );
-            }
+            attempt.paint(placement, &passes, false)?;
             placements.push(placement);
         }
         Ok(PreparedWorksheet {
@@ -268,7 +134,172 @@ impl WorksheetCompiler {
                 passes: passes.into_iter().map(SceneBuilder::finish).collect(),
             },
             cells: placements,
-            extended_style_reads: reads,
+            geometry: None,
+            merges: Vec::new(),
+            links: attempt.links,
+            extended_style_reads: attempt.reads,
         })
+    }
+}
+
+fn valid_rect(rect: PixelRect) -> bool {
+    rect.width >= 0
+        && rect.height >= 0
+        && rect.left().checked_add(rect.width).is_some()
+        && rect.top().checked_add(rect.height).is_some()
+}
+fn new_passes() -> [SceneBuilder; 5] {
+    std::array::from_fn(|_| SceneBuilder::default())
+}
+type CellRecord = (ExtendedStyle, CellType, String);
+struct Attempt<'w, 'm> {
+    workbook: &'w UserModel<'m>,
+    sheet: u32,
+    metrics: &'w dyn TextMetrics,
+    theme: &'w CanvasTheme,
+    show_grid: bool,
+    cached: HashMap<(i32, i32), CellRecord>,
+    reads: usize,
+    links: Vec<CellLinkView>,
+    lines: Vec<iron_canvas_core::text_layout::TextLine>,
+    scratch: String,
+}
+impl<'w, 'm> Attempt<'w, 'm> {
+    fn new(
+        workbook: &'w UserModel<'m>,
+        sheet: u32,
+        metrics: &'w dyn TextMetrics,
+        theme: &'w CanvasTheme,
+    ) -> Result<Self, WorksheetCompileError> {
+        let err = |operation, message| WorksheetCompileError {
+            sheet,
+            cell: CellCoord { row: 1, col: 1 },
+            operation,
+            message,
+        };
+        let show_grid = workbook
+            .get_show_grid_lines(sheet)
+            .map_err(|e| err(CellReadOperation::Sheet, e))?;
+        let links = workbook
+            .get_links_list(sheet)
+            .map_err(|e| err(CellReadOperation::Links, e))?;
+        Ok(Self {
+            workbook,
+            sheet,
+            metrics,
+            theme,
+            show_grid,
+            cached: HashMap::new(),
+            reads: 0,
+            links,
+            lines: Vec::new(),
+            scratch: String::new(),
+        })
+    }
+    fn error(
+        &self,
+        cell: CellCoord,
+        operation: CellReadOperation,
+        message: String,
+    ) -> WorksheetCompileError {
+        WorksheetCompileError {
+            sheet: self.sheet,
+            cell,
+            operation,
+            message,
+        }
+    }
+    fn read(&mut self, cell: CellCoord) -> Result<(), WorksheetCompileError> {
+        if !(1..=LAST_ROW).contains(&cell.row) || !(1..=LAST_COLUMN).contains(&cell.col) {
+            return Err(self.error(
+                cell,
+                CellReadOperation::Request,
+                "invalid cell coordinate".into(),
+            ));
+        }
+        if self.cached.contains_key(&(cell.row, cell.col)) {
+            return Ok(());
+        }
+        self.reads += 1;
+        let style = self
+            .workbook
+            .get_extended_cell_style(self.sheet, cell.row, cell.col)
+            .map_err(|e| self.error(cell, CellReadOperation::ExtendedStyle, format!("{e:?}")))?;
+        let kind = self
+            .workbook
+            .get_cell_type(self.sheet, cell.row, cell.col)
+            .map_err(|e| self.error(cell, CellReadOperation::CellType, e))?;
+        let text = self
+            .workbook
+            .get_formatted_cell_value(self.sheet, cell.row, cell.col)
+            .map_err(|e| self.error(cell, CellReadOperation::FormattedValue, e))?;
+        self.cached
+            .insert((cell.row, cell.col), (style, kind, text));
+        Ok(())
+    }
+    fn paint(
+        &mut self,
+        placement: CellPlacement,
+        passes: &[SceneBuilder; 5],
+        merged: bool,
+    ) -> Result<(), WorksheetCompileError> {
+        if !valid_rect(placement.bounds) {
+            return Err(self.error(
+                placement.coordinate,
+                CellReadOperation::Request,
+                "invalid cell placement".into(),
+            ));
+        }
+        self.read(placement.coordinate)?;
+        let (extended, kind, value) =
+            &self.cached[&(placement.coordinate.row, placement.coordinate.col)];
+        let rect = placement.bounds;
+        let style = &extended.style;
+        let fill = self.workbook.resolve_color(&style.fill.color);
+        if merged || !fill.is_empty() {
+            passes[0].rect_fill(
+                rect,
+                PaintColor::Borrowed(if fill.is_empty() {
+                    &self.theme.cell_bg
+                } else {
+                    &fill
+                }),
+            );
+        }
+        let cf = cf::CfDecorationPaint::resolve(extended, self.workbook);
+        cf.paint(&passes[1], rect);
+        if !merged {
+            borders::compile_borders(
+                &passes[3],
+                &passes[2],
+                self.workbook,
+                &style.border,
+                rect,
+                self.show_grid && fill.is_empty(),
+                self.theme,
+            );
+        }
+        if !cf.hides_value() {
+            text::compile_text(
+                &passes[4],
+                self.workbook,
+                style,
+                kind,
+                value,
+                rect,
+                cf.reserved_left(rect),
+                self.metrics,
+                self.theme,
+                self.links
+                    .binary_search_by_key(
+                        &(placement.coordinate.row, placement.coordinate.col),
+                        |l| (l.row, l.column),
+                    )
+                    .is_ok(),
+                &mut self.lines,
+                &mut self.scratch,
+            );
+        }
+        Ok(())
     }
 }

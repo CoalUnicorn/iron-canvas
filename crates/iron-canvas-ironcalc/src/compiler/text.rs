@@ -18,6 +18,7 @@ pub(super) fn compile_text(
     reserved: i32,
     metrics: &dyn TextMetrics,
     theme: &CanvasTheme,
+    link: bool,
     lines: &mut Vec<TextLine>,
     scratch: &mut String,
 ) {
@@ -65,8 +66,13 @@ pub(super) fn compile_text(
         if font.i { "italic " } else { "" }
     );
     let resolved = workbook.resolve_color(&font.color);
+    // IronCalc keeps the hyperlink theme slot private. It is OOXML slot 10.
+    let link_color =
+        link.then(|| workbook.resolve_color(&ironcalc_base::types::Color::Theme(10, 0.0)));
     let color = if matches!(kind, CellType::ErrorValue) {
         &theme.error_text_color
+    } else if let Some(color) = link_color.as_deref().filter(|color| !color.is_empty()) {
+        color
     } else if resolved.is_empty() || resolved.eq_ignore_ascii_case("#000000") {
         &theme.default_text_color
     } else {
@@ -111,7 +117,7 @@ pub(super) fn compile_text(
         );
         let x1 = line.center_x - line.width / 2.0;
         let x2 = line.center_x + line.width / 2.0;
-        if font.u {
+        if font.u || link {
             out.stroke_text_hline(
                 x1,
                 x2,

@@ -12,3 +12,6 @@ ironcalc_base.workspace = true
 [dev-dependencies]
 iron-canvas-export = { path = "../iron-canvas-export" }
 ironcalc_base.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+iron-canvas-native = { path = "../iron-canvas-native" }

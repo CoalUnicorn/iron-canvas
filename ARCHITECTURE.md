@@ -4,6 +4,30 @@
 
 # iron-canvas architecture
 
+## M2 worksheet composition (2026-10-05)
+
+The new session composes visible headers, frozen panes, hidden axes, merges,
+links, and host overlays. Core owns `GridGeometry` and range fragments.
+The compiler owns IronCalc reads and merge/link semantics. A preparation-local
+cache serves visible cells and offscreen anchors. `CanvasSession` publishes
+query geometry, engine payloads, and the matching scene after backend commit.
+
+`OverlayState` carries selection, clipboard, and formula paint ranges.
+Active-cell restoration replays prepared content under fragment clips.
+Committed queries produce `HostIntent` values. Only the host applies writes.
+An empty overlay state gives exports without interactive overlays.
+
+The shared scene now reaches Canvas2D, SVG, PDF, and native raster output.
+`iron-canvas-native` uses Cairo/Pango and owns staged image surfaces. The host
+owns the window and presentation. Native development requires Cairo and Pango
+headers and `pkg-config` (for example, `libcairo2-dev` and `libpango1.0-dev`
+on Debian). The crate is empty on wasm32. PDF keeps its existing font and
+opaque-color limits. Neither backend reads the workbook.
+
+The separate playground route exercises composition and host intents.
+See the [M2 review](docs/reviews/2026-10-05-m2-worksheet-composition.md) for checks
+and limits. M3 owns optimization. M4 replaces the main legacy facade.
+
 ## M1 scene path (2026-10-04)
 
 The new `iron-canvas` crate owns `CanvasSession`. It borrows `&UserModel`

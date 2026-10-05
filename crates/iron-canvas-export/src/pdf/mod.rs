@@ -13,3 +13,6 @@ pub mod surface;
 pub use doc::PdfDocument;
 pub use painter::PdfPainter;
 pub use surface::PdfSurface;
+
+mod scene;
+pub use scene::PdfSceneBackend;

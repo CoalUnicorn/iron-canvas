@@ -174,17 +174,68 @@ fn compiler_suppresses_hidden_values_but_keeps_icon_primitives() {
             0,
             WorksheetViewport {
                 first_cell: CellCoord { row: 17, col: 2 },
-                width: 10,
-                height: 10,
+                width: 58,
+                height: 34,
             },
             backend.metrics(),
             &CanvasTheme::light(),
         )
         .unwrap();
     assert_eq!(prepared.extended_style_reads, 1);
-    assert!(prepared.scene.passes[4].is_empty());
+    assert!(
+        !prepared.scene.passes[4]
+            .iter()
+            .any(|p| matches!(p, Primitive::Text { .. }))
+    );
     assert!(prepared.scene.passes[1].iter().any(|p| matches!(
         p,
         Primitive::FillPath { .. } | Primitive::Circle { .. } | Primitive::StrokePath { .. }
     )));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn cf_fixture_shared_scene_reaches_native_raster_at_two_scales() {
+    use iron_canvas_native::NativeSceneBackend;
+    let workbook = load(FIXTURE);
+    let svg = SvgSceneBackend::new();
+    for sheet in [0, 1] {
+        let prepared = WorksheetCompiler::new()
+            .prepare(
+                &workbook,
+                sheet,
+                WorksheetViewport {
+                    first_cell: CellCoord { row: 1, col: 1 },
+                    width: 1100,
+                    height: 700,
+                },
+                svg.metrics(),
+                &CanvasTheme::light(),
+            )
+            .unwrap();
+        for scale in [1.0, 1.25] {
+            let mut backend = NativeSceneBackend::new(scale).unwrap();
+            let staged = backend.stage_frame(&prepared.scene).unwrap();
+            backend.commit_frame(staged).unwrap();
+            let surface = backend.surface().unwrap();
+            let mut colorful = 0;
+            surface
+                .with_data(|pixels| {
+                    for pixel in pixels.chunks_exact(4) {
+                        // Cairo ARGB32 uses native-endian premultiplied channels.
+                        let argb = u32::from_ne_bytes(pixel.try_into().unwrap());
+                        let red = ((argb >> 16) & 255) as u8;
+                        let green = ((argb >> 8) & 255) as u8;
+                        if argb >> 24 > 0 && red.abs_diff(green) > 30 {
+                            colorful += 1;
+                        }
+                    }
+                })
+                .unwrap();
+            assert!(
+                colorful > 500,
+                "sheet {sheet}, scale {scale}: {colorful} colored pixels"
+            );
+        }
+    }
 }

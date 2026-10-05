@@ -16,7 +16,7 @@ pub use svg::{SvgPainter, SvgSceneBackend, SvgSurface};
 pub mod pdf;
 
 #[cfg(feature = "pdf")]
-pub use pdf::{PdfPainter, PdfSurface};
+pub use pdf::{PdfPainter, PdfSceneBackend, PdfSurface};
 
 #[cfg(any(feature = "svg", feature = "pdf"))]
 use {

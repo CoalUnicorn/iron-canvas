@@ -1,4 +1,6 @@
 //! Bounded axis sampling for a model-independent grid viewport.
+mod composition;
+pub use composition::*;
 
 /// One grid coordinate. Both axes are 1-based; no sheet identity is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
