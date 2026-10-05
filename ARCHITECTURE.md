@@ -64,6 +64,8 @@ opaque-color limits. Neither backend reads the workbook.
 The separate playground route exercises composition and host intents.
 See the [M2 review](docs/reviews/2026-10-05-m2-worksheet-composition.md) for checks
 and limits. M3 adds measured reuse above. M4 replaces the main legacy facade.
+See the [M4 migration map](docs/reviews/2026-10-05-m4-migration-map.md) for the
+legacy inventory and ordered cut plan.
 
 ## M1 scene path (2026-10-04)
 
