@@ -298,7 +298,7 @@ pub struct DiagPaintCounts {
 }
 
 /// Structured snapshot of one completed live paint attempt. Published by
-/// `finish_attempt` only; serde projection lives in `iron-canvas-web`.
+/// `finish_attempt` only.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FrameDiagnostics {
     pub schema_version: u8,

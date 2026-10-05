@@ -2,7 +2,7 @@
 //!
 //! `Painter` is the surface every renderer paint method calls into. The
 //! trait surface lives here; concrete impls live in sibling adapter
-//! crates: `CanvasPainter` in `iron-canvas-web`, `SvgPainter` in
+//! crates: `CanvasPainter` in `iron-canvas-canvas2d`, `SvgPainter` in
 //! `iron-canvas-export`, `RecorderPainter` in `iron-canvas-recorder`.
 //!
 //! `TextMetrics` is a separate supertrait because text measurement is

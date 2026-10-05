@@ -1,9 +1,9 @@
 //! Build with --release --target wasm32-unknown-unknown, then wasm-bindgen --target web.
 #[cfg(target_arch = "wasm32")]
-#[path = "../../iron-canvas/examples/support/allocator.rs"]
+#[path = "support/allocator.rs"]
 mod allocator;
 #[cfg(target_arch = "wasm32")]
-#[path = "../../iron-canvas/examples/support/measurement.rs"]
+#[path = "support/measurement.rs"]
 mod measurement;
 #[cfg(target_arch = "wasm32")]
 mod browser {

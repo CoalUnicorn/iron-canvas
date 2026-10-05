@@ -1,6 +1,6 @@
 <!-- last-verified-against: a5a7230 (2026-08-14) -->
 <!-- working-tree-verified: 2026-09-26; edited: 2026-10-04 -->
-<!-- covers: iron-canvas/crates/ iron-canvas/Cargo.toml iron-canvas/web-test/Makefile .github/workflows/test.yml -->
+<!-- covers: iron-canvas/crates/ iron-canvas/Cargo.toml .github/workflows/test.yml -->
 
 # iron-canvas architecture
 
@@ -81,19 +81,20 @@ prepared worksheet only after the backend commits the staged output.
 Preparation, staging, and presentation errors preserve the previous frame
 under the backend contract. Canvas2D target dimensions are fixed per backend.
 
-Core and compiler retain a default `legacy` feature for the existing facade.
+Core and compiler retain a default `legacy` feature for the legacy renderer.
 The new session disables both defaults. A standalone core build without
 that feature exposes no `CanvasModel`, `CellDecoration`, or style mirrors.
 M4 removes the old renderer after the main worksheet integration migrates.
 
-The separate transition-playground route is `/playground/grid-core`, built
-with `dev-tools`. See the [M1 review](docs/reviews/2026-10-04-m1-grid-core.md)
-for validation and limits. The remainder of this document describes the
-legacy pipeline unless a section says otherwise.
+The transition playground route `/playground/grid-core` validated this path
+before the worksheet cutover; see the
+[M1 review](docs/reviews/2026-10-04-m1-grid-core.md) for validation and limits.
+The remainder of this document describes the legacy pipeline unless a section
+says otherwise.
 
 `iron-canvas` is the read-only rendering workspace used by RustyCalc. It
 paints worksheet data supplied through `CanvasModel`, but it never mutates
-that model. The live browser facade renders into two stacked canvases:
+that model. The legacy browser pipeline renders into two stacked canvases:
 
 - the grid layer owns persistent cell, border, header, and frozen-pane
   pixels;
@@ -115,7 +116,7 @@ native-renderer availability.
 | `iron-canvas-core` | Backend-neutral model traits, geometry, frame input capture and classification, planning, transactional paint orchestration, grid segment rendering, queries, decorations, and `Painter`/`Surface` traits. No `web-sys`, `wasm-bindgen`, or IronCalc types. |
 | `iron-canvas-canvas2d` | Browser Canvas2D backend: `CanvasPainter`, `WebSurface`, paired `Canvas2dRuntime`, CSS theme bridge, setter caches, DPR handling, and text-measurement memo. No IronCalc dependency. |
 | `iron-canvas-native` | Cairo/Pango raster backend: `NativePainter`, `NativeSurface`, and `CompositeTarget`. The host owns the window, model, event loop, and presentation. |
-| `iron-canvas-web` | Spreadsheet `#[wasm_bindgen]` facade, JS-backed model bridge (feature `js-model`, default on), recording/playback integration, and SVG/PDF export entry points. |
+| `iron-canvas` | Shared worksheet rendering session (`CanvasSession`), frame request/publication types, retained-reuse policy, overlays, and interaction intents. Hosts the wasm browser probe test and measurement example. |
 | `iron-canvas-ironcalc` | `IronCalcModel<'a>` adapter plus the shared IronCalc-to-core style/color conversion and conditional-formatting bridge. |
 | `iron-canvas-export` | Pure-Rust SVG and PDF painters/surfaces. Uses `ttf-parser` for font metrics and `base64` for font embedding. Export uses throwaway orchestrators and discards overlay output. |
 | `iron-canvas-recorder` | `RecorderPainter`/`MemSurface` test backend and optional `RecordingPainter<P>`/`RecordingSurface<S>` `.icr` capture decorator. |
@@ -212,7 +213,7 @@ generation, sheet, or host metadata epoch changes; `set_model` clears it. The
 host pushes the epoch with `Orchestrator::set_metadata_epoch`, and an epoch of
 `None` (the default) clears the snapshot and disables reuse. Re-enabling reuse
 starts a new snapshot. The setter does not queue paint work; the host must
-also request a repaint. The web facade exposes this setter to Rust hosts only.
+also request a repaint.
 A cached pair serves the same digest
 comparison and merge-impact classification, so an unchanged pair still stays
 overlay-only while a moved epoch re-reads and escalates a changed list. The
@@ -586,8 +587,7 @@ strategy helpers must not re-derive it independently.
 
 ## Query pipeline
 
-The public query methods delegate through the facade to
-`Orchestrator::last_frame`:
+The public query methods delegate to `Orchestrator::last_frame`:
 
 - `hit_test` classifies corner, headers, cells, autofill, and formula-ref
   handles;
@@ -605,8 +605,7 @@ visible committed pixels.
 
 `CanvasModel: CellContentQuery` is read-only. `IronCalcModel<'a>` exists
 because orphan rules prevent implementing the core trait directly for
-IronCalc's `UserModel`. The JS-backed adapter batches styles, values, and cell
-types across the wasm boundary and preserves `Fetched::BridgeFailed` on its
+IronCalc's `UserModel`. Adapters preserve `Fetched::BridgeFailed` on their
 degrade path; conditional-format decorations currently use the trait's
 per-cell default loop.
 
@@ -616,22 +615,14 @@ statically absent optional capability; `None` holds the attempt. Never convert
 a throw, a malformed payload, or an invalid list into empty data — a dropped
 link is a visible link the host can no longer click. The native adapters call
 `UserModel::get_links_list`, which already merges worksheet and formula links
-with worksheet precedence and preserves `dynamic`; the JS adapter calls
-`getLinks` and resolves the hyperlink color from the cached workbook theme.
+with worksheet precedence and preserves `dynamic`.
 
 Merges are captured the same way through `CanvasModel::get_merged_ranges`:
 inclusive `RCRange`s, `Some(empty)` for a merge-less sheet or a statically
 absent optional capability, `None` for a throw, a malformed payload, or a list
 `MergeTable::from_ranges` rejects. The native adapters convert IronCalc's typed
-`MergedCell` with checked arithmetic; the JS adapter decodes `getMergedCells`
-through `serde_wasm_bindgen`. Neither path parses A1 strings, and neither
-converts an invalid list into empty data.
-
-The JS-backed adapter and the facade's `setModel` compile only with
-`iron-canvas-web`'s `js-model` feature. The feature is on by default, so the JS
-package is unchanged. A native Rust host turns it off and binds its model
-through `IronCanvas::set_model`; `ironcalc_base` and `iron-canvas-ironcalc`
-leave the facade's dependency list with it.
+`MergedCell` with checked arithmetic. The conversion never parses A1 strings
+or turns an invalid list into empty data.
 
 `Surface` implementations for SVG and PDF are throwaway Fresh renderers, so
 their `BlitPainter` implementations are no-ops and live viewport reuse must
@@ -650,14 +641,6 @@ holds remain in the timeline.
 Runtime frame diagnostics use schema version 4. Repaint diagnostics separate
 exact `changedCells` evidence from the applied `clip` and region-tagged
 `sourceRanges`; compact traces use `grid:cell` and `grid:range`.
-
-With `dev-tools`, the web facade exposes a Rust-only `CanvasFrameSnapshot`.
-It owns one completed attempt's diagnostics and the backing size read at
-capture time. `frame_diagnostics_value` projects this snapshot to a JSON
-object without a live canvas; the host serializes that value. It shares
-`project_frame_diagnostics` with the JS `frameDiagnostics()` method.
-`frame_attempt_seq()` reads the lightweight trace, so attempt identity is
-available with detailed capture off.
 
 ## Source map
 
@@ -684,9 +667,9 @@ Paths are relative to `iron-canvas/crates/`.
 | `iron-canvas-core/src/model/` | `CanvasModel`, `CanvasView`, `CellContentQuery` (`mod.rs`), `Fetched<T>` (`fetched.rs`), autofit measurement (`autofit.rs`), and the crate-internal worksheet render data (`sheet/`). |
 | `iron-canvas-canvas2d/src/` | Canvas2D painter, paired runtime, measurement cache, theme bridge, and front/back canvas presentation. |
 | `iron-canvas-native/src/` | Cairo painter and blit source (`painter.rs`), layer/composite surfaces (`surface.rs`), and color/font parsing. |
-| `iron-canvas-web/src/orchestrator/` | Web facade, JS API, export entry points, diagnostics projection, recording, and playback controls. |
-| `iron-canvas-web/src/wasm/mod.rs` | JS model bridge (feature `js-model`), batch capability probes, failures, and theme caching. |
-| `iron-canvas-web/src/playback.rs` | timed playback and per-frame grid presentation. |
+| `iron-canvas/src/` | `CanvasSession` and the atomic publication boundary (`lib.rs`), pointer/host intents (`interaction.rs`), overlay state (`overlays.rs`), and retained-reuse policy (`retained.rs`). |
+| `iron-canvas/tests/cf_fixture_canvas2d.rs` | wasm browser proof: the CF fixture paints through `Canvas2dSceneBackend` and retained frames match forced-Fresh output. |
+| `iron-canvas/examples/measure_scene_web.rs` | wasm browser measurement probe over `Canvas2dSceneBackend` (built with `scripts/measure_scene_web.mjs`). |
 | `iron-canvas-recorder/src/` | draw-op schema and owned stroke style (`ops.rs`), op-emitting painter (`painter.rs`), capture wrappers (`surfaces.rs`), and the `.icr` v11 attempt schema (`recording.rs`). |
 | `iron-canvas-export/src/` | SVG/PDF painters, metrics, document writers, and one-shot surfaces. |
 | `iron-canvas-ironcalc/src/lib.rs` | IronCalc adapter and style/decoration conversion. |
@@ -698,13 +681,9 @@ Use the narrowest gate that proves the changed boundary:
 ```bash
 (cd iron-canvas && cargo test -p iron-canvas-core --locked)
 (cd iron-canvas && cargo test --workspace --locked)
-(cd iron-canvas && cargo test -p iron-canvas-web --features dev-tools --locked)
 (cd iron-canvas && cargo check --target wasm32-unknown-unknown --workspace --exclude iron-canvas-native --locked)
-(cd iron-canvas && cargo test --target wasm32-unknown-unknown -p iron-canvas-web --locked)
+(cd iron-canvas && cargo test -p iron-canvas --target wasm32-unknown-unknown --test cf_fixture_canvas2d --locked)
 ```
-
-The `dev-tools` native run is the wire-shape gate: it asserts the JS-facing
-field names without a browser.
 
 The wasm test command requires the lockfile-matched
 `wasm-bindgen-test-runner` and ChromeDriver configuration used by

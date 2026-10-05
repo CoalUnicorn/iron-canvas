@@ -26,7 +26,8 @@ use iron_canvas_core::painter::{
 use crate::measure_cache::MeasureCache;
 
 // Private `console.warn` binding — zero IronCalc, kept local so this crate
-// does not depend on `iron-canvas-web`'s `wasm` diagnostics module.
+// does not depend on the crate-private `wasm` diagnostics of the former web
+// facade.
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(js_namespace = console, js_name = warn)]

@@ -19,7 +19,7 @@ use ironcalc_base::types as ic;
 pub type ColorResolver<'a> = &'a dyn Fn(&ic::Color) -> Option<String>;
 
 /// Resolve against an explicit theme — for callers that hold a `Theme` rather
-/// than a `UserModel` (tests, and the iron-canvas-web JS-backed path).
+/// than a `UserModel` (tests).
 pub fn color_to_css(c: &ic::Color, theme: &ic::Theme) -> Option<String> {
     let rgb = c.to_rgb(theme);
     (!rgb.is_empty()).then_some(rgb)

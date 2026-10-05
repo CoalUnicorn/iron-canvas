@@ -60,9 +60,8 @@ impl PdfPainter {
         Self::with_stream(Rc::new(RefCell::new(ContentStream::new())), width, height)
     }
 
-    /// Construct a painter sharing an externally-owned stream. The
-    /// `iron-canvas-web` facade uses this in Commit 4 to point both the
-    /// grid and overlay `PdfSurface`s at the same buffer so paint calls
+    /// Construct a painter sharing an externally-owned stream. Used to point
+    /// the grid and overlay `PdfSurface`s at the same buffer so paint calls
     /// from both layers concatenate in dispatch order.
     pub fn with_stream(body: Rc<RefCell<ContentStream>>, width: u32, height: u32) -> Self {
         Self {
@@ -97,9 +96,9 @@ impl PdfPainter {
 
     /// Hand back the shared stream. `PdfSurface::finish` takes it, wraps
     /// it in the page-open CTM, and inlines the bytes as the `/Contents`
-    /// object. Public so the `iron-canvas-web` facade (Commit 4) can
-    /// point a second `PdfSurface` at the same buffer, and so smoke
-    /// tests can inspect what each `Painter` method emits.
+    /// object. Public so a second `PdfSurface` can point at the same
+    /// buffer, and so smoke tests can inspect what each `Painter` method
+    /// emits.
     pub fn stream(&self) -> Rc<RefCell<ContentStream>> {
         Rc::clone(&self.body)
     }

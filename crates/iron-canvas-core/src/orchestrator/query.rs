@@ -154,18 +154,17 @@ where
     }
 
     /// Surface introspection — direct access to the grid surface for
-    /// callers that read or drive it outside the paint pipeline. Two
-    /// consumer classes use it: this crate's recorder integration tests
-    /// (inspecting emitted `DrawOp`s) and `iron-canvas-web`'s `dev-tools`
-    /// recording/playback. Gated behind `surface-introspection` so the
-    /// prod build doesn't carry the symbol.
+    /// callers that read or drive it outside the paint pipeline. This
+    /// crate's recorder integration tests use it to inspect emitted
+    /// `DrawOp`s. Gated behind `surface-introspection` so the prod build
+    /// doesn't carry the symbol.
     #[cfg(feature = "surface-introspection")]
     pub fn grid_surface(&self) -> &S {
         &self.grid.surface
     }
 
     /// Overlay-surface counterpart to [`Self::grid_surface`]; same
-    /// `surface-introspection` gate and the same two consumer classes.
+    /// `surface-introspection` gate and the same caller.
     #[cfg(feature = "surface-introspection")]
     pub fn overlay_surface(&self) -> &S {
         &self.overlay.surface

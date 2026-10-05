@@ -40,7 +40,7 @@
 //! what the control was always for.
 //!
 //! Timings are not measured here at all — end-to-end elapsed time is the
-//! browser probe's job (`iron-canvas-web/tests/render_wasm.rs`), and the
+//! browser probe's job (`iron-canvas/examples/measure_scene_web.rs`), and the
 //! private fingerprint A/B lives in `renderer/cache/fingerprint.rs`.
 
 mod common;

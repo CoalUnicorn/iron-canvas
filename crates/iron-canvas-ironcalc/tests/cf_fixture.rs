@@ -1,6 +1,6 @@
 //! Engine CF fixture checks for both the legacy adapter and the M1 compiler.
 //! The SVG test uses the resolved scene backend. Browser pixels are covered
-//! by `iron-canvas-web/tests/cf_fixture_canvas2d.rs`.
+//! by `iron-canvas/tests/cf_fixture_canvas2d.rs`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

@@ -1,4 +1,4 @@
-#![cfg(all(target_arch = "wasm32", feature = "js-model"))]
+#![cfg(target_arch = "wasm32")]
 
 //! Browser proof that the conditional-formatting workbook fixture reaches the
 //! real Canvas2D backend through the M1 compiler and shared session.

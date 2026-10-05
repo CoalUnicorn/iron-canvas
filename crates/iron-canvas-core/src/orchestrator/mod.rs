@@ -1,8 +1,5 @@
-//! Frame dispatch and state aggregator. Backend-agnostic; the wasm-bound
-//! `IronCanvas` facade in `iron-canvas-web` owns an
-//! `Orchestrator<FacadeSurface>` (`WebSurface` by default,
-//! `RecordingSurface<WebSurface>` under dev-tools) and delegates every
-//! setter, query, and paint call here. The model is held as
+//! Frame dispatch and state aggregator. Backend-agnostic; retained by the
+//! temporary `legacy` feature that M4 removes. The model is held as
 //! `Rc<dyn CanvasModel>`, so the struct carries one type parameter (the
 //! `Surface`), not two.
 //!

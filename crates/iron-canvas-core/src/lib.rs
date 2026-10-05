@@ -1,5 +1,5 @@
 //! `iron-canvas-core` — the pure-Rust application layer of the iron-canvas
-//! grid renderer. Browser bindings live in sibling `iron-canvas-web`.
+//! grid renderer. Browser (wasm) backends and probes live in sibling crates.
 //!
 //! The default `legacy` feature retains the old renderer during migration.
 //! Disable it to build only generic geometry, layout, and resolved scenes.
