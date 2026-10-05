@@ -1,10 +1,10 @@
 //! Host intents derived only from the committed worksheet snapshot.
 use crate::{CanvasSession, RenderBackend};
 use iron_canvas_core::{
-    CellCoord, Point,
-    scene_geometry::{GridHit, GridRange, RangeFragment, contains},
+    CellCoord, PixelRect, Point,
+    scene_geometry::{GridGeometry, GridHit, GridRange, RangeFragment, contains},
 };
-use iron_canvas_ironcalc::PreparedWorksheet;
+use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetViewport};
 use ironcalc_base::{links::CellLinkView, types::MergedCell};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -92,6 +92,30 @@ impl<B: RenderBackend> CanvasSession<B> {
     }
     pub fn link_at(&self, point: Point) -> Option<&CellLinkView> {
         self.display_cell_at(point)?.link
+    }
+    /// Slot rectangle of one cell from the committed frame, before viewport
+    /// clipping. `None` before the first commit or outside the sampled panes.
+    pub fn cell_rect(&self, row: i32, col: i32) -> Option<PixelRect> {
+        self.committed_geometry()?.cell_rect(row, col)
+    }
+    /// Canvas-space rect of the scrollable pane, or `None` before the first
+    /// commit. A frozen band that consumes an axis collapses that extent to 0.
+    pub fn scroll_pane_rect(&self) -> Option<PixelRect> {
+        Some(self.committed_geometry()?.scroll_pane_rect())
+    }
+    /// Bottom-right autofill-handle corner for `range`'s last cell, before
+    /// viewport clipping. The host suppresses it at the model's last row/column.
+    pub fn autofill_handle(&self, range: GridRange) -> Option<Point> {
+        self.committed_geometry()?.autofill_handle(range)
+    }
+    /// The viewport of the last committed request, after a successful commit.
+    pub fn committed_viewport(&self) -> Option<WorksheetViewport> {
+        self.committed_request
+            .as_ref()
+            .map(|request| request.viewport)
+    }
+    fn committed_geometry(&self) -> Option<&GridGeometry> {
+        self.committed_frame.as_ref()?.worksheet.geometry.as_deref()
     }
     /// Return an intent. The host decides whether and how to apply it.
     pub fn pointer_intent(&self, point: Point, action: PointerAction) -> Option<HostIntent> {

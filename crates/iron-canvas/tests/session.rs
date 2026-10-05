@@ -1,5 +1,8 @@
 use iron_canvas::{CanvasSession, RenderBackend, RenderError, RenderRequest, RevisionToken};
-use iron_canvas_core::{CanvasTheme, CellCoord, painter::TextMetrics, scene::GridScene};
+use iron_canvas_core::{
+    CanvasTheme, CellCoord, Point, painter::TextMetrics, scene::GridScene,
+    scene_geometry::GridRange,
+};
 use iron_canvas_export::SvgSceneBackend;
 use iron_canvas_ironcalc::WorksheetViewport;
 use ironcalc_base::UserModel;
@@ -123,5 +126,57 @@ fn revision_theme_and_workbook_replacement_recompile_visible_content() {
     assert_eq!(
         session.committed_frame().unwrap().revision,
         request.revision
+    );
+}
+
+#[test]
+fn committed_frame_exposes_cell_rects_scroll_pane_and_autofill_handle() {
+    let mut workbook = UserModel::new_empty("test", "en", "UTC", "en").unwrap();
+    workbook.set_user_input(0, 1, 1, "x").unwrap();
+    workbook.set_frozen_rows_count(0, 1).unwrap();
+    workbook.set_frozen_columns_count(0, 1).unwrap();
+    let mut request = request();
+    request.viewport = WorksheetViewport {
+        first_cell: CellCoord { row: 4, col: 4 },
+        width: 400,
+        height: 300,
+    };
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    // No committed frame: every geometry query is empty.
+    assert!(session.cell_rect(1, 1).is_none());
+    assert!(session.scroll_pane_rect().is_none());
+    assert!(session.committed_viewport().is_none());
+
+    session.render(&workbook, &request).unwrap();
+    assert_eq!(session.committed_viewport(), Some(request.viewport));
+
+    let frozen = session.cell_rect(1, 1).expect("frozen cell");
+    let scroll = session.cell_rect(4, 4).expect("scrolling cell");
+    let pane = session.scroll_pane_rect().expect("committed scroll pane");
+    // The frozen cell sits up-left of the scroll pane's near edge.
+    assert!(frozen.right() <= pane.left());
+    assert!(frozen.bottom() <= pane.top());
+    // The first scrolling cell aligns with the pane's near edge.
+    assert_eq!((scroll.left(), scroll.top()), (pane.left(), pane.top()));
+
+    let range = GridRange {
+        first: CellCoord { row: 4, col: 4 },
+        last: CellCoord { row: 5, col: 5 },
+    };
+    let last = session.cell_rect(5, 5).expect("range last cell");
+    assert_eq!(
+        session.autofill_handle(range),
+        Some(Point {
+            x: last.right(),
+            y: last.bottom(),
+        })
+    );
+    // A cell beyond the sampled panes yields no handle.
+    assert_eq!(
+        session.autofill_handle(GridRange {
+            first: CellCoord { row: 1, col: 1 },
+            last: CellCoord { row: 1, col: 9999 },
+        }),
+        None
     );
 }

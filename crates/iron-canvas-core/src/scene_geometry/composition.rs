@@ -20,6 +20,10 @@ pub struct AxisBand {
     pub last_index: i32,
     pub start: i32,
     pub extent: i32,
+    /// True for the frozen band. The scrolling band is `!frozen`, and its
+    /// `start` is the frozen band's end when one exists. Used to locate the
+    /// scrollable pane without re-reading freeze counts.
+    pub frozen: bool,
     pub cells: Vec<AxisCell>,
 }
 
@@ -66,6 +70,7 @@ pub fn sample_bands<E>(
             },
             start: origin,
             extent: used,
+            frozen: true,
             cells,
         });
     }
@@ -86,6 +91,7 @@ pub fn sample_bands<E>(
             last_index: cells.last().map_or(last, |c| c.index),
             start,
             extent: pixels - used,
+            frozen: false,
             cells,
         });
     }
@@ -230,6 +236,58 @@ impl GridGeometry {
             })
             .collect()
     }
+
+    /// Slot rectangle for one cell in canvas pixels, before pane or viewport
+    /// clipping. `None` when the cell is outside every sampled pane — the
+    /// address gap between a frozen band and the scrolled-to band, or beyond
+    /// the walked extent. A frozen row and a scrolling column resolve through
+    /// the pane that owns both.
+    pub fn cell_rect(&self, row: i32, col: i32) -> Option<PixelRect> {
+        self.panes.iter().find_map(|pane| {
+            let r = pane.rows.iter().find(|r| r.index == row)?;
+            let c = pane.columns.iter().find(|c| c.index == col)?;
+            Some(PixelRect {
+                top_left: Point {
+                    x: c.start,
+                    y: r.start,
+                },
+                width: c.extent,
+                height: r.extent,
+            })
+        })
+    }
+
+    /// Canvas-space rect of the scrollable pane: everything past the frozen
+    /// bands, running to [`bounds`](Self::bounds). An axis whose frozen band
+    /// consumes the whole drawable extent collapses to zero rather than
+    /// going negative.
+    pub fn scroll_pane_rect(&self) -> PixelRect {
+        let x = scroll_start(&self.column_bands, self.origin.x);
+        let y = scroll_start(&self.row_bands, self.origin.y);
+        PixelRect {
+            top_left: Point { x, y },
+            width: (self.bounds.right() - x).max(0),
+            height: (self.bounds.bottom() - y).max(0),
+        }
+    }
+
+    /// Bottom-right corner of `range.last`'s slot, not clipped to the
+    /// viewport. The host must suppress the handle at the model's last
+    /// row/column; core does not know engine bounds.
+    pub fn autofill_handle(&self, range: GridRange) -> Option<Point> {
+        let rect = self.cell_rect(range.last.row, range.last.col)?;
+        Some(Point {
+            x: rect.right(),
+            y: rect.bottom(),
+        })
+    }
+}
+/// Start of the scrolling band, or the end of a fused frozen band.
+fn scroll_start(bands: &[AxisBand], origin: i32) -> i32 {
+    match bands.iter().find(|b| !b.frozen) {
+        Some(band) => band.start,
+        None => bands.last().map_or(origin, |band| band.start + band.extent),
+    }
 }
 fn slot_at(bands: &[AxisBand], pixel: i32) -> Option<i32> {
     let band = bands
@@ -300,5 +358,82 @@ mod tests {
             Some(GridHit::Cell(CellCoord { row: 8, col: 8 }))
         );
         assert_eq!(geometry.hit_test(Point { x: 138, y: 113 }), None);
+    }
+
+    #[test]
+    fn queries_resolve_frozen_scroll_cells_and_the_scroll_pane() {
+        let rows = sample_bands(5, 100, 1, 24, 80, |_| Ok::<_, ()>(20.0)).unwrap();
+        let columns = sample_bands(5, 100, 1, 48, 80, |_| Ok::<_, ()>(20.0)).unwrap();
+        // Frozen row 1 / col 1 at the origin, then scrolling cells from id 5.
+        assert!(rows[0].frozen);
+        assert!(!rows[1].frozen);
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point { x: 0, y: 0 },
+                width: 128,
+                height: 104,
+            },
+            Point { x: 48, y: 24 },
+            rows,
+            columns,
+        );
+        let rect = |x, y| PixelRect {
+            top_left: Point { x, y },
+            width: 20,
+            height: 20,
+        };
+        assert_eq!(geometry.cell_rect(1, 1), Some(rect(48, 24)));
+        assert_eq!(geometry.cell_rect(1, 5), Some(rect(68, 24)));
+        assert_eq!(geometry.cell_rect(5, 1), Some(rect(48, 44)));
+        // Beyond the sampled extent and the address gap return `None`.
+        assert_eq!(geometry.cell_rect(1, 50), None);
+        assert_eq!(geometry.cell_rect(100, 100), None);
+        assert_eq!(
+            geometry.scroll_pane_rect(),
+            PixelRect {
+                top_left: Point { x: 68, y: 44 },
+                width: 60,
+                height: 60,
+            }
+        );
+        assert_eq!(
+            geometry.autofill_handle(GridRange {
+                first: CellCoord { row: 5, col: 5 },
+                last: CellCoord { row: 6, col: 6 },
+            }),
+            Some(Point { x: 108, y: 84 })
+        );
+        assert_eq!(
+            geometry.autofill_handle(GridRange {
+                first: CellCoord { row: 1, col: 1 },
+                last: CellCoord { row: 1, col: 50 },
+            }),
+            None
+        );
+    }
+
+    #[test]
+    fn frozen_band_that_fills_the_viewport_leaves_no_scroll_pane() {
+        let rows = sample_bands(90, 100, 5, 24, 25, |_| Ok::<_, ()>(20.0)).unwrap();
+        let columns = sample_bands(90, 100, 5, 48, 25, |_| Ok::<_, ()>(20.0)).unwrap();
+        assert!(rows.iter().all(|b| b.frozen));
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point { x: 0, y: 0 },
+                width: 73,
+                height: 49,
+            },
+            Point { x: 48, y: 24 },
+            rows,
+            columns,
+        );
+        assert_eq!(
+            geometry.scroll_pane_rect(),
+            PixelRect {
+                top_left: Point { x: 73, y: 49 },
+                width: 0,
+                height: 0,
+            }
+        );
     }
 }
