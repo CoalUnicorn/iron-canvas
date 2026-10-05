@@ -5,7 +5,7 @@ use iron_canvas_core::{
     scene_geometry::{GridGeometry, GridHit, GridRange, GridResize, RangeFragment, contains},
 };
 use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetViewport};
-use ironcalc_base::{links::CellLinkView, types::MergedCell};
+use ironcalc_base::{UserModel, links::CellLinkView, types::MergedCell};
 
 /// Autofill-handle size in canvas pixels, applied on each side of the
 /// selection's bottom-right corner.
@@ -135,6 +135,52 @@ impl<B: RenderBackend> CanvasSession<B> {
             .as_ref()
             .map(|request| request.viewport)
     }
+    /// The `(row, column)` origin the committed frame actually scrolled to,
+    /// after freeze clamping. Falls back to the requested viewport on an axis
+    /// with no scrolling band (a frozen band that consumed the extent).
+    pub fn scroll_origin(&self) -> Option<CellCoord> {
+        let requested = self.committed_request.as_ref()?.viewport.first_cell;
+        let geometry = self.committed_geometry();
+        let row = geometry
+            .and_then(|g| g.row_bands.iter().find(|b| !b.frozen))
+            .map_or(requested.row, |b| b.first_index);
+        let col = geometry
+            .and_then(|g| g.column_bands.iter().find(|b| !b.frozen))
+            .map_or(requested.col, |b| b.first_index);
+        Some(CellCoord { row, col })
+    }
+    /// Minimal `(row, column)` origin that brings `(row, column)` fully inside
+    /// the committed scroll pane, or `None` when it already is (or the target
+    /// lies in a frozen band). Reads model extents, so it accounts for hidden
+    /// rows/columns and overrides the pane arithmetic cannot see.
+    pub fn scroll_to_show(
+        &self,
+        workbook: &UserModel<'_>,
+        row: i32,
+        column: i32,
+    ) -> Option<(i32, i32)> {
+        let sheet = self.committed_frame()?.sheet;
+        let origin = self.scroll_origin()?;
+        let geometry = self.committed_geometry()?;
+        let pane = geometry.scroll_pane_rect();
+        let frozen_rows = workbook.get_frozen_rows_count(sheet).unwrap_or(0);
+        let frozen_cols = workbook.get_frozen_columns_count(sheet).unwrap_or(0);
+        let height = |id| {
+            workbook
+                .get_row_height(sheet, id)
+                .ok()
+                .map(|h| h.round() as i32)
+        };
+        let width = |id| {
+            workbook
+                .get_column_width(sheet, id)
+                .ok()
+                .map(|w| w.round() as i32)
+        };
+        let top = origin_showing(row, origin.row, frozen_rows, pane.height, height)?;
+        let left = origin_showing(column, origin.col, frozen_cols, pane.width, width)?;
+        ((top, left) != (origin.row, origin.col)).then_some((top, left))
+    }
     fn committed_geometry(&self) -> Option<&GridGeometry> {
         self.committed_frame.as_ref()?.worksheet.geometry.as_deref()
     }
@@ -233,6 +279,35 @@ pub(crate) fn merge_range(m: MergedCell) -> GridRange {
         },
     }
 }
+/// Minimal origin that shows `target` in full within `extent`, never above
+/// `frozen + 1`. `None` when an extent read fails. Port of the legacy
+/// orchestrator helper, retaining its overflow-safe walk.
+fn origin_showing(
+    target: i32,
+    current: i32,
+    frozen: i32,
+    extent: i32,
+    mut measure: impl FnMut(i32) -> Option<i32>,
+) -> Option<i32> {
+    if extent <= 0 || target <= frozen {
+        return Some(current);
+    }
+    if target < current {
+        return Some(target);
+    }
+    let mut smallest = target;
+    let mut run = measure(target)?;
+    while smallest > frozen + 1 {
+        let previous = measure(smallest - 1)?;
+        if i64::from(run) + i64::from(previous) > i64::from(extent) {
+            break;
+        }
+        smallest -= 1;
+        run += previous;
+    }
+    Some(current.max(smallest))
+}
+
 pub(crate) fn logical_range(worksheet: &PreparedWorksheet, cell: CellCoord) -> GridRange {
     worksheet
         .merges

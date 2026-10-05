@@ -206,4 +206,13 @@ fn committed_frame_exposes_cell_rects_scroll_pane_and_autofill_handle() {
     );
     // The cell body is not a resize zone.
     assert_eq!(session.resize_target(scroll.top_left, 2), None);
+
+    // The committed scroll origin is the requested origin after freeze clamp.
+    assert_eq!(session.scroll_origin(), Some(CellCoord { row: 4, col: 4 }));
+    // A target already on screen does not scroll; a far one moves the origin.
+    assert_eq!(session.scroll_to_show(&workbook, 5, 5), None);
+    let (row, col) = session
+        .scroll_to_show(&workbook, 60, 60)
+        .expect("far target");
+    assert!(row > 4 && col > 4);
 }
