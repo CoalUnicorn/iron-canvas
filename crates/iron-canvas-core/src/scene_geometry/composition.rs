@@ -120,6 +120,12 @@ pub enum GridHit {
     ColumnHeader(i32),
     Corner,
 }
+/// A header edge within the resize hot zone, named by the slot it trails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GridResize {
+    Row(i32),
+    Column(i32),
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RangeFragment {
     pub pane: usize,
@@ -281,6 +287,36 @@ impl GridGeometry {
             y: rect.bottom(),
         })
     }
+
+    /// Header edge within `tolerance` of `point`, named by the slot it trails.
+    /// Only the column header strip (`point.y < origin.y`) and row header strip
+    /// (`point.x < origin.x`) are considered, mirroring hit-test priority.
+    pub fn resize_target(&self, point: Point, tolerance: i32) -> Option<GridResize> {
+        if tolerance < 0 || !contains(self.bounds, point) {
+            return None;
+        }
+        if point.y < self.origin.y && point.x >= self.origin.x {
+            return boundary(&self.column_bands, point.x, tolerance).map(GridResize::Column);
+        }
+        if point.x < self.origin.x && point.y >= self.origin.y {
+            return boundary(&self.row_bands, point.y, tolerance).map(GridResize::Row);
+        }
+        None
+    }
+}
+/// First slot whose trailing edge lies within `tolerance` of `pixel`.
+/// Frozen then scrolling, stopping once the edges pass the hot zone.
+fn boundary(bands: &[AxisBand], pixel: i32, tolerance: i32) -> Option<i32> {
+    for cell in bands.iter().flat_map(|band| &band.cells) {
+        let end = cell.start + cell.extent;
+        if (end - pixel).abs() <= tolerance {
+            return Some(cell.index);
+        }
+        if end > pixel + tolerance {
+            break;
+        }
+    }
+    None
 }
 /// Start of the scrolling band, or the end of a fused frozen band.
 fn scroll_start(bands: &[AxisBand], origin: i32) -> i32 {
@@ -410,6 +446,19 @@ mod tests {
             }),
             None
         );
+        // Header edges resolve only inside their strip and hot zone.
+        assert_eq!(
+            geometry.resize_target(Point { x: 68, y: 10 }, 2),
+            Some(GridResize::Column(1))
+        );
+        assert_eq!(geometry.resize_target(Point { x: 70, y: 10 }, 1), None);
+        assert_eq!(
+            geometry.resize_target(Point { x: 10, y: 44 }, 2),
+            Some(GridResize::Row(1))
+        );
+        // The cell area is not a resize zone, and points outside bounds miss.
+        assert_eq!(geometry.resize_target(Point { x: 68, y: 44 }, 2), None);
+        assert_eq!(geometry.resize_target(Point { x: 200, y: 10 }, 2), None);
     }
 
     #[test]

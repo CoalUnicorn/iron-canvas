@@ -2,10 +2,14 @@
 use crate::{CanvasSession, RenderBackend};
 use iron_canvas_core::{
     CellCoord, PixelRect, Point,
-    scene_geometry::{GridGeometry, GridHit, GridRange, RangeFragment, contains},
+    scene_geometry::{GridGeometry, GridHit, GridRange, GridResize, RangeFragment, contains},
 };
 use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetViewport};
 use ironcalc_base::{links::CellLinkView, types::MergedCell};
+
+/// Autofill-handle size in canvas pixels, applied on each side of the
+/// selection's bottom-right corner.
+pub const AUTOFILL_HANDLE_PX: i32 = 6;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayCell<'a> {
@@ -107,6 +111,23 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// viewport clipping. The host suppresses it at the model's last row/column.
     pub fn autofill_handle(&self, range: GridRange) -> Option<Point> {
         self.committed_geometry()?.autofill_handle(range)
+    }
+    /// Handle square around [`autofill_handle`](Self::autofill_handle)'s corner,
+    /// sized [`AUTOFILL_HANDLE_PX`] per side.
+    pub fn autofill_handle_rect(&self, range: GridRange) -> Option<PixelRect> {
+        let corner = self.committed_geometry()?.autofill_handle(range)?;
+        Some(PixelRect {
+            top_left: Point {
+                x: corner.x - AUTOFILL_HANDLE_PX,
+                y: corner.y - AUTOFILL_HANDLE_PX,
+            },
+            width: AUTOFILL_HANDLE_PX,
+            height: AUTOFILL_HANDLE_PX,
+        })
+    }
+    /// Header edge within `tolerance` of `point` from the committed frame.
+    pub fn resize_target(&self, point: Point, tolerance: i32) -> Option<GridResize> {
+        self.committed_geometry()?.resize_target(point, tolerance)
     }
     /// The viewport of the last committed request, after a successful commit.
     pub fn committed_viewport(&self) -> Option<WorksheetViewport> {

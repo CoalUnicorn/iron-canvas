@@ -1,7 +1,9 @@
 use iron_canvas::{CanvasSession, RenderBackend, RenderError, RenderRequest, RevisionToken};
 use iron_canvas_core::{
-    CanvasTheme, CellCoord, Point, painter::TextMetrics, scene::GridScene,
-    scene_geometry::GridRange,
+    CanvasTheme, CellCoord, PixelRect, Point,
+    painter::TextMetrics,
+    scene::GridScene,
+    scene_geometry::{GridRange, GridResize},
 };
 use iron_canvas_export::SvgSceneBackend;
 use iron_canvas_ironcalc::WorksheetViewport;
@@ -179,4 +181,29 @@ fn committed_frame_exposes_cell_rects_scroll_pane_and_autofill_handle() {
         }),
         None
     );
+    let corner = session.autofill_handle(range).expect("handle corner");
+    assert_eq!(
+        session.autofill_handle_rect(range),
+        Some(PixelRect {
+            top_left: Point {
+                x: corner.x - iron_canvas::AUTOFILL_HANDLE_PX,
+                y: corner.y - iron_canvas::AUTOFILL_HANDLE_PX,
+            },
+            width: iron_canvas::AUTOFILL_HANDLE_PX,
+            height: iron_canvas::AUTOFILL_HANDLE_PX,
+        })
+    );
+    // A column-header edge at the frozen column's trailing edge resizes it.
+    assert_eq!(
+        session.resize_target(
+            Point {
+                x: frozen.right(),
+                y: 1,
+            },
+            2
+        ),
+        Some(GridResize::Column(1))
+    );
+    // The cell body is not a resize zone.
+    assert_eq!(session.resize_target(scroll.top_left, 2), None);
 }

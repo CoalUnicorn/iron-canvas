@@ -7,7 +7,7 @@
 mod interaction;
 mod overlays;
 mod retained;
-pub use interaction::{DisplayCell, HostIntent, PointerAction};
+pub use interaction::{AUTOFILL_HANDLE_PX, DisplayCell, HostIntent, PointerAction};
 pub use iron_canvas_core::scene::retained::RenderStrategy;
 use iron_canvas_core::scene::retained::{SceneFingerprint, SceneUpdate};
 pub use overlays::{FormulaOverlay, OverlayState};
