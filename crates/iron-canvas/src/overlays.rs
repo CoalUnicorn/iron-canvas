@@ -1,4 +1,9 @@
 //! Spreadsheet overlay composition from owned, already prepared content.
+
+// NOTE:
+// Hard coded values for things like `stroke_line(..., width: 2).
+// There are other like outline and others.
+
 use crate::interaction::logical_range;
 use iron_canvas_core::{
     CanvasTheme, CellCoord, PixelRect, Point, Side,
@@ -55,7 +60,14 @@ pub(crate) fn compose(
             });
             // Restore model-derived pixels from this candidate. This performs
             // no engine reads and also restores CF and merged-cell content.
-            restore.extend(worksheet.scene.passes.iter().flatten().cloned());
+            restore.extend(
+                worksheet
+                    .scene
+                    .passes
+                    .iter()
+                    .flat_map(|p| p.iter())
+                    .cloned(),
+            );
             restore.push(Primitive::EndClip);
             outline(
                 &strokes,
@@ -130,7 +142,7 @@ pub(crate) fn compose(
     }
     worksheet.scene.passes.extend([
         fills.finish(),
-        restore,
+        restore.into(),
         strokes.finish(),
         formula.finish(),
         header.finish(),

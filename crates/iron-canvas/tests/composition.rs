@@ -274,7 +274,7 @@ fn pdf_and_svg_stage_the_identical_prepared_scene_with_overlays() {
             .scene
             .passes
             .iter()
-            .flatten()
+            .flat_map(|p| p.iter())
             .any(|p| matches!(p,Primitive::StrokePath {style,..} if !style.dash.is_empty()))
     );
     let mut pdf = PdfSceneBackend::new();

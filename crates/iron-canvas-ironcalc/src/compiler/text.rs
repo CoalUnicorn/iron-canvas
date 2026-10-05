@@ -78,7 +78,7 @@ pub(super) fn compile_text(
     } else {
         resolved.as_str()
     };
-    let clipped = layout_text_into(
+    layout_text_into(
         metrics,
         &css,
         text,
@@ -97,9 +97,8 @@ pub(super) fn compile_text(
         lines,
         scratch,
     );
-    if clipped {
-        out.push_clip(rect);
-    }
+    // A cell clip supplies a proven paint bound for retained rendering.
+    out.push_clip(rect);
     for line in lines {
         let x = match horizontal {
             TextAlign::Start => f64::from(rect.left()) + CELL_PADDING,
@@ -130,7 +129,5 @@ pub(super) fn compile_text(
             out.stroke_text_hline(x1, x2, line.center_y, PaintColor::Borrowed(color), 1.0);
         }
     }
-    if clipped {
-        out.pop_clip();
-    }
+    out.pop_clip();
 }

@@ -4,21 +4,32 @@ use iron_canvas_core::{
     geometry::path::{Path, PathCmd},
     painter::*,
 };
-use std::cell::Cell;
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+};
 
 pub struct NativePainter {
     context: Context,
     error: Cell<Option<cairo::Error>>,
+    widths: RefCell<HashMap<String, HashMap<String, f64>>>,
+    width_count: Cell<usize>,
 }
 impl NativePainter {
     pub fn new(surface: &ImageSurface) -> Result<Self, cairo::Error> {
         Ok(Self {
             context: Context::new(surface)?,
             error: Cell::new(None),
+            widths: RefCell::default(),
+            width_count: Cell::new(0),
         })
     }
     pub(crate) fn context(&self) -> &Context {
         &self.context
+    }
+    pub(crate) fn clear_measure_cache(&self) {
+        self.widths.borrow_mut().clear();
+        self.width_count.set(0);
     }
     pub fn status(&self) -> Result<(), cairo::Error> {
         self.error.get().map_or_else(|| self.context.status(), Err)
@@ -114,7 +125,25 @@ impl NativePainter {
 }
 impl TextMetrics for NativePainter {
     fn measure_text_width(&self, text: &str, font_css: &str) -> f64 {
-        f64::from(self.layout(text, font_css).size().0) / f64::from(pango::SCALE)
+        if let Some(width) = self
+            .widths
+            .borrow()
+            .get(font_css)
+            .and_then(|font| font.get(text))
+        {
+            return *width;
+        }
+        let width = f64::from(self.layout(text, font_css).size().0) / f64::from(pango::SCALE);
+        if self.width_count.get() >= 4096 {
+            self.clear_measure_cache();
+        }
+        self.widths
+            .borrow_mut()
+            .entry(font_css.to_owned())
+            .or_default()
+            .insert(text.to_owned(), width);
+        self.width_count.set(self.width_count.get() + 1);
+        width
     }
 }
 impl Painter for NativePainter {
@@ -325,4 +354,28 @@ fn rgba(css: &str) -> (f64, f64, f64, f64) {
         }
     };
     parse().unwrap_or((0.0, 0.0, 0.0, 1.0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn metric_cache_keeps_font_identity_and_clears_after_invalidation() {
+        let surface = ImageSurface::create(cairo::Format::ARgb32, 1, 1).unwrap();
+        let painter = NativePainter::new(&surface).unwrap();
+        for font in [
+            "12px sans-serif",
+            "bold 24px serif",
+            "italic 18px monospace",
+        ] {
+            let expected =
+                f64::from(painter.layout("Wide text", font).size().0) / f64::from(pango::SCALE);
+            assert_eq!(painter.measure_text_width("Wide text", font), expected);
+            assert_eq!(painter.measure_text_width("Wide text", font), expected);
+        }
+        painter.clear_measure_cache();
+        assert!(painter.widths.borrow().is_empty());
+        assert_eq!(painter.width_count.get(), 0);
+        assert!(painter.measure_text_width("Wide text", "12px sans-serif") > 0.0);
+    }
 }

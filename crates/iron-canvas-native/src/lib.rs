@@ -4,7 +4,7 @@ mod painter;
 use cairo::{Format, ImageSurface};
 use iron_canvas_core::{
     painter::TextMetrics,
-    scene::{GridScene, RenderBackend},
+    scene::{GridScene, RenderBackend, retained::SceneUpdate},
 };
 pub use painter::NativePainter;
 
@@ -64,6 +64,24 @@ impl RenderBackend for NativeSceneBackend {
         surface.flush();
         surface.status()?;
         Ok(surface)
+    }
+    fn invalidate_metrics(&mut self) {
+        self.metrics.clear_measure_cache();
+    }
+    fn retained_scale(&self) -> Option<f64> {
+        Some(self.scale)
+    }
+    fn stage_update(
+        &mut self,
+        scene: &GridScene,
+        update: &SceneUpdate,
+    ) -> Result<ImageSurface, cairo::Error> {
+        if matches!(update, SceneUpdate::Reuse)
+            && let Some(old) = &self.committed
+        {
+            return Ok(old.clone());
+        }
+        self.stage_frame(scene)
     }
     fn commit_frame(&mut self, staged: ImageSurface) -> Result<(), cairo::Error> {
         staged.status()?;

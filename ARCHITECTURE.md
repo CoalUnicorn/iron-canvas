@@ -4,6 +4,43 @@
 
 # iron-canvas architecture
 
+## M3 measured reuse (2026-10-05)
+
+`CanvasSession` retains the committed request, prepared base content, and
+paint fingerprints. Unchanged requests reuse content without engine reads.
+Overlay changes reuse the base content. A workbook revision still recompiles
+all visible content. This includes CF changes caused by offscreen edits.
+The compiler resamples dimensions, then shares equal slot geometry.
+
+Core hashes resolved primitives and effective clips. It builds full-width
+32-pixel damage bands in one traversal. Canvas2D stages damaged bands on a
+detached surface. A vertical scroll can copy a verified interior overlap.
+The scroll must keep the revision, columns, theme, and empty overlay state.
+It must have no frozen panes or merges. Movement and copy edges must land on
+whole device pixels. The backend paints exposed regions under one union clip.
+It recycles the detached staging surface after successful presentation.
+Other scrolls use Fresh. Full-surface damage also uses Fresh.
+
+Pixels, query metadata, base content, and fingerprints commit together.
+A stage or commit failure keeps the previous frame and cache truth.
+`render_fresh` bypasses reuse for reference checks. `RenderOutcome` reports
+the effective strategy, extended-style reads, and geometry reuse.
+
+Merges use Fresh raster rendering. Native output reuses unchanged frames,
+but partial Cairo repaint remains disabled after a text-edge mismatch in
+pixel tests. Native metrics use a 4,096-entry cache. SVG and PDF still render
+complete documents. Call `CanvasSession::invalidate` after fonts change.
+It clears backend metric caches and forces the next render to prepare again.
+`backend_mut` also invalidates the session. Target size and scale remain fixed
+per backend instance.
+
+Scene passes, cells, geometry, and engine metadata use shared immutable
+storage. Pass builders intern color and font strings and reserve common
+primitive buffers. Backend code still reads no workbook data.
+
+See the [M3 review and measurements](docs/reviews/2026-10-05-m3-measured-optimizations.md)
+for supported cases, performance trade-offs, and exact validation.
+
 ## M2 worksheet composition (2026-10-05)
 
 The new session composes visible headers, frozen panes, hidden axes, merges,
@@ -26,7 +63,7 @@ opaque-color limits. Neither backend reads the workbook.
 
 The separate playground route exercises composition and host intents.
 See the [M2 review](docs/reviews/2026-10-05-m2-worksheet-composition.md) for checks
-and limits. M3 owns optimization. M4 replaces the main legacy facade.
+and limits. M3 adds measured reuse above. M4 replaces the main legacy facade.
 
 ## M1 scene path (2026-10-04)
 

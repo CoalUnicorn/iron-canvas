@@ -6,12 +6,14 @@ use iron_canvas_core::{
 };
 use ironcalc_base::{expressions::utils::number_to_column, types::Border};
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare(
     workbook: &UserModel<'_>,
     sheet: u32,
     viewport: WorksheetViewport,
     metrics: &dyn TextMetrics,
     theme: &CanvasTheme,
+    previous: Option<&Rc<GridGeometry>>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
     let mut attempt = Attempt::new(workbook, sheet, metrics, theme)?;
     let first = viewport.first_cell;
@@ -97,18 +99,35 @@ pub(super) fn prepare(
         width: viewport.width,
         height: viewport.height,
     };
-    let geometry = GridGeometry::new(
-        clip,
-        Point {
-            x: header_width,
-            y: header_height,
-        },
-        rows,
-        columns,
-    );
-    let passes = new_passes();
+    let origin = Point {
+        x: header_width,
+        y: header_height,
+    };
+    let geometry = if let Some(old) = previous.filter(|old| {
+        old.bounds == clip
+            && old.origin == origin
+            && old.row_bands == rows
+            && old.column_bands == columns
+    }) {
+        Rc::clone(old)
+    } else {
+        Rc::new(GridGeometry::new(clip, origin, rows, columns))
+    };
+    let cell_count: usize = geometry
+        .panes
+        .iter()
+        .map(|p| p.rows.len() * p.columns.len())
+        .sum();
+    let clips = geometry.panes.len() * 2;
+    let passes = std::array::from_fn(|index| {
+        SceneBuilder::with_capacity(match index {
+            2 => cell_count * 2 + clips,
+            4 => cell_count * 3 + clips,
+            _ => 0,
+        })
+    });
     passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
-    let mut cells = Vec::new();
+    let mut cells = Vec::with_capacity(cell_count);
     for pane in &geometry.panes {
         for pass in &passes {
             pass.push_clip(pane.clip);
@@ -277,10 +296,10 @@ pub(super) fn prepare(
     // Keep query payloads engine-native. All reads stop before staging begins.
     Ok(PreparedWorksheet {
         scene,
-        cells,
+        cells: cells.into(),
         geometry: Some(geometry),
-        merges,
-        links: attempt.links,
+        merges: merges.into(),
+        links: attempt.links.into(),
         extended_style_reads: attempt.reads,
     })
 }

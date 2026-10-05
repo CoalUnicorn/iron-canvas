@@ -17,6 +17,7 @@ use ironcalc_base::{
     links::CellLinkView,
     types::{CellType, MergedCell},
 };
+use std::rc::Rc;
 use std::{collections::HashMap, fmt};
 
 // The pinned engine keeps these limits private. Keep the worksheet limits
@@ -42,10 +43,10 @@ pub struct WorksheetViewport {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedWorksheet {
     pub scene: GridScene,
-    pub cells: Vec<CellPlacement>,
-    pub geometry: Option<GridGeometry>,
-    pub merges: Vec<MergedCell>,
-    pub links: Vec<CellLinkView>,
+    pub cells: Rc<[CellPlacement]>,
+    pub geometry: Option<Rc<GridGeometry>>,
+    pub merges: Rc<[MergedCell]>,
+    pub links: Rc<[CellLinkView]>,
     /// Actual calls to `get_extended_cell_style` in this preparation.
     pub extended_style_reads: usize,
 }
@@ -98,7 +99,21 @@ impl WorksheetCompiler {
         metrics: &dyn TextMetrics,
         theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, metrics, theme)
+        composition::prepare(workbook, sheet, viewport, metrics, theme, None)
+    }
+
+    /// Resample dimensions after a revision, but retain equal slot buffers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_reusing_geometry(
+        &self,
+        workbook: &UserModel<'_>,
+        sheet: u32,
+        viewport: WorksheetViewport,
+        metrics: &dyn TextMetrics,
+        theme: &CanvasTheme,
+        geometry: Option<&Rc<GridGeometry>>,
+    ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+        composition::prepare(workbook, sheet, viewport, metrics, theme, geometry)
     }
 
     /// Lower positioned cells into five shared paint buffers. Repeated
@@ -133,10 +148,10 @@ impl WorksheetCompiler {
                 clip,
                 passes: passes.into_iter().map(SceneBuilder::finish).collect(),
             },
-            cells: placements,
+            cells: placements.into(),
             geometry: None,
-            merges: Vec::new(),
-            links: attempt.links,
+            merges: Rc::from([]),
+            links: attempt.links.into(),
             extended_style_reads: attempt.reads,
         })
     }

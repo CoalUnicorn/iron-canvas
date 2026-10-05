@@ -217,3 +217,360 @@ fn composed_merge_overlay_restores_candidate_pixels_at_both_scales() {
         assert_eq!(pixels(&canvas), selected);
     }
 }
+
+fn assert_fresh(
+    session: &CanvasSession<Canvas2dSceneBackend>,
+    model: &UserModel<'_>,
+    request: &RenderRequest,
+    dpr: f64,
+) {
+    let canvas = make_canvas();
+    let metrics = CanvasMetrics::new(
+        CanvasSize {
+            w: f64::from(request.viewport.width),
+            h: f64::from(request.viewport.height),
+        },
+        dpr,
+    )
+    .unwrap();
+    let mut fresh = CanvasSession::new(Canvas2dSceneBackend::new(canvas.clone(), metrics).unwrap());
+    fresh.render_fresh(model, request).unwrap();
+    let actual = pixels(session.backend().canvas());
+    let expected = pixels(&canvas);
+    let differences = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
+    assert_eq!(
+        differences, 0,
+        "retained Canvas2D must match forced Fresh byte for byte"
+    );
+}
+#[wasm_bindgen_test]
+fn retained_damage_scroll_overlay_and_revert_match_fresh() {
+    use iron_canvas::RenderStrategy;
+    use iron_canvas_core::scene_geometry::GridRange;
+    for dpr in [1.0, 1.25, 1.3, 1.5] {
+        let mut model = UserModel::new_empty("retained", "en", "UTC", "en").unwrap();
+        model.set_rows_height(0, 1, 80, 24.0).unwrap();
+        model.set_columns_width(0, 1, 20, 80.0).unwrap();
+        for row in 1..40 {
+            for col in 1..8 {
+                model
+                    .set_user_input(0, row, col, &format!("{row}-{col}"))
+                    .unwrap();
+            }
+        }
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 640,
+                height: 400,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut s = CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        s.render(&model, &request).unwrap();
+        let same = s.render(&model, &request).unwrap();
+        assert_eq!(same.strategy, RenderStrategy::Reuse);
+        assert_eq!(same.extended_style_reads, 0);
+        for text in ["changed", "6-3", ""] {
+            model.set_user_input(0, 6, 3, text).unwrap();
+            request.revision.revision += 1;
+            assert_eq!(
+                s.render(&model, &request).unwrap().strategy,
+                RenderStrategy::Damage
+            );
+            assert_fresh(&s, &model, &request, dpr);
+        }
+        for row in [2, 3, 2, 1] {
+            request.viewport.first_cell.row = row;
+            assert_eq!(
+                s.render(&model, &request).unwrap().strategy,
+                if dpr == 1.3 {
+                    RenderStrategy::Fresh
+                } else {
+                    RenderStrategy::Blit
+                }
+            );
+            assert_fresh(&s, &model, &request, dpr);
+        }
+        request.overlays.selection = vec![GridRange {
+            first: CellCoord { row: 3, col: 2 },
+            last: CellCoord { row: 7, col: 4 },
+        }];
+        request.overlays.active_cell = Some(CellCoord { row: 4, col: 3 });
+        assert_eq!(s.render(&model, &request).unwrap().extended_style_reads, 0);
+        assert_fresh(&s, &model, &request, dpr);
+        request.overlays = Default::default();
+        s.render(&model, &request).unwrap();
+        assert_fresh(&s, &model, &request, dpr);
+        model.set_frozen_rows_count(0, 2).unwrap();
+        model.set_frozen_columns_count(0, 2).unwrap();
+        model.set_rows_hidden(0, 4, 4, true).unwrap();
+        model.set_columns_hidden(0, 3, 3, true).unwrap();
+        request.revision.revision += 1;
+        assert_eq!(
+            s.render(&model, &request).unwrap().strategy,
+            RenderStrategy::Fresh
+        );
+        assert_fresh(&s, &model, &request, dpr);
+        model.set_user_input(0, 6, 5, "frozen edit").unwrap();
+        request.revision.revision += 1;
+        assert_eq!(
+            s.render(&model, &request).unwrap().strategy,
+            RenderStrategy::Damage
+        );
+        assert_fresh(&s, &model, &request, dpr);
+        request.theme = CanvasTheme::dark();
+        assert_eq!(
+            s.render(&model, &request).unwrap().strategy,
+            RenderStrategy::Fresh
+        );
+        assert_fresh(&s, &model, &request, dpr);
+    }
+}
+#[wasm_bindgen_test]
+fn cf_revisions_repaint_visible_results_of_offscreen_edits() {
+    use ironcalc_base::{
+        cf_types::{CfRuleInput, Cfvo},
+        types::Color,
+    };
+    for dpr in [1.0, 1.25] {
+        let mut model = UserModel::new_empty("cf dependency", "en", "UTC", "en").unwrap();
+        model.set_user_input(0, 1, 1, "5").unwrap();
+        model.set_user_input(0, 100, 1, "10").unwrap();
+        model
+            .add_conditional_formatting(
+                0,
+                "A1:A100",
+                CfRuleInput::DataBar {
+                    min: Some(Cfvo::Number(0.0)),
+                    max: None,
+                    positive_color: Color::Rgb("#638EC6".into()),
+                    negative_color: Color::Rgb("#FF0000".into()),
+                    is_gradient: true,
+                    show_value: true,
+                },
+            )
+            .unwrap();
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 400,
+                height: 160,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let mut s = CanvasSession::new(
+            Canvas2dSceneBackend::new(
+                make_canvas(),
+                CanvasMetrics::new(CanvasSize { w: 400.0, h: 160.0 }, dpr).unwrap(),
+            )
+            .unwrap(),
+        );
+        s.render(&model, &request).unwrap();
+        let before = pixels(s.backend().canvas());
+        model.set_user_input(0, 100, 1, "100").unwrap();
+        request.revision.revision += 1;
+        let outcome = s.render(&model, &request).unwrap();
+        assert!(outcome.extended_style_reads > 0);
+        assert_ne!(pixels(s.backend().canvas()), before);
+        assert_fresh(&s, &model, &request, dpr);
+    }
+}
+
+#[wasm_bindgen_test]
+fn failed_partial_updates_keep_pixels_queries_and_fingerprints_until_retry() {
+    use iron_canvas::{RenderBackend, RenderStrategy};
+    use iron_canvas_core::{
+        Point,
+        painter::TextMetrics,
+        scene::{GridScene, retained::SceneUpdate},
+    };
+    use ironcalc_base::types::Link;
+    use std::{cell::Cell, rc::Rc};
+    struct Failing {
+        inner: Canvas2dSceneBackend,
+        fail: Rc<Cell<u8>>,
+    }
+    impl RenderBackend for Failing {
+        type StagedFrame = HtmlCanvasElement;
+        type Error = wasm_bindgen::JsValue;
+        fn metrics(&self) -> &dyn TextMetrics {
+            self.inner.metrics()
+        }
+        fn retained_scale(&self) -> Option<f64> {
+            self.inner.retained_scale()
+        }
+        fn supports_partial_updates(&self) -> bool {
+            true
+        }
+        fn stage_frame(&mut self, s: &GridScene) -> Result<Self::StagedFrame, Self::Error> {
+            self.inner.stage_frame(s)
+        }
+        fn stage_update(
+            &mut self,
+            s: &GridScene,
+            u: &SceneUpdate,
+        ) -> Result<Self::StagedFrame, Self::Error> {
+            let staged = self.inner.stage_update(s, u)?;
+            if self.fail.get() == 1 {
+                Err("late stage".into())
+            } else {
+                Ok(staged)
+            }
+        }
+        fn commit_frame(&mut self, s: Self::StagedFrame) -> Result<(), Self::Error> {
+            if self.fail.get() == 2 {
+                Err("commit".into())
+            } else {
+                self.inner.commit_frame(s)
+            }
+        }
+    }
+    let mut model = UserModel::new_empty("failure", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "same label").unwrap();
+    model
+        .set_cell_link(
+            0,
+            1,
+            1,
+            Link::External {
+                target: "https://old.example".into(),
+                tooltip: None,
+            },
+            None,
+        )
+        .unwrap();
+    let canvas = make_canvas();
+    let fail = Rc::new(Cell::new(0));
+    let mut session = CanvasSession::new(Failing {
+        inner: Canvas2dSceneBackend::new(
+            canvas.clone(),
+            CanvasMetrics::new(CanvasSize { w: 400.0, h: 200.0 }, 1.25).unwrap(),
+        )
+        .unwrap(),
+        fail: Rc::clone(&fail),
+    });
+    let mut request = RenderRequest {
+        sheet: 0,
+        revision: RevisionToken {
+            workbook_id: 1,
+            revision: 0,
+        },
+        viewport: WorksheetViewport {
+            first_cell: CellCoord { row: 1, col: 1 },
+            width: 400,
+            height: 200,
+        },
+        theme: CanvasTheme::light(),
+        overlays: Default::default(),
+    };
+    session.render(&model, &request).unwrap();
+    let old = pixels(&canvas);
+    let frame = session.committed_frame().cloned();
+    let point = Point { x: 55, y: 30 };
+    let link = session.link_at(point).cloned();
+    model
+        .set_cell_link(
+            0,
+            1,
+            1,
+            Link::External {
+                target: "https://new.example".into(),
+                tooltip: None,
+            },
+            None,
+        )
+        .unwrap();
+    request.revision.revision += 1;
+    for mode in [1, 2] {
+        fail.set(mode);
+        assert!(session.render(&model, &request).is_err());
+        assert_eq!(pixels(&canvas), old);
+        assert_eq!(session.committed_frame(), frame.as_ref());
+        assert_eq!(session.link_at(point), link.as_ref());
+    }
+    fail.set(0);
+    let done = session.render(&model, &request).unwrap();
+    assert_eq!(done.sequence, 2);
+    assert_eq!(done.strategy, RenderStrategy::Reuse);
+    assert_ne!(session.link_at(point), link.as_ref());
+    assert_eq!(pixels(&canvas), old);
+    model.set_user_input(0, 3, 2, "new pixels").unwrap();
+    request.revision.revision += 1;
+    for mode in [1, 2] {
+        fail.set(mode);
+        assert!(session.render(&model, &request).is_err());
+        assert_eq!(pixels(&canvas), old);
+    }
+    fail.set(0);
+    assert_eq!(
+        session.render(&model, &request).unwrap().strategy,
+        RenderStrategy::Damage
+    );
+    model.set_user_input(0, 3, 2, "").unwrap();
+    request.revision.revision += 1;
+    assert_eq!(
+        session.render(&model, &request).unwrap().strategy,
+        RenderStrategy::Damage
+    );
+    assert_eq!(pixels(&canvas), old);
+}
+
+#[wasm_bindgen_test]
+fn fixture_cf_edits_match_fresh_with_translucent_background() {
+    let book = load_from_xlsx_bytes(FIXTURE, "cf_tests", "en", "UTC").unwrap();
+    let mut model = UserModel::from_model(Model::from_workbook(book, "en").unwrap());
+    for sheet in [0, 1] {
+        let mut request = RenderRequest {
+            sheet,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 1100,
+                height: 700,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        request.theme.cell_bg = "rgba(250,245,240,0.7)".into();
+        let mut session = CanvasSession::new(
+            Canvas2dSceneBackend::new(
+                make_canvas(),
+                CanvasMetrics::new(
+                    CanvasSize {
+                        w: 1100.0,
+                        h: 700.0,
+                    },
+                    1.25,
+                )
+                .unwrap(),
+            )
+            .unwrap(),
+        );
+        session.render(&model, &request).unwrap();
+        for value in ["3", "9", "-5"] {
+            model
+                .set_user_input(sheet, 2, if sheet == 0 { 8 } else { 2 }, value)
+                .unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, 1.25);
+        }
+    }
+}
