@@ -1,19 +1,20 @@
 //! Spreadsheet overlay composition from owned, already prepared content.
 
-// NOTE:
-// Hard coded values for things like `stroke_line(..., width: 2).
-// There are other like outline and others.
-
 use crate::interaction::logical_range;
 use iron_canvas_core::{
     CanvasTheme, CellCoord, PixelRect, Point, Side,
-    geometry::path::{Path, PathCmd, PointF},
+    geometry::{
+        constants::{DASHED_RECT_PATTERN, DEFAULT_MITER_LIMIT, STANDARD_BORDER_WIDTH},
+        path::{Path, PathCmd, PointF},
+    },
     painter::{LineCap, LineJoin, PaintColor, StrokeStyle},
     scene::{Primitive, SceneBuilder},
     scene_geometry::GridRange,
     theme::{FORMULA_REF_COLORS, FORMULA_REF_TINTS},
 };
 use iron_canvas_ironcalc::PreparedWorksheet;
+
+const HEADER_SELECTION_STROKE_WIDTH: f64 = 2.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormulaOverlay {
@@ -133,7 +134,7 @@ pub(crate) fn compose(
                     header.stroke_line(
                         side.line(rect),
                         PaintColor::Borrowed(&theme.selection_color),
-                        2.0,
+                        HEADER_SELECTION_STROKE_WIDTH,
                     );
                     highlighted.push(rect);
                 }
@@ -171,11 +172,15 @@ fn outline(out: &SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, d
         &Path::new(&cmds),
         PaintColor::Borrowed(color),
         &StrokeStyle {
-            width: 1.0,
+            width: f64::from(STANDARD_BORDER_WIDTH),
             cap: LineCap::Butt,
             join: LineJoin::Miter,
-            miter_limit: 10.0,
-            dash: if dashed { &[4.0, 3.0] } else { &[] },
+            miter_limit: DEFAULT_MITER_LIMIT,
+            dash: if dashed {
+                &DASHED_RECT_PATTERN[..]
+            } else {
+                &[]
+            },
         },
     );
 }

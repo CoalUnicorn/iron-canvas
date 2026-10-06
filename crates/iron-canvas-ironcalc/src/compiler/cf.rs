@@ -2,6 +2,7 @@
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 use std::rc::Rc;
 
+use iron_canvas_core::geometry::constants::DEFAULT_MITER_LIMIT;
 use iron_canvas_core::geometry::path::{ArcSpec, Path, PathCmd, PointF};
 use iron_canvas_core::geometry::pixel_rect::PixelRect;
 use iron_canvas_core::geometry::prim::Point;
@@ -411,7 +412,7 @@ fn paint_circle_rating(
         width: (f64::from(size) * 0.06).max(1.0),
         cap: LineCap::Butt,
         join: LineJoin::Round,
-        miter_limit: 10.0,
+        miter_limit: DEFAULT_MITER_LIMIT,
         dash: &[],
     };
     painter.stroke_path(&Path::new(&circle), fill, &style);
@@ -460,7 +461,7 @@ fn paint_def(painter: &SceneBuilder, def: &GlyphDef, left: i32, top: i32, size: 
                     width: 2.0 * place.length(*half),
                     cap: LineCap::Butt,
                     join: LineJoin::Miter,
-                    miter_limit: 10.0,
+                    miter_limit: DEFAULT_MITER_LIMIT,
                     dash: &[],
                 };
                 painter.stroke_path(&Path::new(&buf[..2]), color, &style);
