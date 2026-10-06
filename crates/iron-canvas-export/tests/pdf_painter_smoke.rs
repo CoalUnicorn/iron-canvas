@@ -1,14 +1,8 @@
-//! Commit 3 smoke test: each `Painter`/`BlitPainter`/`TextMetrics`
-//! method on `PdfPainter` emits the right PDF content-stream ops, and
-//! `PdfSurface` satisfies the `Surface` trait bound so the orchestrator
-//! can drive it.
+//! Smoke test: each `Painter`/`BlitPainter`/`TextMetrics` method on
+//! `PdfPainter` emits the right PDF content-stream ops.
 //!
-//! End-to-end orchestrator-driven paint isn't tested here for the same
-//! reason `svg_surface_smoke` declined to: building a stub `CanvasModel`
-//! is ~200 LOC for marginal extra coverage over the existing
-//! `MemSurface`-driven integration tests in `iron-canvas-core`. The
-//! contract that needs covering for PDF is the new bit — the
-//! `Painter` -> content-stream translation — and that's what each test
+//! The contract that needs covering for PDF is the
+//! `Painter` -> content-stream translation, and that's what each test
 //! below pins.
 
 #![cfg(feature = "pdf")]
@@ -17,7 +11,6 @@
 // test pins. Suppress the snake_case lint for the whole file.
 #![allow(non_snake_case)]
 
-use iron_canvas_core::Orchestrator;
 use iron_canvas_core::geometry::path::{Path, PathCmd, PointF};
 use iron_canvas_core::geometry::pixel_rect::PixelRect;
 use iron_canvas_core::geometry::prim::{Line, Point, Span};
@@ -25,9 +18,8 @@ use iron_canvas_core::painter::{
     BlitPainter, GroupClass, LineCap, LineJoin, PaintColor, Painter, StrokeStyle, TextAlign,
     TextBaseline, TextMetrics,
 };
-use iron_canvas_core::surface::Surface;
 use iron_canvas_export::common::metrics;
-use iron_canvas_export::pdf::{PdfPainter, PdfSurface};
+use iron_canvas_export::pdf::PdfPainter;
 
 const W: u32 = 100;
 const H: u32 = 50;
@@ -308,71 +300,8 @@ fn measure_text_width_uses_real_helvetica_metrics_not_declared_family() {
 }
 
 // ---------------------------------------------------------------------------
-// PdfSurface — Surface trait + finish()
+// Painter trait — path state
 // ---------------------------------------------------------------------------
-
-#[test]
-fn orchestrator_accepts_pdf_surface() {
-    // Mirrors svg_surface_smoke::orchestrator_accepts_svg_surface — the
-    // point is that the trait bounds resolve, not that anything paints.
-    let grid = PdfSurface::new(W, H);
-    let overlay = PdfSurface::new(W, H);
-    let _orch: Orchestrator<PdfSurface> = Orchestrator::new(grid, overlay);
-}
-
-#[test]
-fn finish_emits_y_flip_cm_at_page_origin() {
-    let s = PdfSurface::new(W, H);
-    let bytes = s.finish();
-    // The CTM lives inside the /Contents stream object — search for the
-    // exact `1 0 0 -1 0 <H> cm` payload independently of the wrapping
-    // `<< /Length N >> stream\n...\nendstream` framing.
-    let needle = format!("1 0 0 -1 0 {H} cm");
-    assert!(
-        find_substr(&bytes, needle.as_bytes()),
-        "page-open CTM missing: expected `{needle}` somewhere in document"
-    );
-}
-
-#[test]
-fn finish_records_dimensions_in_mediabox() {
-    let s = PdfSurface::new(W, H);
-    let bytes = s.finish();
-    let needle = format!("/MediaBox [0 0 {W} {H}]");
-    assert!(
-        find_substr(&bytes, needle.as_bytes()),
-        "/MediaBox dimensions missing: expected `{needle}`"
-    );
-}
-
-#[test]
-fn finish_round_trips_through_pdf_header_and_eof() {
-    let s = PdfSurface::new(W, H);
-    let bytes = s.finish();
-    assert!(bytes.starts_with(b"%PDF-1.7\n"));
-    assert!(bytes.ends_with(b"%%EOF"));
-}
-
-#[test]
-fn finish_includes_painter_output_after_ctm() {
-    let s = PdfSurface::new(W, H);
-    s.painter()
-        .rect_fill(rect(5, 5, 10, 10), PaintColor::Static("#abcdef"));
-    let bytes = s.finish();
-    // The fill op must appear AFTER the CTM in the stream.
-    let cm_needle = format!("1 0 0 -1 0 {H} cm");
-    let re_needle = b"5.000 5.000 10.000 10.000 re";
-    let Some(cm_pos) = position(&bytes, cm_needle.as_bytes()) else {
-        panic!("cm missing");
-    };
-    let Some(re_pos) = position(&bytes, re_needle) else {
-        panic!("re missing");
-    };
-    assert!(
-        cm_pos < re_pos,
-        "painter ops emitted before page-open CTM (cm at {cm_pos}, re at {re_pos})"
-    );
-}
 
 #[test]
 fn stroke_path_emits_full_state_then_S() {
@@ -435,19 +364,4 @@ fn stroke_path_state_is_isolated_from_a_later_stroke() {
         !after.contains(" J\n") && !after.contains(" j\n"),
         "cap/join leaked past the stroke scope: {after:?}"
     );
-}
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn find_substr(haystack: &[u8], needle: &[u8]) -> bool {
-    position(haystack, needle).is_some()
-}
-
-fn position(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    if needle.is_empty() || needle.len() > haystack.len() {
-        return None;
-    }
-    (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
 }

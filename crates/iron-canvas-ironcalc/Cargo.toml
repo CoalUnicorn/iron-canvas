@@ -7,10 +7,6 @@ edition.workspace = true
 [lib]
 crate-type = ["rlib"]
 
-[features]
-default = ["legacy"]
-legacy = ["iron-canvas-core/legacy"]
-
 [dependencies]
 iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core", default-features = false }
 ironcalc_base = { workspace = true }

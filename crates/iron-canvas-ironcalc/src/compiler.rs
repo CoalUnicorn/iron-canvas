@@ -5,6 +5,8 @@ mod composition;
 mod glyphs;
 mod text;
 
+pub use cf::{CfDataBarPaint, CfDecorationPaint, CfIconPaint, CfRatingPaint};
+
 use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect};
 use iron_canvas_core::{
     painter::{PaintColor, TextMetrics},

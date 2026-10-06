@@ -1,19 +1,14 @@
 //! Read-only IronCalc worksheet compiler for resolved core scenes.
 //!
-//! The default `legacy` feature retains `IronCalcModel` and style converters
-//! for the old renderer until M4. The shared session disables this feature.
+//! The compiler reads a borrowed [`UserModel`](ironcalc_base::UserModel) and
+//! lowers each cell into generic scene primitives: styles, conditional
+//! formatting, borders, text, links, and merges. No legacy model adapter is
+//! involved.
 
 pub mod autofit;
 pub mod compiler;
-#[cfg(feature = "legacy")]
-pub mod convert;
 
 pub use compiler::{
-    CellPlacement, CellReadOperation, PreparedWorksheet, WorksheetCompileError, WorksheetCompiler,
-    WorksheetViewport,
+    CellPlacement, CellReadOperation, CfDataBarPaint, CfDecorationPaint, CfIconPaint,
+    CfRatingPaint, PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetViewport,
 };
-
-#[cfg(feature = "legacy")]
-mod adapter;
-#[cfg(feature = "legacy")]
-pub use adapter::{IronCalcModel, color_resolver};

@@ -38,7 +38,7 @@ impl ContentStream {
     }
 
     /// Borrow the raw stream bytes — used by `PdfPainter` snapshots in
-    /// tests and by `PdfSurface::finish` when assembling the page.
+    /// tests and by `PdfSurface::build_document` when assembling the page.
     pub fn bytes(&self) -> &[u8] {
         &self.body
     }

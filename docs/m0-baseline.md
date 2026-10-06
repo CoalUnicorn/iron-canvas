@@ -30,14 +30,15 @@ The fixture provenance file records upstream revision
 
 - Engine-backed tests confirm the fixture imports 54 rules with per-sheet
   counts `[18, 20, 3, 4, 3, 2, 4]`.
-- Adapter tests exercise `showValue="0"` icon handling; gradient bars,
+- The CF fixture tests exercise `showValue="0"` icon handling; gradient bars,
   x14 solid-bar overrides, hidden values and non-zero negative-bar axes; and
-  star and quarter-circle rating values.
+  star and quarter-circle rating values. Since M4 step F they read the
+  compiler's resolved CF paint rather than the deleted model adapter.
 - Core tests exercise glyph mapping and placement, data-bar geometry, rating
   layout, value suppression and coexistence of decoration categories.
 - The CF fixture tests explicitly note that raw browser pixel comparison had
   not previously been captured. Their assertions validate engine output and
-  adapter conversion, not Excel rendering parity.
+  compiler conversion, not Excel rendering parity.
 
 The fixture does not establish full rendering parity. The engine evaluates
 conditional-formatting rules and supplies semantic results; Canvas2D paints
@@ -95,9 +96,10 @@ were changed by these build steps.
 
 ## Native availability
 
-The attached `iron-canvas` workspace currently has six crates:
+The attached `iron-canvas` workspace at this revision had six crates:
 `iron-canvas-core`, `iron-canvas-canvas2d`, `iron-canvas-export`,
-`iron-canvas-ironcalc`, `iron-canvas-recorder`, and `iron-canvas-web`. It has
+`iron-canvas-ironcalc`, `iron-canvas-recorder`, and `iron-canvas-web` (deleted
+later in M4 step E). It has
 no `iron-canvas-native` crate or native worksheet consumer at this revision.
 Native rendering availability is therefore **not available**; no native
 result is inferred from the browser or export captures.

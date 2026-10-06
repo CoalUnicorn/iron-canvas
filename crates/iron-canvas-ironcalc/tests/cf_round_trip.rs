@@ -9,9 +9,7 @@
 
 use std::path::PathBuf;
 
-use iron_canvas_core::CellDecoration;
-use iron_canvas_ironcalc::color_resolver;
-use iron_canvas_ironcalc::convert::cell_decoration_from_extended;
+use iron_canvas_ironcalc::{CfDataBarPaint, CfDecorationPaint};
 use ironcalc::export::save_to_xlsx;
 use ironcalc::import::load_from_xlsx;
 use ironcalc_base::cf_types::{CfRuleInput, Cfvo};
@@ -35,16 +33,13 @@ fn load_model(path: &str) -> Model<'static> {
     load_from_xlsx(path, "en", "UTC", "en").expect("workbook loads")
 }
 
-fn decoration(
-    model: &UserModel<'static>,
-    sheet: u32,
-    row: i32,
-    col: i32,
-) -> Option<CellDecoration> {
+/// The compiler's resolved conditional formatting for one cell, with colors
+/// resolved through the workbook theme exactly as the paint path does.
+fn decoration(model: &UserModel<'static>, sheet: u32, row: i32, col: i32) -> CfDecorationPaint {
     let ext = model
         .get_extended_cell_style(sheet, row, col)
         .expect("cell read");
-    cell_decoration_from_extended(&ext, &color_resolver(model))
+    CfDecorationPaint::resolve(&ext, model)
 }
 
 fn temp_xlsx(tag: &str) -> PathBuf {
@@ -117,8 +112,10 @@ fn bar_rule(is_gradient: bool, show_value: bool) -> CfRuleInput {
     }
 }
 
-fn bar_of(model: &UserModel<'static>, sheet: u32, row: i32, col: i32) -> CellDecoration {
-    decoration(model, sheet, row, col).expect("a data bar applies")
+fn bar_of(model: &UserModel<'static>, sheet: u32, row: i32, col: i32) -> CfDataBarPaint {
+    decoration(model, sheet, row, col)
+        .data_bar
+        .expect("a data bar applies")
 }
 
 fn find_rule(model: &UserModel<'static>, sheet: u32, range: &str) -> u32 {
@@ -147,7 +144,7 @@ fn gradient_and_visibility_edits_round_trip_through_undo() {
         .expect("add rule");
     let index = find_rule(&model, 0, "Z1:Z3");
 
-    let before = bar_of(&model, 0, 1, 26).data_bar.expect("bar");
+    let before = bar_of(&model, 0, 1, 26);
     assert!(
         before.is_gradient && before.show_value,
         "initial: gradient, visible"
@@ -157,17 +154,17 @@ fn gradient_and_visibility_edits_round_trip_through_undo() {
     model
         .update_conditional_formatting(0, index, "Z1:Z3", bar_rule(false, false))
         .expect("update rule");
-    let after = bar_of(&model, 0, 1, 26).data_bar.expect("bar");
+    let after = bar_of(&model, 0, 1, 26);
     assert!(
         !after.is_gradient && !after.show_value,
         "the edit must reach the evaluated decoration"
     );
 
     model.undo().expect("undo the edit");
-    let undone = bar_of(&model, 0, 1, 26).data_bar.expect("bar");
+    let undone = bar_of(&model, 0, 1, 26);
     assert_eq!(undone, before, "undo restores the evaluated decoration");
 
     model.redo().expect("redo the edit");
-    let redone = bar_of(&model, 0, 1, 26).data_bar.expect("bar");
+    let redone = bar_of(&model, 0, 1, 26);
     assert_eq!(redone, after, "redo re-applies the evaluated decoration");
 }

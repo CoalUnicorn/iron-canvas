@@ -57,7 +57,7 @@ impl SvgPainter {
 
     /// Drain the buffered body + defs and return the finished SVG
     /// document. Takes `&self` so callers holding the painter behind
-    /// `Rc` (e.g. `SvgSurface`) can finish without unwrapping.
+    /// `Rc` can finish without unwrapping.
     /// Asserts clip and group balance.
     pub fn finish(&self) -> String {
         debug_assert_eq!(

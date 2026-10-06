@@ -81,10 +81,11 @@ prepared worksheet only after the backend commits the staged output.
 Preparation, staging, and presentation errors preserve the previous frame
 under the backend contract. Canvas2D target dimensions are fixed per backend.
 
-Core and compiler retain a default `legacy` feature for the legacy renderer.
-The new session disables both defaults. A standalone core build without
-that feature exposes no `CanvasModel`, `CellDecoration`, or style mirrors.
-M4 removes the old renderer after the main worksheet integration migrates.
+Core retains a default `legacy` feature for the legacy renderer; the compiler
+crate has no features and always builds the new path. The new session disables
+core's default. A standalone core build without that feature exposes no
+`CanvasModel`, `CellDecoration`, or style mirrors. M4 removes the old renderer
+after the main worksheet integration migrates.
 
 The transition playground route `/playground/grid-core` validated this path
 before the worksheet cutover; see the
@@ -117,8 +118,8 @@ native-renderer availability.
 | `iron-canvas-canvas2d` | Browser Canvas2D backend: `CanvasPainter`, `WebSurface`, paired `Canvas2dRuntime`, CSS theme bridge, setter caches, DPR handling, and text-measurement memo. No IronCalc dependency. |
 | `iron-canvas-native` | Cairo/Pango raster backend: `NativePainter`, `NativeSurface`, and `CompositeTarget`. The host owns the window, model, event loop, and presentation. |
 | `iron-canvas` | Shared worksheet rendering session (`CanvasSession`), frame request/publication types, retained-reuse policy, overlays, and interaction intents. Hosts the wasm browser probe test and measurement example. |
-| `iron-canvas-ironcalc` | `IronCalcModel<'a>` adapter plus the shared IronCalc-to-core style/color conversion and conditional-formatting bridge. |
-| `iron-canvas-export` | Pure-Rust SVG and PDF painters/surfaces. Uses `ttf-parser` for font metrics and `base64` for font embedding. Export uses throwaway orchestrators and discards overlay output. |
+| `iron-canvas-ironcalc` | Read-only worksheet compiler (`WorksheetCompiler`) that lowers IronCalc styles, conditional formatting, borders, text, links, and merges into a resolved `GridScene`. Reads a borrowed `UserModel`; no core model trait. |
+| `iron-canvas-export` | Pure-Rust SVG and PDF painters plus scene backends (`SvgSceneBackend`, `PdfSceneBackend`) that stage a resolved `GridScene` into a document. Uses `ttf-parser` for font metrics and `base64` for font embedding. Never reads the workbook. |
 | `iron-canvas-recorder` | `RecorderPainter`/`MemSurface` test backend and optional `RecordingPainter<P>`/`RecordingSurface<S>` `.icr` capture decorator. |
 
 Deleting every adapter crate must still leave `iron-canvas-core` compiling and
@@ -603,10 +604,11 @@ visible committed pixels.
 
 ## Adapter and format boundaries
 
-`CanvasModel: CellContentQuery` is read-only. `IronCalcModel<'a>` exists
-because orphan rules prevent implementing the core trait directly for
-IronCalc's `UserModel`. Adapters preserve `Fetched::BridgeFailed` on their
-degrade path; conditional-format decorations currently use the trait's
+The M1 compiler reads a borrowed `UserModel` directly — `WorksheetCompiler`
+lowers cells into a resolved `GridScene` with no model trait in between. The
+legacy `CanvasModel: CellContentQuery` trait still backs core's own legacy
+renderer until M4 step G; adapters preserve `Fetched::BridgeFailed` on their
+degrade path, and conditional-format decorations there use the trait's
 per-cell default loop.
 
 Sheet-level link state is the one non-scalar capture read,
@@ -620,13 +622,13 @@ with worksheet precedence and preserves `dynamic`.
 Merges are captured the same way through `CanvasModel::get_merged_ranges`:
 inclusive `RCRange`s, `Some(empty)` for a merge-less sheet or a statically
 absent optional capability, `None` for a throw, a malformed payload, or a list
-`MergeTable::from_ranges` rejects. The native adapters convert IronCalc's typed
+`MergeTable::from_ranges` rejects. The compiler validates IronCalc's typed
 `MergedCell` with checked arithmetic. The conversion never parses A1 strings
 or turns an invalid list into empty data.
 
-`Surface` implementations for SVG and PDF are throwaway Fresh renderers, so
-their `BlitPainter` implementations are no-ops and live viewport reuse must
-never reach them.
+The export backends consume a resolved `GridScene`, so they hold no `Surface`;
+the surviving `Surface` implementations (Canvas2D, native, recorder) are layer
+targets driven by the legacy orchestrator.
 
 The recorder's `.icr` schema is version 11. This version adds `StrokePath`
 with an owned stroke style; version 10 changed `FillPath` from integer points
@@ -671,8 +673,8 @@ Paths are relative to `iron-canvas/crates/`.
 | `iron-canvas/tests/cf_fixture_canvas2d.rs` | wasm browser proof: the CF fixture paints through `Canvas2dSceneBackend` and retained frames match forced-Fresh output. |
 | `iron-canvas/examples/measure_scene_web.rs` | wasm browser measurement probe over `Canvas2dSceneBackend` (built with `scripts/measure_scene_web.mjs`). |
 | `iron-canvas-recorder/src/` | draw-op schema and owned stroke style (`ops.rs`), op-emitting painter (`painter.rs`), capture wrappers (`surfaces.rs`), and the `.icr` v11 attempt schema (`recording.rs`). |
-| `iron-canvas-export/src/` | SVG/PDF painters, metrics, document writers, and one-shot surfaces. |
-| `iron-canvas-ironcalc/src/lib.rs` | IronCalc adapter and style/decoration conversion. |
+| `iron-canvas-export/src/` | SVG/PDF painters, metrics, document writers, and the `SvgSceneBackend`/`PdfSceneBackend` finalizers. |
+| `iron-canvas-ironcalc/src/compiler/` | Resolved-scene lowering: composition (`composition.rs`), conditional formatting (`cf.rs`), borders (`borders.rs`), text (`text.rs`), and shared glyph geometry (`glyphs.rs`). |
 
 ## Verification
 

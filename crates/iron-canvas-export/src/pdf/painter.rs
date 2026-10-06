@@ -5,7 +5,7 @@
 //! per-paint clear (PDF is declarative — the page-open `cm` plus the
 //! emitted ops are the entire output). The Y-flip CTM that maps the
 //! painter's Y-down coords to PDF's Y-up user space is prepended by
-//! [`PdfSurface::finish`](crate::pdf::PdfSurface::finish) rather than each painter op, so the painter
+//! `PdfSurface::build_document` rather than each painter op, so the painter
 //! itself never needs to think about it: `re` is emitted with the same
 //! `x y w h` we received from `PixelRect`.
 
@@ -41,8 +41,7 @@ pub struct PdfPainter {
     /// Distinct horizontal-gradient endpoint color pairs, in first-use order.
     /// The content stream references `/Sh{index}`; the surface inlines the
     /// matching axial shading dictionaries into the `/Resources` object. `Rc`
-    /// so `PdfSurface::render` can keep the registry alive past the throwaway
-    /// orchestrator that consumes the surface.
+    /// so the document assembler can hold the registry alongside the stream.
     shadings: Rc<RefCell<Vec<(String, String)>>>,
     /// Reused formatting buffer behind [`Self::emit`]. A full-sheet export
     /// emits tens of thousands of ops, so formatting each one into this
@@ -53,16 +52,14 @@ pub struct PdfPainter {
 }
 
 impl PdfPainter {
-    /// Construct a painter that owns its own content stream. Use this
-    /// for single-surface scenarios (unit tests, future
-    /// orchestrator-driven export).
+    /// Construct a painter that owns its own content stream. This is what
+    /// the PDF scene backend uses to paint one staged frame.
     pub fn new(width: u32, height: u32) -> Self {
         Self::with_stream(Rc::new(RefCell::new(ContentStream::new())), width, height)
     }
 
-    /// Construct a painter sharing an externally-owned stream. Used to point
-    /// the grid and overlay `PdfSurface`s at the same buffer so paint calls
-    /// from both layers concatenate in dispatch order.
+    /// Construct a painter sharing an externally-owned stream, so several
+    /// painters can concatenate their ops into one document in dispatch order.
     pub fn with_stream(body: Rc<RefCell<ContentStream>>, width: u32, height: u32) -> Self {
         Self {
             body,
@@ -76,9 +73,8 @@ impl PdfPainter {
     }
 
     /// Shared registry of the gradient color pairs the content stream has
-    /// referenced. `PdfSurface::render` captures it before the surface moves
-    /// into the throwaway orchestrator, so the document can be assembled from
-    /// the surviving stream afterwards.
+    /// referenced. The scene backend hands it to `PdfSurface::build_document`
+    /// so the `/Resources` object can inline the matching shadings.
     pub fn shadings(&self) -> Rc<RefCell<Vec<(String, String)>>> {
         Rc::clone(&self.shadings)
     }
@@ -94,11 +90,10 @@ impl PdfPainter {
         shadings.len() - 1
     }
 
-    /// Hand back the shared stream. `PdfSurface::finish` takes it, wraps
-    /// it in the page-open CTM, and inlines the bytes as the `/Contents`
-    /// object. Public so a second `PdfSurface` can point at the same
-    /// buffer, and so smoke tests can inspect what each `Painter` method
-    /// emits.
+    /// Hand back the shared stream. `PdfSurface::build_document` takes it,
+    /// wraps it in the page-open CTM, and inlines the bytes as the
+    /// `/Contents` object. Public so callers and smoke tests can inspect
+    /// what each `Painter` method emits.
     pub fn stream(&self) -> Rc<RefCell<ContentStream>> {
         Rc::clone(&self.body)
     }
@@ -505,7 +500,7 @@ impl Painter for PdfPainter {
 
     fn apply_dpr_transform(&self, _dpr: f64) {
         // DPR doesn't apply to PDF user space (1/72" regardless of
-        // device pixel density). The page-open CTM in PdfSurface::finish
+        // device pixel density). The page-open CTM in PdfSurface::build_document
         // already maps painter coords to PDF coords; nothing else needs
         // to happen here.
     }
@@ -535,10 +530,9 @@ impl Painter for PdfPainter {
 
 impl BlitPainter for PdfPainter {
     fn blit(&self, _src: PixelRect, _dst: PixelRect) {
-        // PDF has no source-copy primitive. The throwaway export
-        // orchestrator can never reach the ScrollBlit strategy — see the
-        // "`BlitPainter::blit` — short-circuit (proven safe)" section of
-        // OUTPUT_REFACTOR_PLAN.md for the proof. No-op is sound.
+        // PDF has no source-copy primitive. The PDF scene backend stages a
+        // complete resolved scene through `Painter` ops and never issues a
+        // blit, so the no-op is sound.
     }
 }
 

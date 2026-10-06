@@ -17,7 +17,7 @@ use iron_canvas_core::shape::place::{Placement, emit_poly, star_vertices};
 
 /// Resolved icon decoration: the engine-selected glyph and its resolved,
 /// interned color.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CfIconPaint {
     pub glyph: Icon,
     pub color: Rc<str>,
@@ -30,7 +30,7 @@ pub struct CfIconPaint {
 /// shade each gradient runs from at the axis. `value` and `axis_position` are
 /// normalized positions in `[0, 1]`; the bar spans them, so it is not
 /// necessarily anchored at the cell's left edge.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CfDataBarPaint {
     pub positive: Rc<str>,
     pub positive_light: Rc<str>,
@@ -44,7 +44,7 @@ pub struct CfDataBarPaint {
 }
 
 /// Resolved rating with its draw style and engine counts.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CfRatingPaint {
     pub style: Icon,
     pub color: Rc<str>,
@@ -57,7 +57,7 @@ pub struct CfRatingPaint {
 /// Resolved CF decoration for one cell. The engine resolves each category
 /// independently, so all three may be present; `paint` draws them in
 /// data-bar -> icon -> rating order (background to foreground).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CfDecorationPaint {
     pub icon: Option<CfIconPaint>,
     pub data_bar: Option<CfDataBarPaint>,
@@ -65,7 +65,14 @@ pub struct CfDecorationPaint {
 }
 
 impl CfDecorationPaint {
-    pub(super) fn resolve(deco: &ExtendedStyle, workbook: &UserModel<'_>) -> Self {
+    /// Resolve the engine's evaluated conditional formatting for one cell.
+    ///
+    /// Colors resolve through `workbook`, matching what the compiler paints.
+    /// Every category is independent, so all three may be present; absent
+    /// categories are `None`. The value-hiding flags and normalized bar
+    /// positions are the engine's, so a host can read them without
+    /// reimplementing the resolution.
+    pub fn resolve(deco: &ExtendedStyle, workbook: &UserModel<'_>) -> Self {
         let color = |c: &ironcalc_base::types::Color, fallback: &str| -> Rc<str> {
             let value = workbook.resolve_color(c);
             Rc::from(if value.is_empty() { fallback } else { &value })
