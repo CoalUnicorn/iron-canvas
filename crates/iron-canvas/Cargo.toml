@@ -16,6 +16,10 @@ ironcalc_base.workspace = true
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 iron-canvas-native = { path = "../iron-canvas-native" }
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gtk4 = "0.9"
+ironcalc.workspace = true
+
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 iron-canvas-canvas2d = { path = "../iron-canvas-canvas2d" }
 wasm-bindgen = "0.2"
