@@ -13,15 +13,11 @@
 #![cfg(any(feature = "svg", feature = "pdf"))]
 
 use iron_canvas_core::painter::CHAR_WIDTH_FACTOR;
-use iron_canvas_core::renderer::cell::text::{TextLine, layout_into};
+use iron_canvas_core::text_layout::{LINE_HEIGHT_FACTOR, TextLine, layout_text_lines_into};
 
 const REAL_ROW_HEIGHT_PX: f64 = 55.0;
 const REAL_USABLE_WIDTH_PX: f64 = 245.0;
 const REAL_FONT_SIZE_PX: f64 = 13.0;
-// Mirrors `iron_canvas_core::renderer::cell::text::LINE_HEIGHT_FACTOR`,
-// which is `pub(crate)` and not reachable from this crate — duplicated
-// here, documented, rather than widening its visibility for one test.
-const LINE_HEIGHT_FACTOR: f64 = 1.2;
 const PARAGRAPH: &str = "Estimate your monthly mortgage payments \
 and explore how different loan conditions affect your repayment";
 
@@ -31,7 +27,7 @@ fn wrapped_lines(
 ) -> Vec<TextLine> {
     let mut lines = Vec::new();
     let mut wrap_buf = String::new();
-    layout_into(
+    layout_text_lines_into(
         metrics,
         font_css,
         PARAGRAPH,

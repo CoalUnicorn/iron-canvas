@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn grid_layer_has_section_groups() {
         // Drive the painter through the same begin_group/end_group
-        // sequence `render_grid` produces: Grid wraps Cells / FrozenSep
+        // sequence the grid scene emits: Grid wraps Cells / FrozenSep
         // / Headers / Corner as siblings. The rendered SVG should
         // surface that structure literally so a future SVG player can
         // toggle sections independently.
@@ -554,7 +554,7 @@ mod tests {
         assert!(body.contains("<g class=\"frozen-sep\">"));
         assert!(body.contains("<g class=\"headers\">"));
         assert!(body.contains("<g class=\"corner\">"));
-        // Sibling order: Cells first, Corner last — mirrors render_grid.
+        // Sibling order: Cells first, Corner last — mirrors the grid scene.
         let cells_at = body.find("<g class=\"cells\">").unwrap();
         let corner_at = body.find("<g class=\"corner\">").unwrap();
         assert!(cells_at < corner_at, "Cells must precede Corner in the SVG");
@@ -563,7 +563,7 @@ mod tests {
     #[test]
     fn overlay_layer_has_structured_groups() {
         // Mirror of grid_layer_has_section_groups for the overlay
-        // decoration brackets emitted by LayerBase::paint_overlay_layer.
+        // decoration brackets the overlay scene emits.
         let p = SvgPainter::new(10, 10);
         p.begin_group(GroupClass::Overlay);
         for class in [

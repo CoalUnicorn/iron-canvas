@@ -500,9 +500,6 @@ dependencies = [
 name = "iron-canvas-core"
 version = "0.1.0-beta.2"
 dependencies = [
- "bitflags",
- "iron-canvas-core",
- "iron-canvas-recorder",
  "serde",
 ]
 
@@ -534,15 +531,6 @@ dependencies = [
  "iron-canvas-core",
  "pango",
  "pangocairo",
-]
-
-[[package]]
-name = "iron-canvas-recorder"
-version = "0.1.0-beta.2"
-dependencies = [
- "iron-canvas-core",
- "serde",
- "serde_json",
 ]
 
 [[package]]

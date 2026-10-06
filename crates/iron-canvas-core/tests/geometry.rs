@@ -3,7 +3,6 @@
 
 use iron_canvas_core::CanvasSize;
 use iron_canvas_core::geometry::CanvasMetrics;
-use iron_canvas_core::geometry::labels::col_name;
 use iron_canvas_core::geometry::pixel_rect::PixelRect;
 use iron_canvas_core::geometry::prim::{Line, Point, Span};
 
@@ -225,24 +224,4 @@ fn offset_cross_with_negative_shifts_opposite() {
         Line::V { x: 5, span }.offset_cross(-2),
         Line::V { x: 3, span }
     );
-}
-
-#[test]
-fn col_name_one_is_a() {
-    assert_eq!(col_name(1), "A");
-}
-
-#[test]
-fn col_name_26_is_z() {
-    assert_eq!(col_name(26), "Z");
-}
-
-#[test]
-fn col_name_707_is_zz() {
-    assert_eq!(col_name(707), "AAE");
-}
-
-#[test]
-fn col_name_zero_returns_empty_string() {
-    assert_eq!(col_name(0), "");
 }

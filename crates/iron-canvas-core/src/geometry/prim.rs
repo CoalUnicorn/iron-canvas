@@ -1,7 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "legacy")]
-use crate::RCRange;
 use crate::geometry::pixel_rect::PixelRect;
 
 /// A point in logical (CSS) pixels on the canvas.
@@ -14,9 +12,8 @@ pub struct Point {
 /// An axis-aligned line segment on the canvas.
 ///
 /// Named fields per variant so callers can't transpose the scalars.
-/// `offset_cross` shifts perpendicular to the line's direction - used by
-/// `BorderStyle::Double`, which draws two parallel lines at ±1 on the
-/// cross-axis.
+/// `offset_cross` shifts perpendicular to the line's direction — used by
+/// double borders, which draw two parallel lines at ±1 on the cross-axis.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Line {
     H { span: Span, y: i32 },
@@ -106,8 +103,8 @@ impl Span {
 
 /// Horizontal vs vertical axis.
 ///
-/// Shared across the scroll-blit geometry (`BlitPlan::for_axis_scroll`
-/// dispatches on axis) and header rect building (`Axis::header_rect`).
+/// Dispatches geometry on the row/column axis; header rect building
+/// (`Axis::header_rect`) is one consumer.
 /// Carries no payload - the
 /// row/column index travels as a separate parameter so the same enum value
 /// can be used across call sites that don't care about a specific index.
@@ -137,17 +134,6 @@ impl Axis {
                 width: parallel_size,
                 height: header_thickness,
             },
-        }
-    }
-
-    /// Inclusive `(start, end)` of the user's selection along this axis,
-    /// read from ironcalc's `SelectedView.range`
-    #[cfg(feature = "legacy")]
-    pub fn selection_range(self, view_range: RCRange) -> (i32, i32) {
-        let norm = view_range.normalized();
-        match self {
-            Axis::Row => (norm.r1, norm.r2),
-            Axis::Column => (norm.c1, norm.c2),
         }
     }
 }
@@ -195,9 +181,8 @@ impl Side {
 
 /// Cardinal side of a rectangle.
 ///
-/// Formula-reference hit testing uses it through
-/// `RefZone::Edge`; border
-/// paint uses [`Side::line`] to project the side onto a stroke segment.
+/// Border paint uses [`Side::line`] to project the side onto a stroke
+/// segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Side {
     Top,
@@ -214,8 +199,7 @@ impl Side {
     pub const ALL: [Self; 4] = [Self::Left, Self::Top, Self::Right, Self::Bottom];
 }
 
-/// One of the four corners of a formula-ref rectangle. Used by
-/// `RefZone::Corner` to drive two-axis resize.
+/// One of the four corners of a rectangle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RectCorner {
     TopLeft,

@@ -58,13 +58,12 @@ impl std::error::Error for CanvasMetricError {}
 /// backing-store dimensions.
 ///
 /// [`CanvasSize`] stays permissive on purpose — it is the general coordinate
-/// value the geometry and hit-testing layers pass around, and finite models,
-/// export, and diagnostics paths all hand-construct it. The host boundary is
-/// different: a `NaN` extent, a zero/negative/`NaN` DPR, or a DPR-scaled
-/// backing store past `u32` all produce a canvas whose pixels no length of
-/// slot arithmetic can describe. This type is that parse. It is built once per
-/// resize or recording load and then carried — `Orchestrator`, every `Surface`,
-/// and `FrameInputs` all hold it — so no downstream cast needs to re-check.
+/// value the geometry and hit-testing layers pass around, and finite models
+/// and export paths hand-construct it. The host boundary is different: a
+/// `NaN` extent, a zero/negative/`NaN` DPR, or a DPR-scaled backing store past
+/// `u32` all produce a canvas whose pixels no length of slot arithmetic can
+/// describe. This type is that parse. It is built once per size change and
+/// then carried, so no downstream cast needs to re-check.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CanvasMetrics {
     size: CanvasSize,
@@ -93,18 +92,6 @@ impl CanvasMetrics {
             return Err(CanvasMetricError::BackingOverflow);
         }
         Ok(Self { size, dpr })
-    }
-
-    /// Metrics for a paint attempt that ran before any `resize`: a zero-size
-    /// logical canvas at DPR 1.0, exactly the pre-validation defaults. Valid by
-    /// construction (0 is finite and non-negative; 1.0 is finite and positive),
-    /// so it is a real constructor rather than an unchecked literal.
-    #[cfg(feature = "legacy")]
-    pub(crate) fn unresized() -> Self {
-        Self {
-            size: CanvasSize { w: 0.0, h: 0.0 },
-            dpr: 1.0,
-        }
     }
 
     /// The validated logical (CSS) size.

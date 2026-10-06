@@ -3,7 +3,7 @@
 //! Owns the `CanvasRenderingContext2d` plus the per-frame state cache
 //! (`Cell<CachedColor>` for fill/stroke/font, `Cell<f64>` for line_width).
 //! The cache is a Canvas2D-only optimization — it lives here, not in the
-//! trait, because Recorder/SVG backends do not need it.
+//! trait, because the SVG/PDF backends do not need it.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -123,13 +123,11 @@ impl CachedColor {
 }
 
 /// Sticky `ctx.set_*` state cache for `CanvasPainter`. Lifted out as its
-/// own type so the strategy arms in `Orchestrator::render_pending` own the
-/// invalidation contract explicitly: `render_full_rebuild` and
-/// `render_changed_cells` invalidate at the arm prologue (ctx state
-/// about to change); `render_scroll_blit` and
-/// `render_overlay_only` preserve it (blit and overlay-only do not touch grid
-/// ctx state). Other painter backends (SvgPainter, RecorderPainter) have
-/// no analog — the cache is a Canvas2D-specific optimization.
+/// own type so the scene backend owns the invalidation contract explicitly:
+/// a full rebuild invalidates at the start (ctx state about to change),
+/// while a reuse/blit-only frame preserves it (grid ctx state untouched).
+/// Other painter backends (SvgPainter, PdfPainter) have no analog — the
+/// cache is a Canvas2D-specific optimization.
 #[derive(Default)]
 pub(crate) struct SetterCache {
     pub(crate) last_fill: Cell<CachedColor>,
