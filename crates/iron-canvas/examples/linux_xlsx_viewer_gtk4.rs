@@ -3,8 +3,8 @@ use std::{cell::RefCell, env, path::Path, process, rc::Rc};
 
 #[cfg(target_os = "linux")]
 use gtk4::{
-    Application, ApplicationWindow, Box as GtkBox, ComboBoxText, DrawingArea,
-    EventControllerScroll, Label, Orientation, glib, prelude::*,
+    Application, ApplicationWindow, DrawingArea, EventControllerScroll, Label, Notebook,
+    PositionType, glib, prelude::*,
 };
 
 #[cfg(target_os = "linux")]
@@ -31,6 +31,8 @@ struct ViewerState {
     sheets: Vec<(u32, String)>,
     session: CanvasSession<NativeSceneBackend>,
     request: RenderRequest,
+    /// Scroll position per sheet, so each tab keeps its own top-left cell.
+    viewports: Vec<CellCoord>,
 }
 
 #[cfg(target_os = "linux")]
@@ -43,6 +45,10 @@ impl ViewerState {
             .map(|(index, sheet)| (index as u32, sheet.name))
             .collect::<Vec<_>>();
         let first_sheet = sheets.first().map_or(0, |(index, _)| *index);
+        let viewports = sheets
+            .iter()
+            .map(|_| CellCoord { row: 1, col: 1 })
+            .collect::<Vec<_>>();
         Ok(Self {
             workbook,
             sheets,
@@ -61,6 +67,7 @@ impl ViewerState {
                 theme: CanvasTheme::light(),
                 overlays: Default::default(),
             },
+            viewports,
         })
     }
 }
@@ -68,7 +75,9 @@ impl ViewerState {
 #[cfg(target_os = "linux")]
 fn main() {
     let Some(path) = env::args_os().nth(1) else {
-        eprintln!("Usage: cargo run -p iron-canvas --example linux_xlsx_viewer -- <file.xlsx>");
+        eprintln!(
+            "Usage: cargo run -p iron-canvas --example linux_xlsx_viewer_gtk4 -- <file.xlsx>"
+        );
         process::exit(2);
     };
     let path = Path::new(&path);
@@ -104,7 +113,7 @@ fn main() {
     // application option or attempt to open it as a second application file.
     let program = env::args()
         .next()
-        .unwrap_or_else(|| String::from("linux_xlsx_viewer"));
+        .unwrap_or_else(|| String::from("linux_xlsx_viewer_gtk4"));
     let _ = application.run_with_args(&[program.as_str()]);
 }
 
@@ -117,67 +126,54 @@ fn build_window(application: &Application, state: Rc<RefCell<ViewerState>>, work
         .default_height(720)
         .build();
 
-    let content = GtkBox::new(Orientation::Vertical, 0);
-    let toolbar = GtkBox::new(Orientation::Horizontal, 8);
-    toolbar.set_margin_start(10);
-    toolbar.set_margin_end(10);
-    toolbar.set_margin_top(8);
-    toolbar.set_margin_bottom(8);
-    toolbar.append(&Label::new(Some("Worksheet:")));
-    let sheet_selector = ComboBoxText::new();
+    let notebook = Notebook::new();
+    notebook.set_tab_pos(PositionType::Bottom);
+    notebook.set_scrollable(true);
+    notebook.set_show_border(false);
+    notebook.set_vexpand(true);
+    notebook.set_hexpand(true);
+
     let sheets = state.borrow().sheets.clone();
     for (sheet_index, sheet_name) in &sheets {
-        sheet_selector.append(Some(&sheet_index.to_string()), sheet_name);
+        let sheet_index = *sheet_index;
+        let drawing_area = DrawingArea::new();
+        drawing_area.set_content_width(900);
+        drawing_area.set_content_height(620);
+        drawing_area.set_hexpand(true);
+        drawing_area.set_vexpand(true);
+
+        let draw_state = state.clone();
+        drawing_area.set_draw_func(move |_area, context, width, height| {
+            if let Ok(mut state) = draw_state.try_borrow_mut() {
+                draw_frame(&mut state, sheet_index, context, width, height);
+            }
+        });
+
+        let scroll = EventControllerScroll::new(
+            gtk4::EventControllerScrollFlags::BOTH_AXES
+                | gtk4::EventControllerScrollFlags::DISCRETE,
+        );
+        let scroll_state = state.clone();
+        let area_to_redraw = drawing_area.clone();
+        scroll.connect_scroll(move |_controller, dx, dy| {
+            if let Ok(mut state) = scroll_state.try_borrow_mut() {
+                if let Some(first_cell) = state.viewports.get_mut(sheet_index as usize) {
+                    first_cell.row = advance_cell(first_cell.row, dy, 1_048_576);
+                    first_cell.col = advance_cell(first_cell.col, dx, 16_384);
+                }
+            }
+            area_to_redraw.queue_draw();
+            glib::Propagation::Stop
+        });
+        drawing_area.add_controller(scroll);
+
+        notebook.append_page(&drawing_area, Some(&Label::new(Some(sheet_name))));
     }
-    let selected_sheet = state.borrow().request.sheet.to_string();
-    sheet_selector.set_active_id(Some(&selected_sheet));
-    toolbar.append(&sheet_selector);
-    toolbar.append(&Label::new(Some("Scroll to explore")));
 
-    let drawing_area = DrawingArea::new();
-    drawing_area.set_content_width(900);
-    drawing_area.set_content_height(620);
-    drawing_area.set_hexpand(true);
-    drawing_area.set_vexpand(true);
+    let active = state.borrow().request.sheet;
+    notebook.set_current_page(Some(active));
 
-    let sheet_state = state.clone();
-    let area_to_redraw = drawing_area.clone();
-    sheet_selector.connect_changed(move |selector| {
-        let Some(sheet) = selector.active_id().and_then(|id| id.parse::<u32>().ok()) else {
-            return;
-        };
-        if let Ok(mut state) = sheet_state.try_borrow_mut() {
-            state.request.sheet = sheet;
-            state.request.viewport.first_cell = CellCoord { row: 1, col: 1 };
-        }
-        area_to_redraw.queue_draw();
-    });
-
-    let draw_state = state.clone();
-    drawing_area.set_draw_func(move |_area, context, width, height| {
-        let mut state = draw_state.borrow_mut();
-        draw_frame(&mut state, context, width, height);
-    });
-
-    let scroll = EventControllerScroll::new(
-        gtk4::EventControllerScrollFlags::BOTH_AXES | gtk4::EventControllerScrollFlags::DISCRETE,
-    );
-    let scroll_state = state;
-    let area_to_redraw = drawing_area.clone();
-    scroll.connect_scroll(move |_controller, dx, dy| {
-        if let Ok(mut state) = scroll_state.try_borrow_mut() {
-            let first_cell = &mut state.request.viewport.first_cell;
-            first_cell.row = advance_cell(first_cell.row, dy, 1_048_576);
-            first_cell.col = advance_cell(first_cell.col, dx, 16_384);
-        }
-        area_to_redraw.queue_draw();
-        glib::Propagation::Stop
-    });
-    drawing_area.add_controller(scroll);
-
-    content.append(&toolbar);
-    content.append(&drawing_area);
-    window.set_child(Some(&content));
+    window.set_child(Some(&notebook));
     window.present();
 }
 
@@ -188,13 +184,23 @@ fn advance_cell(current: i32, delta: f64, maximum: i32) -> i32 {
 }
 
 #[cfg(target_os = "linux")]
-fn draw_frame(state: &mut ViewerState, context: &gtk4::cairo::Context, width: i32, height: i32) {
+fn draw_frame(
+    state: &mut ViewerState,
+    sheet: u32,
+    context: &gtk4::cairo::Context,
+    width: i32,
+    height: i32,
+) {
     if width <= 0 || height <= 0 {
         return;
     }
 
+    state.request.sheet = sheet;
     state.request.viewport.width = width;
     state.request.viewport.height = height;
+    if let Some(first_cell) = state.viewports.get(sheet as usize) {
+        state.request.viewport.first_cell = *first_cell;
+    }
     let ViewerState {
         workbook,
         session,
@@ -226,5 +232,5 @@ fn draw_message(context: &gtk4::cairo::Context, message: &str) {
 
 #[cfg(not(target_os = "linux"))]
 fn main() {
-    eprintln!("The linux_xlsx_viewer example is only available on Linux.");
+    eprintln!("The linux_xlsx_viewer_gtk4 example is only available on Linux.");
 }
