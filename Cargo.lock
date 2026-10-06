@@ -743,6 +743,7 @@ dependencies = [
 name = "iron-canvas"
 version = "0.1.0-beta.2"
 dependencies = [
+ "clap",
  "gtk4",
  "iron-canvas-canvas2d",
  "iron-canvas-core",
@@ -778,7 +779,6 @@ name = "iron-canvas-export"
 version = "0.1.0-beta.2"
 dependencies = [
  "base64",
- "clap",
  "iron-canvas-core",
  "iron-canvas-ironcalc",
  "ironcalc",

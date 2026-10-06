@@ -302,10 +302,11 @@ validation and limits.
 | `iron-canvas/src/interaction.rs` | committed queries and `HostIntent` |
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |
 | `iron-canvas/src/retained.rs` | scroll-blit planning |
+| `iron-canvas/examples/` | host tools: `linux_xlsx_viewer` (GTK4) and the `export_workbook` Clap CLI |
 | `iron-canvas-canvas2d/src/` | `CanvasPainter`, `Canvas2dSceneBackend`, metric memo, theme bridge |
 | `iron-canvas-native/src/` | Cairo/Pango painter and `NativeSceneBackend` |
 | `iron-canvas-export/src/{svg,pdf,common}/` | painters, scene backends, document assembly |
-| `iron-canvas-export/src/workbook.rs`, `examples/export_workbook.rs` | workbook-to-file export API and Clap CLI example |
+| `iron-canvas-export/src/workbook.rs` | workbook-to-file export API (`export_xlsx`) |
 
 ## Verification
 

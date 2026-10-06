@@ -10,6 +10,7 @@ iron-canvas-ironcalc = { version = "0.1.0-beta.2", path = "../iron-canvas-ironca
 ironcalc_base.workspace = true
 
 [dev-dependencies]
+clap = { version = "4", features = ["derive"] }
 iron-canvas-export = { path = "../iron-canvas-export" }
 ironcalc_base.workspace = true
 

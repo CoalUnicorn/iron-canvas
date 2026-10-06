@@ -19,6 +19,3 @@ iron-canvas-ironcalc = { path = "../iron-canvas-ironcalc" }
 ironcalc.workspace = true
 ironcalc_base.workspace = true
 ttf-parser = { workspace = true }
-
-[dev-dependencies]
-clap = { version = "4", features = ["derive"] }

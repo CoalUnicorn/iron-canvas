@@ -1,9 +1,9 @@
 //! Export a selected worksheet range from an `.xlsx` workbook to SVG or PDF.
 //!
 //! ```text
-//! cargo run -p iron-canvas-export --example export_workbook -- book.xlsx \
+//! cargo run -p iron-canvas --example export_workbook -- book.xlsx \
 //!   --range A1:H30 --output /tmp/book.svg
-//! cargo run -p iron-canvas-export --example export_workbook -- book.xlsx \
+//! cargo run -p iron-canvas --example export_workbook -- book.xlsx \
 //!   --sheet "Quarterly Results" --range B3:J28 --output /tmp/results.pdf
 //! ```
 
