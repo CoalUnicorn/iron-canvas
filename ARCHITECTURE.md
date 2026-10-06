@@ -14,11 +14,15 @@ The crate keeps a strict split:
 
 - **core** owns generic geometry, text layout, paint primitives, the scene
   contract, and grid/pane geometry. It has no IronCalc or browser types.
-- **iron-canvas-ironcalc** owns every workbook read and all spreadsheet
-  semantics (styles, conditional formatting, borders, links, merges, auto-fit).
+- **iron-canvas-ironcalc** owns worksheet compilation and spreadsheet semantics
+  (styles, conditional formatting, borders, links, merges, auto-fit).
 - **iron-canvas** owns the render session: request, reuse, frame publication,
   host queries, and overlays.
-- **backends** own rasterization only. They never read the workbook.
+- **iron-canvas-export** owns SVG/PDF backends plus workbook loading, range
+  selection, and export orchestration; it delegates worksheet compilation to
+  `iron-canvas-ironcalc`.
+- **rendering backends** own rasterization or document painting, not workbook
+  semantics.
 
 ## Crates and dependency direction
 
@@ -29,9 +33,12 @@ flowchart TD
     API --> Core["iron-canvas-core: geometry + scene"]
     IC --> Engine["ironcalc_base"]
     IC --> Core
+    Export["iron-canvas-export: workbook / SVG / PDF"] --> IC
+    Export --> Import["ironcalc: XLSX import"]
+    Export --> Core
     Host --> C2D["iron-canvas-canvas2d"]
     Host --> Native["iron-canvas-native"]
-    Host --> Export["iron-canvas-export: SVG / PDF"]
+    Host --> Export
     C2D --> Core
     Native --> Core
     Export --> Core
@@ -44,7 +51,7 @@ flowchart TD
 | `iron-canvas` | `CanvasSession` state and invalidation, request/frame planning, prepare/stage/commit coordination, committed-frame queries and host intents, spreadsheet overlay composition | Formula evaluation, duplicate engine getters, backend drawing |
 | `iron-canvas-canvas2d` | Browser `<canvas>` surfaces, the Canvas2D painter, text metrics and memo, the CSS-var theme bridge, the scene backend | IronCalc, workbook scheduling |
 | `iron-canvas-native` | Cairo/Pango metrics and raster primitives, staged image surfaces | Window ownership, workbook access |
-| `iron-canvas-export` | SVG and PDF painters and their scene backends, font resources, document assembly | A separate worksheet renderer or CF resolver |
+| `iron-canvas-export` | SVG and PDF painters and their scene backends, font resources, document assembly, XLSX loading, sheet/range selection, export orchestration | A separate worksheet renderer or CF resolver |
 
 Arrows mean compile-time dependencies. `iron-canvas` is generic over the
 backend contract and does not depend on any concrete backend crate. No crate
@@ -251,7 +258,10 @@ its Pango width cache is bounded and clears on `invalidate_metrics`.
 `SvgSceneBackend` and `PdfSceneBackend` render complete documents from the
 same scene (`svg::SvgPainter`, `pdf::PdfPainter`, `pdf::PdfDocument`).
 `common/` holds shared color, escaping, and metrics helpers. PDF keeps the
-font and opaque-color limits; neither backend reads the workbook.
+font and opaque-color limits; the scene backends do not read the workbook.
+`workbook::export_xlsx` loads the workbook, resolves the sheet and cell range,
+uses `WorksheetCompiler` to prepare a scene, then writes it through the
+selected scene backend.
 
 ## Host integration
 
@@ -295,6 +305,7 @@ validation and limits.
 | `iron-canvas-canvas2d/src/` | `CanvasPainter`, `Canvas2dSceneBackend`, metric memo, theme bridge |
 | `iron-canvas-native/src/` | Cairo/Pango painter and `NativeSceneBackend` |
 | `iron-canvas-export/src/{svg,pdf,common}/` | painters, scene backends, document assembly |
+| `iron-canvas-export/src/workbook.rs`, `examples/export_workbook.rs` | workbook-to-file export API and Clap CLI example |
 
 ## Verification
 

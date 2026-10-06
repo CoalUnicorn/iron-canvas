@@ -2,9 +2,13 @@
 //!
 //! Each format lives behind its own feature flag and contributes a
 //! `Painter + BlitPainter + TextMetrics` adapter plus a scene backend that
-//! stages a resolved `GridScene` into a document.
+//! stages a resolved `GridScene` into a document. The workbook export helpers
+//! compose the existing IronCalc compiler with those backends.
 
 pub mod common;
+pub mod workbook;
+
+pub use workbook::{CellRange, WorkbookExportError, export_xlsx};
 
 #[cfg(feature = "svg")]
 pub mod svg;
