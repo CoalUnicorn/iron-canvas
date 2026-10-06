@@ -8,9 +8,27 @@ pub struct GridRange {
     pub last: CellCoord,
 }
 impl GridRange {
+    /// Return the same inclusive range with its coordinates ordered.
+    ///
+    /// Pointer drags can end above or left of their anchor, so callers may
+    /// provide either corner as `first` without changing the represented area.
+    pub fn normalized(self) -> Self {
+        Self {
+            first: CellCoord {
+                row: self.first.row.min(self.last.row),
+                col: self.first.col.min(self.last.col),
+            },
+            last: CellCoord {
+                row: self.first.row.max(self.last.row),
+                col: self.first.col.max(self.last.col),
+            },
+        }
+    }
+
     pub fn contains(self, cell: CellCoord) -> bool {
-        (self.first.row..=self.last.row).contains(&cell.row)
-            && (self.first.col..=self.last.col).contains(&cell.col)
+        let range = self.normalized();
+        (range.first.row..=range.last.row).contains(&cell.row)
+            && (range.first.col..=range.last.col).contains(&cell.col)
     }
 }
 
@@ -194,6 +212,7 @@ impl GridGeometry {
         }
     }
     pub fn fragments(&self, range: GridRange) -> Vec<RangeFragment> {
+        let range = range.normalized();
         self.panes
             .iter()
             .enumerate()
@@ -277,10 +296,11 @@ impl GridGeometry {
         }
     }
 
-    /// Bottom-right corner of `range.last`'s slot, not clipped to the
-    /// viewport. The host must suppress the handle at the model's last
+    /// Bottom-right corner of the range's lower-right slot, not clipped to
+    /// the viewport. The host must suppress the handle at the model's last
     /// row/column; core does not know engine bounds.
     pub fn autofill_handle(&self, range: GridRange) -> Option<Point> {
+        let range = range.normalized();
         let rect = self.cell_rect(range.last.row, range.last.col)?;
         Some(Point {
             x: rect.right(),
@@ -438,6 +458,19 @@ mod tests {
                 last: CellCoord { row: 6, col: 6 },
             }),
             Some(Point { x: 108, y: 84 })
+        );
+        let forward = GridRange {
+            first: CellCoord { row: 5, col: 5 },
+            last: CellCoord { row: 6, col: 6 },
+        };
+        let backward = GridRange {
+            first: forward.last,
+            last: forward.first,
+        };
+        assert_eq!(geometry.fragments(backward), geometry.fragments(forward));
+        assert_eq!(
+            geometry.autofill_handle(backward),
+            geometry.autofill_handle(forward)
         );
         assert_eq!(
             geometry.autofill_handle(GridRange {

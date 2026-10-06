@@ -13,6 +13,8 @@ use ironcalc_base::{UserModel, links::CellLinkView, types::MergedCell};
 /// Autofill-handle size in canvas pixels, applied on each side of the
 /// selection's bottom-right corner.
 pub const AUTOFILL_HANDLE_PX: i32 = 6;
+pub(crate) const LAST_ROW: i32 = 1_048_576;
+pub(crate) const LAST_COLUMN: i32 = 16_384;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct DisplayCell<'a> {
@@ -118,15 +120,7 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// Handle square around [`autofill_handle`](Self::autofill_handle)'s corner,
     /// sized [`AUTOFILL_HANDLE_PX`] per side.
     pub fn autofill_handle_rect(&self, range: GridRange) -> Option<PixelRect> {
-        let corner = self.committed_geometry()?.autofill_handle(range)?;
-        Some(PixelRect {
-            top_left: Point {
-                x: corner.x - AUTOFILL_HANDLE_PX,
-                y: corner.y - AUTOFILL_HANDLE_PX,
-            },
-            width: AUTOFILL_HANDLE_PX,
-            height: AUTOFILL_HANDLE_PX,
-        })
+        autofill_handle_rect(self.committed_geometry()?, range)
     }
     /// Header edge within `tolerance` of `point` from the committed frame.
     pub fn resize_target(&self, point: Point, tolerance: i32) -> Option<GridResize> {
@@ -260,7 +254,10 @@ impl<B: RenderBackend> CanvasSession<B> {
                     first,
                     GridRange {
                         first,
-                        last: CellCoord { row, col: 16_384 },
+                        last: CellCoord {
+                            row,
+                            col: LAST_COLUMN,
+                        },
                     },
                 )
             }
@@ -270,10 +267,7 @@ impl<B: RenderBackend> CanvasSession<B> {
                     first,
                     GridRange {
                         first,
-                        last: CellCoord {
-                            row: 1_048_576,
-                            col,
-                        },
+                        last: CellCoord { row: LAST_ROW, col },
                     },
                 )
             }
@@ -284,8 +278,8 @@ impl<B: RenderBackend> CanvasSession<B> {
                     GridRange {
                         first,
                         last: CellCoord {
-                            row: 1_048_576,
-                            col: 16_384,
+                            row: LAST_ROW,
+                            col: LAST_COLUMN,
                         },
                     },
                 )
@@ -313,6 +307,17 @@ impl<B: RenderBackend> CanvasSession<B> {
             _ => None,
         }
     }
+}
+pub(crate) fn autofill_handle_rect(geometry: &GridGeometry, range: GridRange) -> Option<PixelRect> {
+    let corner = geometry.autofill_handle(range)?;
+    Some(PixelRect {
+        top_left: Point {
+            x: corner.x - AUTOFILL_HANDLE_PX,
+            y: corner.y - AUTOFILL_HANDLE_PX,
+        },
+        width: AUTOFILL_HANDLE_PX,
+        height: AUTOFILL_HANDLE_PX,
+    })
 }
 pub(crate) fn merge_range(m: MergedCell) -> GridRange {
     GridRange {

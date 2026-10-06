@@ -1,6 +1,6 @@
 //! Spreadsheet overlay composition from owned, already prepared content.
 
-use crate::interaction::logical_range;
+use crate::interaction::{LAST_COLUMN, LAST_ROW, autofill_handle_rect, logical_range};
 use iron_canvas_core::{
     CanvasTheme, CellCoord, PixelRect, Point, Side,
     geometry::{
@@ -141,12 +141,39 @@ pub(crate) fn compose(
             }
         }
     }
+    let autofill_range = state
+        .active_cell
+        .and_then(|active| {
+            state
+                .selection
+                .iter()
+                .rev()
+                .find(|range| range.contains(active))
+                .copied()
+        })
+        .or_else(|| state.selection.last().copied())
+        .or_else(|| {
+            state
+                .active_cell
+                .map(|active| logical_range(worksheet, active))
+        });
+    let autofill = SceneBuilder::default();
+    if let Some(range) = autofill_range {
+        let last = range.normalized().last;
+        if last.row < LAST_ROW
+            && last.col < LAST_COLUMN
+            && let Some(rect) = autofill_handle_rect(geometry, range)
+        {
+            autofill.rect_fill(rect, PaintColor::Borrowed(&theme.selection_color));
+        }
+    }
     worksheet.scene.passes.extend([
         fills.finish(),
         restore.into(),
         strokes.finish(),
         formula.finish(),
         header.finish(),
+        autofill.finish(),
     ]);
 }
 fn outline(out: &SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, dashed: bool) {

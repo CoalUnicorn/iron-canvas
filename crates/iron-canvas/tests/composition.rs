@@ -286,6 +286,65 @@ fn pdf_and_svg_stage_the_identical_prepared_scene_with_overlays() {
     assert!(session.backend().document().unwrap().contains("#3358B7"));
     assert!(!session.backend().document().unwrap().contains("#F0C419"));
 }
+#[test]
+fn dragged_range_overlay_covers_both_corners_and_draws_its_handle() {
+    let w = workbook();
+    let mut request = request();
+    let forward = range(5, 5, 6, 6);
+    let backward = range(6, 6, 5, 5);
+    request.overlays.selection = vec![backward];
+    request.overlays.active_cell = Some(coord(5, 5));
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+
+    let worksheet = &session.committed_frame().unwrap().worksheet;
+    let selection_rect = session.visible_fragments(forward)[0].rect;
+    let handle_rect = session
+        .autofill_handle_rect(backward)
+        .expect("selected range handle");
+    let primitives = worksheet.scene.passes.iter().flat_map(|pass| pass.iter());
+
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::RectFill { rect, color }
+            if *rect == selection_rect
+                && color.as_ref() == request.theme.selection_fill.as_ref()
+    )));
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::RectFill { rect, color }
+            if *rect == handle_rect
+                && color.as_ref() == request.theme.selection_color.as_ref()
+    )));
+}
+#[test]
+fn active_cell_overlay_draws_an_autofill_handle() {
+    let w = workbook();
+    let mut request = request();
+    request.overlays.active_cell = Some(coord(5, 5));
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+
+    let handle_rect = session
+        .autofill_handle_rect(range(5, 5, 5, 5))
+        .expect("active cell handle");
+    assert!(
+        session
+            .committed_frame()
+            .unwrap()
+            .worksheet
+            .scene
+            .passes
+            .iter()
+            .flat_map(|pass| pass.iter())
+            .any(|primitive| matches!(
+                primitive,
+                Primitive::RectFill { rect, color }
+                    if *rect == handle_rect
+                        && color.as_ref() == request.theme.selection_color.as_ref()
+            ))
+    );
+}
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn native_stages_the_shared_scene_and_rejects_invalid_sizes_without_publication() {
