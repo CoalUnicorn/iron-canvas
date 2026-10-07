@@ -42,11 +42,24 @@ pub struct WorksheetViewport {
     pub height: i32,
 }
 
+/// Frozen row and column counts of the compiled viewport.
+///
+/// Carried on [`PreparedWorksheet`] so a query that combines committed
+/// geometry with live model extents uses the same freeze state the geometry
+/// was built from, instead of re-reading the engine and silently defaulting
+/// when that read fails.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct FrozenAxes {
+    pub rows: i32,
+    pub cols: i32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedWorksheet {
     pub scene: GridScene,
     pub cells: Rc<[CellPlacement]>,
     pub geometry: Option<Rc<GridGeometry>>,
+    pub frozen: FrozenAxes,
     pub merges: Rc<[MergedCell]>,
     pub links: Rc<[CellLinkView]>,
     /// Actual calls to `get_extended_cell_style` in this preparation.
@@ -152,6 +165,7 @@ impl WorksheetCompiler {
             },
             cells: placements.into(),
             geometry: None,
+            frozen: FrozenAxes::default(),
             merges: Rc::from([]),
             links: attempt.links.into(),
             extended_style_reads: attempt.reads,
@@ -168,14 +182,20 @@ fn valid_rect(rect: PixelRect) -> bool {
 fn new_passes() -> [SceneBuilder; 5] {
     std::array::from_fn(|_| SceneBuilder::default())
 }
-type CellRecord = (ExtendedStyle, CellType, String);
+/// The engine reads what painted cell needs, fetched at most once per
+/// preparation.
+struct CellRecord {
+    extended: ExtendedStyle,
+    kind: CellType,
+    value: String,
+}
 struct Attempt<'w, 'm> {
     workbook: &'w UserModel<'m>,
     sheet: u32,
     metrics: &'w dyn TextMetrics,
     theme: &'w CanvasTheme,
     show_grid: bool,
-    cached: HashMap<(i32, i32), CellRecord>,
+    cached: HashMap<CellCoord, CellRecord>,
     reads: usize,
     links: Vec<CellLinkView>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
@@ -234,7 +254,7 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 "invalid cell coordinate".into(),
             ));
         }
-        if self.cached.contains_key(&(cell.row, cell.col)) {
+        if self.cached.contains_key(&cell) {
             return Ok(());
         }
         self.reads += 1;
@@ -250,8 +270,14 @@ impl<'w, 'm> Attempt<'w, 'm> {
             .workbook
             .get_formatted_cell_value(self.sheet, cell.row, cell.col)
             .map_err(|e| self.error(cell, CellReadOperation::FormattedValue, e))?;
-        self.cached
-            .insert((cell.row, cell.col), (style, kind, text));
+        self.cached.insert(
+            cell,
+            CellRecord {
+                extended: style,
+                kind,
+                value: text,
+            },
+        );
         Ok(())
     }
     fn paint(
@@ -268,10 +294,9 @@ impl<'w, 'm> Attempt<'w, 'm> {
             ));
         }
         self.read(placement.coordinate)?;
-        let (extended, kind, value) =
-            &self.cached[&(placement.coordinate.row, placement.coordinate.col)];
+        let record = &self.cached[&placement.coordinate];
         let rect = placement.bounds;
-        let style = &extended.style;
+        let style = &record.extended.style;
         let fill = self.workbook.resolve_color(&style.fill.color);
         if merged || !fill.is_empty() {
             passes[0].rect_fill(
@@ -283,7 +308,7 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 }),
             );
         }
-        let cf = cf::CfDecorationPaint::resolve(extended, self.workbook);
+        let cf = cf::CfDecorationPaint::resolve(&record.extended, self.workbook);
         cf.paint(&passes[1], rect);
         if !merged {
             borders::compile_borders(
@@ -301,8 +326,8 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 &passes[4],
                 self.workbook,
                 style,
-                kind,
-                value,
+                &record.kind,
+                &record.value,
                 rect,
                 cf.reserved_left(rect),
                 self.metrics,
