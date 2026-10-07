@@ -103,39 +103,14 @@ impl Span {
 
 /// Horizontal vs vertical axis.
 ///
-/// Dispatches geometry on the row/column axis; header rect building
-/// (`Axis::header_rect`) is one consumer.
-/// Carries no payload - the
-/// row/column index travels as a separate parameter so the same enum value
-/// can be used across call sites that don't care about a specific index.
+/// Dispatches geometry on the row/column axis: axis-band sampling, the header
+/// strips, and pane lookup all fork on it. Carries no payload - the row/column
+/// index travels as a separate parameter so the same enum value can be used
+/// across call sites that don't care about a specific index.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Axis {
     Row,
     Column,
-}
-
-impl Axis {
-    /// Rect that pins a header cell to the corresponding header strip.
-    ///
-    /// `along` is the position along the axis (top_y for rows, left_x for
-    /// cols). `parallel_size` is the cell's extent along the axis (row
-    /// height / col width). `header_thickness` is the perpendicular size
-    /// of the header strip — `chrome.row_header_thickness` for rows (dynamic),
-    /// `HEADER_ROW_HEIGHT` for cols (currently static).
-    pub fn header_rect(self, along: i32, parallel_size: i32, header_thickness: i32) -> PixelRect {
-        match self {
-            Axis::Row => PixelRect {
-                top_left: Point { x: 0, y: along },
-                width: header_thickness,
-                height: parallel_size,
-            },
-            Axis::Column => PixelRect {
-                top_left: Point { x: along, y: 0 },
-                width: parallel_size,
-                height: header_thickness,
-            },
-        }
-    }
 }
 
 impl Side {
@@ -221,12 +196,3 @@ const _: () = {
     assert!(matches!(Side::ALL[Side::Right.index()], Side::Right));
     assert!(matches!(Side::ALL[Side::Bottom.index()], Side::Bottom));
 };
-
-/// One of the four corners of a rectangle.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RectCorner {
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight,
-}

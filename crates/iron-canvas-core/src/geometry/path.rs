@@ -124,9 +124,6 @@ impl<'a> Path<'a> {
         Self { cmds }
     }
 
-    /// An empty path. Paints nothing.
-    pub const EMPTY: Path<'static> = Path { cmds: &[] };
-
     pub fn cmds(&self) -> &'a [PathCmd] {
         self.cmds
     }

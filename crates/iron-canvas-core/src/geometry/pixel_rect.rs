@@ -39,19 +39,6 @@ impl PixelRect {
         })
     }
 
-    /// Smallest rectangle containing both inputs.
-    pub fn bounding_union(self, other: Self) -> Self {
-        let left = self.left().min(other.left());
-        let top = self.top().min(other.top());
-        let right = self.right().max(other.right());
-        let bottom = self.bottom().max(other.bottom());
-        Self {
-            top_left: Point { x: left, y: top },
-            width: right - left,
-            height: bottom - top,
-        }
-    }
-
     pub fn center(&self) -> Point {
         Point {
             x: self.left() + self.width / 2,
@@ -161,14 +148,6 @@ mod tests {
         assert_eq!(
             rect(-3, -4, 10, 12).intersection(rect(0, 0, 100, 50)),
             Some(rect(0, 0, 7, 8))
-        );
-    }
-
-    #[test]
-    fn bounding_union_contains_both_rects() {
-        assert_eq!(
-            rect(4, 8, 5, 3).bounding_union(rect(-2, 10, 4, 9)),
-            rect(-2, 8, 11, 11)
         );
     }
 }

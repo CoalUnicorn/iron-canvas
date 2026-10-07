@@ -285,23 +285,6 @@ pub trait BlitPainter: Painter {
     fn blit(&self, src: PixelRect, dst: PixelRect);
 }
 
-pub struct CssColor(String);
-
-impl CssColor {
-    pub fn new(s: impl Into<String>) -> Self {
-        let s = s.into();
-        if s.is_empty() {
-            Self("#000000".to_owned())
-        } else {
-            Self(s.to_lowercase())
-        }
-    }
-
-    pub fn into_string(self) -> String {
-        self.0
-    }
-}
-
 #[cfg(test)]
 mod stroke_style_tests {
     use super::*;

@@ -119,6 +119,11 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn build_window(application: &Application, state: Rc<RefCell<ViewerState>>, workbook_name: &str) {
+    // Worksheet limits, mirroring `iron-canvas`'s crate-private bounds; an
+    // example cannot see them.
+    const LAST_ROW: i32 = 1_048_576;
+    const LAST_COLUMN: i32 = 16_384;
+
     let window = ApplicationWindow::builder()
         .application(application)
         .title(format!("Iron Canvas — {workbook_name}"))
@@ -156,11 +161,11 @@ fn build_window(application: &Application, state: Rc<RefCell<ViewerState>>, work
         let scroll_state = state.clone();
         let area_to_redraw = drawing_area.clone();
         scroll.connect_scroll(move |_controller, dx, dy| {
-            if let Ok(mut state) = scroll_state.try_borrow_mut() {
-                if let Some(first_cell) = state.viewports.get_mut(sheet_index as usize) {
-                    first_cell.row = advance_cell(first_cell.row, dy, 1_048_576);
-                    first_cell.col = advance_cell(first_cell.col, dx, 16_384);
-                }
+            if let Ok(mut state) = scroll_state.try_borrow_mut()
+                && let Some(first_cell) = state.viewports.get_mut(sheet_index as usize)
+            {
+                first_cell.row = advance_cell(first_cell.row, dy, LAST_ROW);
+                first_cell.col = advance_cell(first_cell.col, dx, LAST_COLUMN);
             }
             area_to_redraw.queue_draw();
             glib::Propagation::Stop

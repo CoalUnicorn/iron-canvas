@@ -15,7 +15,7 @@ pub mod theme;
 pub use geometry::{
     CanvasMetricError, CanvasMetrics, CanvasSize,
     pixel_rect::PixelRect,
-    prim::{Axis, Line, Point, RectCorner, Side, Span},
+    prim::{Axis, Line, Point, Side, Span},
 };
 pub use text_layout::{
     TextLayoutOptions, TextLine, TextVerticalAlign, layout_text_into, layout_text_lines_into,

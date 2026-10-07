@@ -19,3 +19,6 @@ iron-canvas-ironcalc = { path = "../iron-canvas-ironcalc" }
 ironcalc.workspace = true
 ironcalc_base.workspace = true
 ttf-parser = { workspace = true }
+
+[lints]
+workspace = true

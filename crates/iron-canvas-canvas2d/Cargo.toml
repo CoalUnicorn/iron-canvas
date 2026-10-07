@@ -18,3 +18,6 @@ web-sys = { version = "0.3", features = [
     "TextMetrics",
     "Window","Element", "Document", "CssStyleDeclaration"
 ] }
+
+[lints]
+workspace = true

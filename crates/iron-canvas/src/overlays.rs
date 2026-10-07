@@ -13,6 +13,7 @@ use iron_canvas_core::{
     theme::{FORMULA_REF_COLORS, FORMULA_REF_TINTS},
 };
 use iron_canvas_ironcalc::PreparedWorksheet;
+use std::rc::Rc;
 
 const HEADER_SELECTION_STROKE_WIDTH: f64 = 2.0;
 
@@ -30,6 +31,13 @@ pub struct OverlayState {
     /// The host resolves formula references. This type describes only paint.
     pub formula_references: Vec<FormulaOverlay>,
 }
+/// Append the overlay passes to a prepared worksheet's scene.
+///
+/// The overlay passes are appended after the model passes, so the active-cell
+/// restore can re-reference the model passes instead of copying their
+/// primitives. Call this on a freshly prepared worksheet: composing an
+/// already-composed scene would replay the previous overlay passes inside the
+/// restore clip.
 pub(crate) fn compose(
     worksheet: &mut PreparedWorksheet,
     sheet: u32,
@@ -53,23 +61,21 @@ pub(crate) fn compose(
             );
         }
     }
-    let mut restore = Vec::new();
+    // The active cell's model content is re-painted above the selection fill.
+    // The model passes are re-referenced, not copied: the clip keeps the
+    // repaint to the fragment rectangle, and sharing the pass buffers keeps
+    // this free per frame. Merged-cell and conditional-format content live in
+    // their own passes, which is why every model pass is replayed rather than
+    // only the cell's own.
+    let mut restore: Vec<Rc<[Primitive]>> = Vec::new();
     if let Some(active) = state.active_cell {
+        let model_passes = worksheet.scene.passes.len();
         for fragment in geometry.fragments(logical_range(worksheet, active)) {
-            restore.push(Primitive::Clip {
+            restore.push(Rc::from([Primitive::Clip {
                 rect: fragment.rect,
-            });
-            // Restore model-derived pixels from this candidate. This performs
-            // no engine reads and also restores CF and merged-cell content.
-            restore.extend(
-                worksheet
-                    .scene
-                    .passes
-                    .iter()
-                    .flat_map(|p| p.iter())
-                    .cloned(),
-            );
-            restore.push(Primitive::EndClip);
+            }]));
+            restore.extend(worksheet.scene.passes[..model_passes].iter().map(Rc::clone));
+            restore.push(Rc::from([Primitive::EndClip]));
             outline(
                 &strokes,
                 fragment.rect,
@@ -167,14 +173,12 @@ pub(crate) fn compose(
             autofill.rect_fill(rect, PaintColor::Borrowed(&theme.selection_color));
         }
     }
-    worksheet.scene.passes.extend([
-        fills.finish(),
-        restore.into(),
-        strokes.finish(),
-        formula.finish(),
-        header.finish(),
-        autofill.finish(),
-    ]);
+    worksheet.scene.passes.push(fills.finish());
+    worksheet.scene.passes.extend(restore);
+    worksheet.scene.passes.push(strokes.finish());
+    worksheet.scene.passes.push(formula.finish());
+    worksheet.scene.passes.push(header.finish());
+    worksheet.scene.passes.push(autofill.finish());
 }
 fn outline(out: &SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, dashed: bool) {
     if rect.width <= 1 || rect.height <= 1 {

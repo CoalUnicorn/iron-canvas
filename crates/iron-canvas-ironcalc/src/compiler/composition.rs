@@ -6,6 +6,20 @@ use iron_canvas_core::{
 };
 use ironcalc_base::{expressions::utils::number_to_column, types::Border};
 
+/// Height of the column-header strip, in logical pixels.
+const HEADER_STRIP_HEIGHT: i32 = 24;
+
+/// Font for header labels, in CSS `font` shorthand form.
+const HEADER_FONT_CSS: &str = "12px sans-serif";
+
+/// Padding added to the measured widest visible row label to get the
+/// row-header strip width.
+const HEADER_LABEL_PADDING: i32 = 16;
+
+/// Floor for the row-header strip width, so a narrow viewport still shows a
+/// usable row-number gutter.
+const MIN_HEADER_WIDTH: i32 = 48;
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn prepare(
     workbook: &UserModel<'_>,
@@ -64,7 +78,7 @@ pub(super) fn prepare(
         rows: HashMap::new(),
         cols: HashMap::new(),
     };
-    let header_height = 24.min(viewport.height);
+    let header_height = HEADER_STRIP_HEIGHT.min(viewport.height);
     let rows = sample_bands(
         first.row,
         LAST_ROW,
@@ -81,9 +95,9 @@ pub(super) fn prepare(
         .max()
         .unwrap_or(first.row)
         .to_string();
-    let header_width = (metrics.measure_text_width(&label, "12px sans-serif").ceil() as i32)
-        .saturating_add(16)
-        .max(48)
+    let header_width = (metrics.measure_text_width(&label, HEADER_FONT_CSS).ceil() as i32)
+        .saturating_add(HEADER_LABEL_PADDING)
+        .max(MIN_HEADER_WIDTH)
         .min(viewport.width);
     let columns = sample_bands(
         first.col,
@@ -331,7 +345,7 @@ pub(super) fn merge_range(merge: MergedCell) -> GridRange {
 }
 fn headers(out: &SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme) {
     let origin = geometry.origin;
-    let font = PaintColor::Static("12px sans-serif");
+    let font = PaintColor::Static(HEADER_FONT_CSS);
     out.rect_fill(
         PixelRect {
             top_left: Point { x: 0, y: 0 },

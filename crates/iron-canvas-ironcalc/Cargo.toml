@@ -8,7 +8,7 @@ edition.workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
-iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core", default-features = false }
+iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core" }
 ironcalc_base = { workspace = true }
 
 [dev-dependencies]
@@ -19,3 +19,6 @@ iron-canvas-export = { path = "../iron-canvas-export" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 iron-canvas-native = { path = "../iron-canvas-native" }
+
+[lints]
+workspace = true

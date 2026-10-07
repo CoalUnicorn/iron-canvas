@@ -4,8 +4,7 @@
 //! `#rgb`, `#rrggbb`, `#rrggbbaa` (alpha dropped — PDF rg/RG is opaque),
 //! `rgb(r,g,b)`, `rgba(r,g,b,a)`, and the two named colors that show up
 //! through `clear_rect` (`white`) and default text (`black`). Malformed
-//! or unknown input resolves to black — matches `CssColor::new`'s
-//! empty-string fallback.
+//! or unknown input resolves to black.
 
 pub type Rgb = (f64, f64, f64);
 

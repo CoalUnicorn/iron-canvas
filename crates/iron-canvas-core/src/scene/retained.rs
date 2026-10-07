@@ -9,6 +9,13 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+/// Height of one damage-fingerprint band, in logical pixels.
+///
+/// A change marks whole bands, so a smaller band buys a tighter damage
+/// rectangle at the cost of more per-band hashes. Every band index derives
+/// from this value.
+const BAND_HEIGHT: i32 = 32;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RenderStrategy {
     Fresh,
@@ -55,7 +62,7 @@ impl SceneFingerprint {
                     y: top,
                 },
                 width: scene.clip.width,
-                height: 32.min(scene.clip.bottom() - top),
+                height: BAND_HEIGHT.min(scene.clip.bottom() - top),
             };
             bands.push((rect, DefaultHasher::new()));
             top += rect.height;
@@ -64,8 +71,8 @@ impl SceneFingerprint {
             let mut h = DefaultHasher::new();
             hash_paint(op, clip, coverage, Point::default(), &mut h);
             let value = h.finish();
-            let first = ((coverage.top() - scene.clip.top()) / 32) as usize;
-            let last = ((coverage.bottom() - 1 - scene.clip.top()) / 32) as usize;
+            let first = ((coverage.top() - scene.clip.top()) / BAND_HEIGHT) as usize;
+            let last = ((coverage.bottom() - 1 - scene.clip.top()) / BAND_HEIGHT) as usize;
             for (_, h) in &mut bands[first..=last] {
                 value.hash(h);
             }

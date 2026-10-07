@@ -5,8 +5,8 @@ authors.workspace = true
 edition.workspace = true
 
 [dependencies]
-iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core", default-features = false }
-iron-canvas-ironcalc = { version = "0.1.0-beta.2", path = "../iron-canvas-ironcalc", default-features = false }
+iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core" }
+iron-canvas-ironcalc = { version = "0.1.0-beta.2", path = "../iron-canvas-ironcalc" }
 ironcalc_base.workspace = true
 
 [dev-dependencies]
@@ -35,3 +35,6 @@ web-sys = { version = "0.3", features = [
     "ImageData",
 ] }
 ironcalc = { workspace = true }
+
+[lints]
+workspace = true
