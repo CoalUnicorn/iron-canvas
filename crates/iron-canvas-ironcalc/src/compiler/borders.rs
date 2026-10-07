@@ -5,6 +5,47 @@ use ironcalc_base::{
     types::{Border, BorderStyle as B},
 };
 
+/// How one border edge is stroked.
+///
+/// Dash styles keep the baseline's solid stroke policy, so only the width and
+/// the double line treatment reach `Painter` primitives.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rule {
+    /// One line of this width in logical pixels.
+    Single(i32),
+    /// Two parallel lines at +-1 on the cross axis.
+    Double,
+}
+
+impl Rule {
+    /// Extension at each end along the segment.
+    /// Where two perpendicular edges meet at a cell corner the thicker
+    /// leaves an uncovered notch, extending each edge by half its
+    /// width fills it.
+    fn miter_extend(self) -> i32 {
+        match self {
+            Rule::Single(width) => width / 2,
+            Rule::Double => 0,
+        }
+    }
+
+    /// Cross axis offsets at which this rule strokes.
+    fn cross_offsets(self) -> &'static [i32] {
+        match self {
+            Rule::Single(_) => &[0],
+            Rule::Double => &[-1, 1],
+        }
+    }
+
+    /// Stroke width in logical pixels.
+    fn width(self) -> f64 {
+        match self {
+            Rule::Single(width) => f64::from(width),
+            Rule::Double => 1.0,
+        }
+    }
+}
+
 pub(super) fn compile_borders(
     out: &SceneBuilder,
     grid: &SceneBuilder,
@@ -27,18 +68,20 @@ pub(super) fn compile_borders(
             } else {
                 color.as_str()
             };
-            let (width, double) = match item.style {
-                B::Medium | B::MediumDashed | B::MediumDashDot | B::MediumDashDotDot => (2, false),
-                B::Thick => (3, false),
-                B::Double => (1, true),
-                B::Thin | B::Dotted | B::SlantDashDot => (1, false),
+            let rule = match item.style {
+                B::Medium | B::MediumDashed | B::MediumDashDot | B::MediumDashDotDot => {
+                    Rule::Single(2)
+                }
+                B::Thick => Rule::Single(3),
+                B::Double => Rule::Double,
+                B::Thin | B::Dotted | B::SlantDashDot => Rule::Single(1),
             };
-            let line = side.line(rect).extend(width / 2);
-            for &offset in if double { &[-1, 1][..] } else { &[0][..] } {
+            let line = side.line(rect).extend(rule.miter_extend());
+            for &offset in rule.cross_offsets() {
                 out.stroke_line(
                     line.offset_cross(offset),
                     PaintColor::Borrowed(color),
-                    f64::from(width),
+                    rule.width(),
                 );
             }
         } else if show_grid && matches!(side, Side::Left | Side::Top) {
