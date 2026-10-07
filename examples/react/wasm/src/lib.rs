@@ -1,11 +1,22 @@
+//! React example adapter that connects its workbook UI to Iron Canvas.
+//!
+//! This app-specific glue lives under `examples/react`; the reusable
+//! WebAssembly binding in `bindings/wasm` only accepts Iron Canvas scenes.
+
 use iron_canvas::{CanvasSession, OverlayState, RenderRequest, RevisionToken};
-use iron_canvas_canvas2d::Canvas2dSceneBackend;
-use iron_canvas_core::{CanvasMetrics, CanvasSize, CanvasTheme, CellCoord};
+use iron_canvas_canvas2d::CanvasPainter;
+use iron_canvas_core::{
+    CanvasMetrics, CanvasSize, CanvasTheme, CellCoord,
+    painter::{Painter, TextMetrics},
+    scene::{GridScene, RenderBackend},
+};
 use iron_canvas_ironcalc::WorksheetViewport;
+use iron_canvas_wasm::CanvasRenderer;
 use ironcalc::import::load_from_xlsx_bytes;
 use ironcalc_base::{Model, UserModel};
-use wasm_bindgen::prelude::*;
-use web_sys::HtmlCanvasElement;
+use std::convert::Infallible;
+use wasm_bindgen::{JsCast, prelude::*};
+use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
 
 const LAST_ROW: i32 = 1_048_576;
 const LAST_COLUMN: i32 = 16_384;
@@ -30,25 +41,26 @@ impl SheetTab {
 }
 
 #[wasm_bindgen]
-pub struct ReactWorkbook {
+pub struct Workbook {
     workbook: UserModel<'static>,
-    canvas: HtmlCanvasElement,
     metrics: CanvasMetrics,
-    session: CanvasSession<Canvas2dSceneBackend>,
+    renderer: CanvasRenderer,
+    session: CanvasSession<SceneCompilerBackend>,
     workbook_id: u64,
     revision: u64,
 }
 
 #[wasm_bindgen]
-impl ReactWorkbook {
+impl Workbook {
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: HtmlCanvasElement) -> Result<ReactWorkbook, JsValue> {
+    pub fn new(canvas: HtmlCanvasElement) -> Result<Workbook, JsValue> {
         let metrics = metrics_for(0.0, 0.0, 1.0)?;
-        let session = new_session(&canvas, metrics)?;
-        Ok(ReactWorkbook {
+        let renderer = CanvasRenderer::new(canvas.clone())?;
+        let session = new_session(&canvas)?;
+        Ok(Workbook {
             workbook: sample_workbook()?,
-            canvas,
             metrics,
+            renderer,
             session,
             workbook_id: 1,
             revision: 0,
@@ -59,8 +71,9 @@ impl ReactWorkbook {
     pub fn resize(&mut self, width: f64, height: f64, dpr: f64) -> Result<(), JsValue> {
         let metrics = metrics_for(width, height, dpr)?;
         if metrics != self.metrics {
-            self.session = new_session(&self.canvas, metrics)?;
+            self.renderer.resize(width, height, dpr)?;
             self.metrics = metrics;
+            self.session.invalidate();
         }
         self.render()
     }
@@ -140,7 +153,7 @@ impl ReactWorkbook {
     }
 }
 
-impl ReactWorkbook {
+impl Workbook {
     fn render(&mut self) -> Result<(), JsValue> {
         let (width, height) = self.metrics.size().to_logical_extent();
         if width == 0 || height == 0 {
@@ -174,8 +187,14 @@ impl ReactWorkbook {
 
         self.session
             .render(&self.workbook, &request)
-            .map(|_| ())
-            .map_err(|error| JsValue::from_str(&format!("{error:?}")))
+            .map_err(|error| JsValue::from_str(&format!("{error:?}")))?;
+        let scene = &self
+            .session
+            .committed_frame()
+            .expect("a successful render commits a frame")
+            .worksheet
+            .scene;
+        self.renderer.render_grid_scene(scene)
     }
 }
 
@@ -190,12 +209,40 @@ fn metrics_for(width: f64, height: f64, dpr: f64) -> Result<CanvasMetrics, JsVal
     .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
-fn new_session(
-    canvas: &HtmlCanvasElement,
-    metrics: CanvasMetrics,
-) -> Result<CanvasSession<Canvas2dSceneBackend>, JsValue> {
-    let backend = Canvas2dSceneBackend::new(canvas.clone(), metrics)?;
-    Ok(CanvasSession::new(backend))
+fn new_session(canvas: &HtmlCanvasElement) -> Result<CanvasSession<SceneCompilerBackend>, JsValue> {
+    let context = canvas
+        .get_context("2d")?
+        .ok_or_else(|| JsValue::from_str("Canvas2D unavailable"))?
+        .dyn_into::<CanvasRenderingContext2d>()?;
+    Ok(CanvasSession::new(SceneCompilerBackend {
+        metrics: CanvasPainter::new(context),
+    }))
+}
+
+struct SceneCompilerBackend {
+    metrics: CanvasPainter,
+}
+
+impl RenderBackend for SceneCompilerBackend {
+    type StagedFrame = ();
+    type Error = Infallible;
+
+    fn metrics(&self) -> &dyn TextMetrics {
+        &self.metrics
+    }
+
+    fn stage_frame(&mut self, _scene: &GridScene) -> Result<Self::StagedFrame, Self::Error> {
+        Ok(())
+    }
+
+    fn invalidate_metrics(&mut self) {
+        self.metrics.clear_measure_cache();
+        self.metrics.invalidate_cache();
+    }
+
+    fn commit_frame(&mut self, _staged: Self::StagedFrame) -> Result<(), Self::Error> {
+        Ok(())
+    }
 }
 
 fn sample_workbook() -> Result<UserModel<'static>, JsValue> {

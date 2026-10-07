@@ -8,7 +8,13 @@ declare module "*.js" {
     readonly name: string;
   }
 
-  export class ReactWorkbook {
+  export class CanvasRenderer {
+    constructor(canvas: HTMLCanvasElement);
+    renderScene(scene: unknown): void;
+    resize(width: number, height: number, dpr: number): void;
+  }
+
+  export class Workbook {
     constructor(canvas: HTMLCanvasElement);
     addSheet(): void;
     getSheets(): SheetTab[];

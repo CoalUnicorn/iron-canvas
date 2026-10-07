@@ -17,4 +17,6 @@ The demo opens with a small sample workbook. Use **Load workbook** to choose an
 `.xlsx` file; visible worksheets are shown as tabs along the bottom. Scroll over
 the grid to browse a sheet, and use `+` to add a worksheet.
 
-`npm run build` builds the WASM wrapper before producing the Vite bundle.
+`npm run build` builds the example-local workbook integration before producing
+the Vite bundle. It uses the shared Canvas-only renderer from `bindings/wasm`;
+the local adapter supplies IronCalc workbook data and rendering requests.

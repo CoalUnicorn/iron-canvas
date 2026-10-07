@@ -49,15 +49,17 @@ impl ArcSpec {
         }
     }
 
-    /// All fields are finite, radius is positive, and the sweep is at most a
-    /// full turn.
+    /// All fields and derived endpoints are finite, radius is positive, and
+    /// the sweep is at most a full turn.
     pub fn is_valid(&self) -> bool {
+        let endpoints_are_finite = self.start_point().is_finite() && self.end_point().is_finite();
         self.center.is_finite()
             && self.radius.is_finite()
             && self.radius > 0.0
             && self.start_angle.is_finite()
             && self.sweep_angle.is_finite()
             && self.sweep_angle.abs() <= TAU
+            && endpoints_are_finite
     }
 
     /// Point on the circle at `self.start_angle`.
@@ -135,9 +137,9 @@ impl<'a> Path<'a> {
 
     /// Validate the complete path before a backend changes state or draws.
     ///
-    /// Checks: every coordinate, radius, and angle is finite; every segment
-    /// has a current subpath; and each arc has a positive radius and a sweep
-    /// of at most a full turn.
+    /// Checks: every coordinate, radius, and angle is finite; every derived
+    /// arc endpoint is finite; every segment has a current subpath; and each
+    /// arc has a positive radius and a sweep of at most a full turn.
     pub fn validate(&self) -> Result<(), PathError> {
         let mut cur: Option<PointF> = None;
         let mut subpath_start: Option<PointF> = None;
@@ -324,6 +326,14 @@ mod tests {
             0.0,
             1.0,
         ))];
+        assert_eq!(Path::new(&cmds).validate(), Err(PathError::InvalidArc));
+    }
+
+    #[test]
+    fn arc_with_overflowing_derived_endpoint_is_rejected() {
+        let arc = ArcSpec::new(PointF::new(f64::MAX, 0.0), f64::MAX, 0.0, FRAC_PI_2);
+        let cmds = [PathCmd::Move(PointF::new(0.0, 0.0)), PathCmd::Arc(arc)];
+
         assert_eq!(Path::new(&cmds).validate(), Err(PathError::InvalidArc));
     }
 

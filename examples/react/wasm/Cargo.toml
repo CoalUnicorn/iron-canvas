@@ -15,7 +15,8 @@ iron-canvas = { path = "../../../crates/iron-canvas" }
 iron-canvas-canvas2d = { path = "../../../crates/iron-canvas-canvas2d" }
 iron-canvas-core = { path = "../../../crates/iron-canvas-core" }
 iron-canvas-ironcalc = { path = "../../../crates/iron-canvas-ironcalc" }
+iron-canvas-wasm = { path = "../../../bindings/wasm" }
 ironcalc.workspace = true
 ironcalc_base.workspace = true
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = ["CanvasRenderingContext2d", "HtmlCanvasElement"] }

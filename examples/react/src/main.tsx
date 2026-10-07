@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, WheelEvent } from "react";
 import { createRoot } from "react-dom/client";
-import init, { ReactWorkbook } from "../wasm/pkg/iron_canvas_react_example.js";
+import init, { Workbook } from "../wasm/pkg/iron_canvas_react_example.js";
 import "./style.css";
 
 interface SheetTab {
@@ -16,7 +16,7 @@ function messageFromError(error: unknown): string {
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const workbookRef = useRef<ReactWorkbook | null>(null);
+  const workbookRef = useRef<Workbook | null>(null);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sheets, setSheets] = useState<SheetTab[]>([]);
@@ -24,7 +24,7 @@ function App() {
   const [workbookName, setWorkbookName] = useState("Example workbook");
   const [error, setError] = useState<string | null>(null);
 
-  const refreshWorkbook = (workbook: ReactWorkbook) => {
+  const refreshWorkbook = (workbook: Workbook) => {
     setSheets(workbook.getSheets());
     setSelectedSheet(workbook.selectedSheet());
     setWorkbookName(workbook.workbookName());
@@ -41,7 +41,7 @@ function App() {
         if (cancelled || !canvasRef.current) return;
 
         const canvas = canvasRef.current;
-        const workbook = new ReactWorkbook(canvas);
+        const workbook = new Workbook(canvas);
         workbookRef.current = workbook;
         refreshWorkbook(workbook);
 
