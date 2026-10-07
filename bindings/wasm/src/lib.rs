@@ -30,7 +30,7 @@ impl SheetTab {
 }
 
 #[wasm_bindgen]
-pub struct ReactWorkbook {
+pub struct Workbook {
     workbook: UserModel<'static>,
     canvas: HtmlCanvasElement,
     metrics: CanvasMetrics,
@@ -40,12 +40,12 @@ pub struct ReactWorkbook {
 }
 
 #[wasm_bindgen]
-impl ReactWorkbook {
+impl Workbook {
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: HtmlCanvasElement) -> Result<ReactWorkbook, JsValue> {
+    pub fn new(canvas: HtmlCanvasElement) -> Result<Workbook, JsValue> {
         let metrics = metrics_for(0.0, 0.0, 1.0)?;
         let session = new_session(&canvas, metrics)?;
-        Ok(ReactWorkbook {
+        Ok(Workbook {
             workbook: sample_workbook()?,
             canvas,
             metrics,
@@ -140,7 +140,7 @@ impl ReactWorkbook {
     }
 }
 
-impl ReactWorkbook {
+impl Workbook {
     fn render(&mut self) -> Result<(), JsValue> {
         let (width, height) = self.metrics.size().to_logical_extent();
         if width == 0 || height == 0 {
