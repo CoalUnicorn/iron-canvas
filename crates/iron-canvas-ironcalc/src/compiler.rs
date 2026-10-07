@@ -147,11 +147,11 @@ impl WorksheetCompiler {
                 "invalid viewport clip".into(),
             ));
         }
-        let passes = new_passes();
+        let mut passes = new_passes();
         passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
         let mut placements = Vec::new();
         for placement in cells {
-            attempt.paint(placement, &passes, false)?;
+            attempt.paint(placement, &mut passes, false)?;
             placements.push(placement);
         }
         Ok(PreparedWorksheet {
@@ -280,7 +280,7 @@ impl<'w, 'm> Attempt<'w, 'm> {
     fn paint(
         &mut self,
         placement: CellPlacement,
-        passes: &[SceneBuilder; 5],
+        passes: &mut [SceneBuilder; 5],
         merged: bool,
     ) -> Result<(), WorksheetCompileError> {
         if !valid_rect(placement.bounds) {
@@ -306,11 +306,13 @@ impl<'w, 'm> Attempt<'w, 'm> {
             );
         }
         let cf = cf::CfDecorationPaint::resolve(&record.extended, self.workbook);
-        cf.paint(&passes[1], rect);
+        cf.paint(&mut passes[1], rect);
         if !merged {
+            // The border pass and the grid pass are two slots of one array.
+            let (grid_side, border_side) = passes.split_at_mut(3);
             borders::compile_borders(
-                &passes[3],
-                &passes[2],
+                &mut border_side[0],
+                &mut grid_side[2],
                 self.workbook,
                 &style.border,
                 rect,
@@ -327,7 +329,7 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 .ok()
                 .map(|index| &self.links[index]);
             text::compile_text(
-                &passes[4],
+                &mut passes[4],
                 self.workbook,
                 style,
                 &record.kind,

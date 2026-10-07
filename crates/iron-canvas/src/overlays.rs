@@ -43,13 +43,13 @@ pub(crate) fn compose(
     let Some(geometry) = worksheet.geometry.as_ref() else {
         return;
     };
-    let fills = SceneBuilder::default();
-    let strokes = SceneBuilder::default();
+    let mut fills = SceneBuilder::default();
+    let mut strokes = SceneBuilder::default();
     for range in &state.selection {
         for fragment in geometry.fragments(*range) {
             fills.rect_fill(fragment.rect, PaintColor::Borrowed(&theme.selection_fill));
             outline(
-                &strokes,
+                &mut strokes,
                 fragment.rect,
                 fragment.edges,
                 &theme.selection_color,
@@ -70,7 +70,7 @@ pub(crate) fn compose(
             restore.extend(worksheet.scene.passes[..model_passes].iter().map(Rc::clone));
             restore.push(Rc::from([Primitive::EndClip]));
             outline(
-                &strokes,
+                &mut strokes,
                 fragment.rect,
                 fragment.edges,
                 &theme.selection_color,
@@ -81,7 +81,7 @@ pub(crate) fn compose(
     if let Some(range) = state.clipboard {
         for fragment in geometry.fragments(range) {
             outline(
-                &strokes,
+                &mut strokes,
                 fragment.rect,
                 fragment.edges,
                 &theme.selection_color,
@@ -89,7 +89,7 @@ pub(crate) fn compose(
             );
         }
     }
-    let formula = SceneBuilder::default();
+    let mut formula = SceneBuilder::default();
     for reference in &state.formula_references {
         if reference.sheet != sheet {
             continue;
@@ -98,7 +98,7 @@ pub(crate) fn compose(
         for fragment in geometry.fragments(reference.range) {
             formula.rect_fill(fragment.rect, PaintColor::Static(FORMULA_REF_TINTS[index]));
             outline(
-                &formula,
+                &mut formula,
                 fragment.rect,
                 fragment.edges,
                 FORMULA_REF_COLORS[index],
@@ -107,7 +107,7 @@ pub(crate) fn compose(
         }
     }
     // Header highlights stay clipped to their strips and preserve the labels.
-    let header = SceneBuilder::default();
+    let mut header = SceneBuilder::default();
     let mut highlighted = Vec::new();
     for range in &state.selection {
         for fragment in geometry.fragments(*range) {
@@ -156,7 +156,7 @@ pub(crate) fn compose(
                 .active_cell
                 .map(|active| logical_range(worksheet, active))
         });
-    let autofill = SceneBuilder::default();
+    let mut autofill = SceneBuilder::default();
     if let Some(range) = autofill_range {
         let last = range.normalized().last;
         if last.row < LAST_ROW
@@ -173,7 +173,7 @@ pub(crate) fn compose(
     worksheet.scene.passes.push(header.finish());
     worksheet.scene.passes.push(autofill.finish());
 }
-fn outline(out: &SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, dashed: bool) {
+fn outline(out: &mut SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, dashed: bool) {
     if rect.width <= 1 || rect.height <= 1 {
         return;
     }

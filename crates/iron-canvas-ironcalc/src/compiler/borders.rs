@@ -45,8 +45,8 @@ impl Rule {
 }
 
 pub(super) fn compile_borders(
-    out: &SceneBuilder,
-    grid: &SceneBuilder,
+    out: &mut SceneBuilder,
+    grid: &mut SceneBuilder,
     workbook: &UserModel<'_>,
     border: &Border,
     rect: PixelRect,
@@ -107,11 +107,11 @@ mod tests {
             }),
             ..Default::default()
         };
-        let explicit = SceneBuilder::default();
-        let grid = SceneBuilder::default();
+        let mut explicit = SceneBuilder::default();
+        let mut grid = SceneBuilder::default();
         compile_borders(
-            &explicit,
-            &grid,
+            &mut explicit,
+            &mut grid,
             &workbook,
             &border,
             PixelRect {

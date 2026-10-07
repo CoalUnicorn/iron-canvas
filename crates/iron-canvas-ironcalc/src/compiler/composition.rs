@@ -132,7 +132,7 @@ pub(super) fn prepare(
         .map(|p| p.rows.len() * p.columns.len())
         .sum();
     let clips = geometry.panes.len() * 2;
-    let passes = std::array::from_fn(|index| {
+    let mut passes = std::array::from_fn(|index| {
         SceneBuilder::with_capacity(match index {
             2 => cell_count * 2 + clips,
             4 => cell_count * 3 + clips,
@@ -142,7 +142,7 @@ pub(super) fn prepare(
     passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
     let mut cells = Vec::with_capacity(cell_count);
     for pane in &geometry.panes {
-        for pass in &passes {
+        for pass in &mut passes {
             pass.push_clip(pane.clip);
         }
         for row in &pane.rows {
@@ -154,11 +154,11 @@ pub(super) fn prepare(
                     },
                     bounds: cell_rect(row, col),
                 };
-                attempt.paint(cell, &passes, false)?;
+                attempt.paint(cell, &mut passes, false)?;
                 cells.push(cell);
             }
         }
-        for pass in &passes {
+        for pass in &mut passes {
             pass.pop_clip();
         }
     }
@@ -185,8 +185,8 @@ pub(super) fn prepare(
             let logical = dimensions
                 .logical_rect(*merge, row, col)
                 .map_err(|e| attempt.error(range.first, CellReadOperation::Merges, e))?;
-            let merged_passes = new_passes();
-            for pass in &merged_passes {
+            let mut merged_passes = new_passes();
+            for pass in &mut merged_passes {
                 pass.push_clip(pane.clip);
             }
             attempt.paint(
@@ -194,7 +194,7 @@ pub(super) fn prepare(
                     coordinate: range.first,
                     bounds: logical,
                 },
-                &merged_passes,
+                &mut merged_passes,
                 true,
             )?;
             let show_merge_grid = attempt.show_grid
@@ -233,9 +233,10 @@ pub(super) fn prepare(
                         ..Default::default()
                     };
                     let rect = cell_rect(row, col);
+                    let (grid_side, border_side) = merged_passes.split_at_mut(3);
                     borders::compile_borders(
-                        &merged_passes[3],
-                        &merged_passes[2],
+                        &mut border_side[0],
+                        &mut grid_side[2],
                         workbook,
                         &border,
                         rect,
@@ -260,7 +261,7 @@ pub(super) fn prepare(
                     }
                 }
             }
-            for pass in &merged_passes {
+            for pass in &mut merged_passes {
                 pass.pop_clip();
             }
             scene
@@ -268,7 +269,7 @@ pub(super) fn prepare(
                 .extend(merged_passes.into_iter().map(SceneBuilder::finish));
         }
     }
-    let chrome = SceneBuilder::default();
+    let mut chrome = SceneBuilder::default();
     for (axis, bands) in [
         (Axis::Row, &geometry.row_bands),
         (Axis::Column, &geometry.column_bands),
@@ -304,7 +305,7 @@ pub(super) fn prepare(
             );
         }
     }
-    headers(&chrome, &geometry, theme);
+    headers(&mut chrome, &geometry, theme);
     scene.passes.push(chrome.finish());
     // Keep query payloads engine-native. All reads stop before staging begins.
     Ok(PreparedWorksheet {
@@ -342,7 +343,7 @@ pub(super) fn merge_range(merge: MergedCell) -> GridRange {
         },
     }
 }
-fn headers(out: &SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme) {
+fn headers(out: &mut SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme) {
     let origin = geometry.origin;
     let font = PaintColor::Static(HEADER_FONT_CSS);
     out.rect_fill(

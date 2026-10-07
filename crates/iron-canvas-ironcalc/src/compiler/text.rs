@@ -10,7 +10,7 @@ use ironcalc_base::{
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_text(
-    out: &SceneBuilder,
+    out: &mut SceneBuilder,
     workbook: &UserModel<'_>,
     style: &Style,
     kind: &CellType,

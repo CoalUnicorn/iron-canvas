@@ -9,7 +9,7 @@ use crate::painter::{
     LineCap, LineJoin, PaintColor, Painter, StrokeStyle, TextAlign, TextBaseline,
 };
 use crate::{Line, PixelRect};
-use std::{cell::RefCell, collections::HashSet, rc::Rc};
+use std::{collections::HashSet, rc::Rc};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SceneStroke {
@@ -196,53 +196,50 @@ impl Primitive {
 /// Builds one pass from already resolved primitive arguments.
 #[derive(Default)]
 pub struct SceneBuilder {
-    ops: RefCell<Vec<Primitive>>,
-    strings: RefCell<HashSet<Rc<str>>>,
+    ops: Vec<Primitive>,
+    strings: HashSet<Rc<str>>,
 }
 impl SceneBuilder {
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            ops: RefCell::new(Vec::with_capacity(capacity)),
-            strings: RefCell::default(),
+            ops: Vec::with_capacity(capacity),
+            strings: HashSet::new(),
         }
     }
 
-    fn intern(&self, value: &str) -> Rc<str> {
-        let mut strings = self.strings.borrow_mut();
-        if let Some(value) = strings.get(value) {
+    fn intern(&mut self, value: &str) -> Rc<str> {
+        if let Some(value) = self.strings.get(value) {
             return Rc::clone(value);
         }
         let value: Rc<str> = Rc::from(value);
-        strings.insert(Rc::clone(&value));
+        self.strings.insert(Rc::clone(&value));
         value
     }
 
     pub fn finish(self) -> Rc<[Primitive]> {
-        self.ops.into_inner().into()
+        self.ops.into()
     }
-    pub fn rect_fill(&self, rect: PixelRect, color: PaintColor) {
-        self.ops.borrow_mut().push(Primitive::RectFill {
-            rect,
-            color: self.intern(color.as_str()),
-        });
+    pub fn rect_fill(&mut self, rect: PixelRect, color: PaintColor) {
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::RectFill { rect, color });
     }
-    pub fn rect_fill_hgradient(&self, rect: PixelRect, from: PaintColor, to: PaintColor) {
-        self.ops.borrow_mut().push(Primitive::Gradient {
-            rect,
-            from: self.intern(from.as_str()),
-            to: self.intern(to.as_str()),
-        });
+    pub fn rect_fill_hgradient(&mut self, rect: PixelRect, from: PaintColor, to: PaintColor) {
+        let from = self.intern(from.as_str());
+        let to = self.intern(to.as_str());
+        self.ops.push(Primitive::Gradient { rect, from, to });
     }
-    pub fn fill_path(&self, path: &Path<'_>, color: PaintColor) {
-        self.ops.borrow_mut().push(Primitive::FillPath {
+    pub fn fill_path(&mut self, path: &Path<'_>, color: PaintColor) {
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::FillPath {
             path: Rc::from(path.cmds()),
-            color: self.intern(color.as_str()),
+            color,
         });
     }
-    pub fn stroke_path(&self, path: &Path<'_>, color: PaintColor, style: &StrokeStyle<'_>) {
-        self.ops.borrow_mut().push(Primitive::StrokePath {
+    pub fn stroke_path(&mut self, path: &Path<'_>, color: PaintColor, style: &StrokeStyle<'_>) {
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::StrokePath {
             path: Rc::from(path.cmds()),
-            color: self.intern(color.as_str()),
+            color,
             style: SceneStroke {
                 width: style.width,
                 cap: style.cap,
@@ -252,39 +249,38 @@ impl SceneBuilder {
             },
         });
     }
-    pub fn fill_circle(&self, cx: f64, cy: f64, radius: f64, color: PaintColor) {
-        self.ops.borrow_mut().push(Primitive::Circle {
+    pub fn fill_circle(&mut self, cx: f64, cy: f64, radius: f64, color: PaintColor) {
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::Circle {
             cx,
             cy,
             radius,
-            color: self.intern(color.as_str()),
+            color,
         });
     }
-    pub fn stroke_line(&self, line: Line, color: PaintColor, width: f64) {
-        self.ops.borrow_mut().push(Primitive::Line {
-            line,
-            color: self.intern(color.as_str()),
-            width,
-        });
+    pub fn stroke_line(&mut self, line: Line, color: PaintColor, width: f64) {
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::Line { line, color, width });
     }
-    pub fn stroke_text_hline(&self, x1: f64, x2: f64, y: f64, color: PaintColor, width: f64) {
-        self.ops.borrow_mut().push(Primitive::TextLine {
+    pub fn stroke_text_hline(&mut self, x1: f64, x2: f64, y: f64, color: PaintColor, width: f64) {
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::TextLine {
             x1,
             x2,
             y,
-            color: self.intern(color.as_str()),
+            color,
             width,
         });
     }
-    pub fn push_clip(&self, rect: PixelRect) {
-        self.ops.borrow_mut().push(Primitive::Clip { rect });
+    pub fn push_clip(&mut self, rect: PixelRect) {
+        self.ops.push(Primitive::Clip { rect });
     }
-    pub fn pop_clip(&self) {
-        self.ops.borrow_mut().push(Primitive::EndClip);
+    pub fn pop_clip(&mut self) {
+        self.ops.push(Primitive::EndClip);
     }
     #[allow(clippy::too_many_arguments)]
     pub fn fill_text(
-        &self,
+        &mut self,
         text: &str,
         x: f64,
         y: f64,
@@ -293,12 +289,14 @@ impl SceneBuilder {
         align: TextAlign,
         baseline: TextBaseline,
     ) {
-        self.ops.borrow_mut().push(Primitive::Text {
+        let font_css = self.intern(font_css.as_str());
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::Text {
             text: text.to_owned(),
             x,
             y,
-            font_css: self.intern(font_css.as_str()),
-            color: self.intern(color.as_str()),
+            font_css,
+            color,
             align,
             baseline,
         });

@@ -85,7 +85,7 @@ impl SceneDto {
         let mut passes = Vec::with_capacity(self.passes.len());
 
         for commands in self.passes {
-            let builder = SceneBuilder::with_capacity(commands.len());
+            let mut builder = SceneBuilder::with_capacity(commands.len());
             for command in commands {
                 match command {
                     PrimitiveDto::RectFill { rect, color } => {

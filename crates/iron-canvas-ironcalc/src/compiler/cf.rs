@@ -159,7 +159,7 @@ impl CfDecorationPaint {
     /// purely in `Painter` primitives. The renderer owns CF geometry so the
     /// backend stays primitive-only: data bars become a solid or gradient
     /// rects; icons and ratings become path and circle primitives.
-    pub(crate) fn paint(&self, painter: &SceneBuilder, rect: PixelRect) {
+    pub(crate) fn paint(&self, painter: &mut SceneBuilder, rect: PixelRect) {
         // Background to foreground: the bar must not cover the glyphs.
         if let Some(bar) = &self.data_bar {
             paint_data_bar(painter, rect, bar);
@@ -266,7 +266,7 @@ fn icon_slot(rect: PixelRect) -> Option<(i32, i32, i32)> {
 
 /// Paint a data bar: a solid or horizontal-gradient rect spanning the zero
 /// axis and the value endpoint, colored by the endpoint's side of the axis.
-fn paint_data_bar(painter: &SceneBuilder, rect: PixelRect, bar: &CfDataBarPaint) {
+fn paint_data_bar(painter: &mut SceneBuilder, rect: PixelRect, bar: &CfDataBarPaint) {
     let inner = rect.inset(CF_INSET, CF_INSET);
     if inner.width <= 0 || inner.height <= 0 {
         return;
@@ -406,7 +406,7 @@ fn circle_rating_fraction(count: u32, max: u32) -> Option<f64> {
 
 /// Paint one circle rating as a filled sector inside a stroked circle.
 fn paint_circle_rating(
-    painter: &SceneBuilder,
+    painter: &mut SceneBuilder,
     left: i32,
     top: i32,
     size: i32,
@@ -462,13 +462,27 @@ fn paint_circle_rating(
 ///
 /// The glyph box is square, so the uniform fit fills it. The definition's
 /// rotation turns the placed geometry around the box centre.
-fn paint_glyph(painter: &SceneBuilder, glyph: Icon, left: i32, top: i32, size: i32, color: &str) {
+fn paint_glyph(
+    painter: &mut SceneBuilder,
+    glyph: Icon,
+    left: i32,
+    top: i32,
+    size: i32,
+    color: &str,
+) {
     let def = glyph_def(glyph);
     paint_def(painter, &def, left, top, size, color);
 }
 
 /// Place `def` into the `size`×`size` box at `(left, top)` and paint each part.
-fn paint_def(painter: &SceneBuilder, def: &GlyphDef, left: i32, top: i32, size: i32, color: &str) {
+fn paint_def(
+    painter: &mut SceneBuilder,
+    def: &GlyphDef,
+    left: i32,
+    top: i32,
+    size: i32,
+    color: &str,
+) {
     if size <= 0 {
         return;
     }
@@ -573,8 +587,8 @@ mod tests {
         });
         let cf = CfDecorationPaint::resolve(&ext, &model());
         assert!(cf.hides_value());
-        let builder = SceneBuilder::default();
-        cf.paint(&builder, rect(30));
+        let mut builder = SceneBuilder::default();
+        cf.paint(&mut builder, rect(30));
         let ops = builder.finish();
         assert!(
             matches!(&ops[0], Primitive::Gradient { from, to, .. } if &**from == "#ff0000" && &**to == "#ff9999")
@@ -595,8 +609,8 @@ mod tests {
                 color: Color::None,
                 show_value: true,
             });
-            let builder = SceneBuilder::default();
-            CfDecorationPaint::resolve(&ext, &model()).paint(&builder, rect(100));
+            let mut builder = SceneBuilder::default();
+            CfDecorationPaint::resolve(&ext, &model()).paint(&mut builder, rect(100));
             assert!(!builder.finish().is_empty());
         }
     }

@@ -349,7 +349,11 @@ pub(super) fn coverage(op: &Primitive, clip: PixelRect, delta: Point) -> Option<
         ),
         // Text and paths use their clip as a conservative bound. Glyph ink and
         // miter joins can extend beyond their nominal layout/control points.
-        _ => return Some(clip),
+        Primitive::FillPath { .. } | Primitive::StrokePath { .. } | Primitive::Text { .. } => {
+            return Some(clip);
+        }
+        // The caller consumes these before it asks for coverage.
+        Primitive::Clip { .. } | Primitive::EndClip => unreachable!(),
     };
     let left = (bounds.0 + f64::from(delta.x))
         .floor()
