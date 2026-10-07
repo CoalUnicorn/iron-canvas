@@ -1,0 +1,149 @@
+:root {
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  color: #202a36;
+  background: #f5f7fa;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+.page {
+  width: min(1080px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 64px 0 40px;
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 32px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #627286;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  color: #162333;
+  font-size: clamp(32px, 5vw, 48px);
+  letter-spacing: -0.045em;
+}
+
+.subtitle {
+  margin: 10px 0 0;
+  color: #617084;
+  font-size: 16px;
+}
+
+.badge {
+  flex: 0 0 auto;
+  margin-top: 22px;
+  padding: 8px 12px;
+  border: 1px solid #d7e0e9;
+  border-radius: 999px;
+  background: #fff;
+  color: #49627b;
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.workbook {
+  overflow: hidden;
+  border: 1px solid #d7dee7;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 16px 42px rgb(34 52 73 / 8%);
+}
+
+.sheet-toolbar {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 18px;
+  border-bottom: 1px solid #e3e8ee;
+}
+
+.sheet-tab {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  border-bottom: 2px solid #32845b;
+  color: #263647;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sheet-note {
+  color: #7b8896;
+  font-size: 12px;
+}
+
+.canvas-wrap {
+  position: relative;
+  width: 100%;
+  height: min(62vh, 480px);
+  min-height: 300px;
+  background: #fff;
+}
+
+.sheet-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-message {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  color: #617084;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.footnote {
+  margin: 18px 2px 0;
+  color: #718092;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+@media (max-width: 560px) {
+  .page {
+    width: calc(100% - 24px);
+    padding-top: 36px;
+  }
+
+  .page-header {
+    margin-bottom: 22px;
+  }
+
+  .sheet-note {
+    display: none;
+  }
+}
