@@ -1,6 +1,6 @@
 use super::*;
 use iron_canvas_core::{
-    Point, Side,
+    Axis, Point, Side,
     painter::{TextAlign, TextBaseline},
     scene_geometry::{AxisCell, AxisError, GridGeometry, GridRange, sample_bands},
 };
@@ -71,9 +71,9 @@ pub(super) fn prepare(
         frozen_rows,
         header_height,
         viewport.height - header_height,
-        |i| dimensions.extent(true, i),
+        |i| dimensions.extent(Axis::Row, i),
     )
-    .map_err(|e| axis_error(sheet, first, true, e))?;
+    .map_err(|e| axis_error(sheet, first, Axis::Row, e))?;
     let label = rows
         .iter()
         .flat_map(|b| &b.cells)
@@ -91,9 +91,9 @@ pub(super) fn prepare(
         frozen_cols,
         header_width,
         viewport.width - header_width,
-        |i| dimensions.extent(false, i),
+        |i| dimensions.extent(Axis::Column, i),
     )
-    .map_err(|e| axis_error(sheet, first, false, e))?;
+    .map_err(|e| axis_error(sheet, first, Axis::Column, e))?;
     let clip = PixelRect {
         top_left: Point { x: 0, y: 0 },
         width: viewport.width,
@@ -186,13 +186,7 @@ pub(super) fn prepare(
             )?;
             let show_merge_grid = attempt.show_grid
                 && workbook
-                    .resolve_color(
-                        &attempt.cached[&(range.first.row, range.first.col)]
-                            .0
-                            .style
-                            .fill
-                            .color,
-                    )
+                    .resolve_color(&attempt.cached[&range.first].extended.style.fill.color)
                     .is_empty();
             // IronCalc stores the border on each perimeter cell. Reuse the
             // records fetched by the ordinary pass, including partial edges.
@@ -208,8 +202,8 @@ pub(super) fn prepare(
                         row: row.index,
                         col: col.index,
                     };
-                    let record = &attempt.cached[&(coord.row, coord.col)];
-                    let b = &record.0.style.border;
+                    let record = &attempt.cached[&coord];
+                    let b = &record.extended.style.border;
                     let border = Border {
                         left: (coord.col == range.first.col)
                             .then(|| b.left.clone())
@@ -262,30 +256,36 @@ pub(super) fn prepare(
         }
     }
     let chrome = SceneBuilder::default();
-    for (vertical, bands) in [(false, &geometry.row_bands), (true, &geometry.column_bands)] {
+    for (axis, bands) in [
+        (Axis::Row, &geometry.row_bands),
+        (Axis::Column, &geometry.column_bands),
+    ] {
         if bands.len() > 1 {
             let split = bands[1].start;
-            let rect = if vertical {
-                PixelRect {
-                    top_left: Point {
-                        x: split,
-                        y: header_height,
-                    },
-                    width: 0,
-                    height: viewport.height - header_height,
-                }
-            } else {
-                PixelRect {
+            let rect = match axis {
+                Axis::Row => PixelRect {
                     top_left: Point {
                         x: header_width,
                         y: split,
                     },
                     width: viewport.width - header_width,
                     height: 0,
-                }
+                },
+                Axis::Column => PixelRect {
+                    top_left: Point {
+                        x: split,
+                        y: header_height,
+                    },
+                    width: 0,
+                    height: viewport.height - header_height,
+                },
             };
             chrome.stroke_line(
-                if vertical { Side::Left } else { Side::Top }.line(rect),
+                match axis {
+                    Axis::Row => Side::Top,
+                    Axis::Column => Side::Left,
+                }
+                .line(rect),
                 PaintColor::Borrowed(&theme.grid_separator_color),
                 2.0,
             );
@@ -298,6 +298,10 @@ pub(super) fn prepare(
         scene,
         cells: cells.into(),
         geometry: Some(geometry),
+        frozen: FrozenAxes {
+            rows: frozen_rows,
+            cols: frozen_cols,
+        },
         merges: merges.into(),
         links: attempt.links.into(),
         extended_style_reads: attempt.reads,
@@ -344,52 +348,52 @@ fn headers(out: &SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme) {
         },
         PaintColor::Borrowed(&theme.header_bg),
     );
-    for (vertical, bands) in [(true, &geometry.row_bands), (false, &geometry.column_bands)] {
+    for (axis, bands) in [
+        (Axis::Row, &geometry.row_bands),
+        (Axis::Column, &geometry.column_bands),
+    ] {
         for band in bands {
-            let clip = if vertical {
-                PixelRect {
+            let clip = match axis {
+                Axis::Row => PixelRect {
                     top_left: Point {
                         x: 0,
                         y: band.start,
                     },
                     width: origin.x,
                     height: band.extent,
-                }
-            } else {
-                PixelRect {
+                },
+                Axis::Column => PixelRect {
                     top_left: Point {
                         x: band.start,
                         y: 0,
                     },
                     width: band.extent,
                     height: origin.y,
-                }
+                },
             };
             out.push_clip(clip);
             for cell in &band.cells {
-                let rect = if vertical {
-                    PixelRect {
+                let rect = match axis {
+                    Axis::Row => PixelRect {
                         top_left: Point {
                             x: 0,
                             y: cell.start,
                         },
                         width: origin.x,
                         height: cell.extent,
-                    }
-                } else {
-                    PixelRect {
+                    },
+                    Axis::Column => PixelRect {
                         top_left: Point {
                             x: cell.start,
                             y: 0,
                         },
                         width: cell.extent,
                         height: origin.y,
-                    }
+                    },
                 };
-                let label = if vertical {
-                    cell.index.to_string()
-                } else {
-                    number_to_column(cell.index).unwrap_or_default()
+                let label = match axis {
+                    Axis::Row => cell.index.to_string(),
+                    Axis::Column => number_to_column(cell.index).unwrap_or_default(),
                 };
                 out.push_clip(rect);
                 out.fill_text(
@@ -403,7 +407,11 @@ fn headers(out: &SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme) {
                 );
                 out.pop_clip();
                 out.stroke_line(
-                    if vertical { Side::Bottom } else { Side::Right }.line(rect),
+                    match axis {
+                        Axis::Row => Side::Bottom,
+                        Axis::Column => Side::Right,
+                    }
+                    .line(rect),
                     PaintColor::Borrowed(&theme.header_border_color),
                     1.0,
                 );
@@ -439,15 +447,17 @@ struct Dimensions<'w, 'm> {
     cols: HashMap<i32, i32>,
 }
 impl Dimensions<'_, '_> {
-    fn extent(&mut self, row: bool, index: i32) -> Result<f64, String> {
-        let cache = if row { &mut self.rows } else { &mut self.cols };
+    fn extent(&mut self, axis: Axis, index: i32) -> Result<f64, String> {
+        let cache = match axis {
+            Axis::Row => &mut self.rows,
+            Axis::Column => &mut self.cols,
+        };
         if let Some(v) = cache.get(&index) {
             return Ok(f64::from(*v));
         }
-        let value = if row {
-            self.workbook.get_row_height(self.sheet, index)?
-        } else {
-            self.workbook.get_column_width(self.sheet, index)?
+        let value = match axis {
+            Axis::Row => self.workbook.get_row_height(self.sheet, index)?,
+            Axis::Column => self.workbook.get_column_width(self.sheet, index)?,
         };
         if !value.is_finite() || value < 0.0 || value.round() > f64::from(i32::MAX) {
             return Err("invalid axis extent".into());
@@ -456,11 +466,11 @@ impl Dimensions<'_, '_> {
         cache.insert(index, value);
         Ok(f64::from(value))
     }
-    fn sum(&mut self, row: bool, first: i32, end: i32) -> Result<i32, String> {
+    fn sum(&mut self, axis: Axis, first: i32, end: i32) -> Result<i32, String> {
         let mut total = 0_i32;
         for i in first..end {
             total = total
-                .checked_add(self.extent(row, i)? as i32)
+                .checked_add(self.extent(axis, i)? as i32)
                 .ok_or("merge extent overflow")?;
         }
         Ok(total)
@@ -473,16 +483,16 @@ impl Dimensions<'_, '_> {
     ) -> Result<PixelRect, String> {
         let x = col
             .start
-            .checked_sub(self.sum(false, merge.column, col.index)?)
+            .checked_sub(self.sum(Axis::Column, merge.column, col.index)?)
             .ok_or("merge position overflow")?;
         let y = row
             .start
-            .checked_sub(self.sum(true, merge.row, row.index)?)
+            .checked_sub(self.sum(Axis::Row, merge.row, row.index)?)
             .ok_or("merge position overflow")?;
         let rect = PixelRect {
             top_left: Point { x, y },
-            width: self.sum(false, merge.column, merge.column + merge.width)?,
-            height: self.sum(true, merge.row, merge.row + merge.height)?,
+            width: self.sum(Axis::Column, merge.column, merge.column + merge.width)?,
+            height: self.sum(Axis::Row, merge.row, merge.row + merge.height)?,
         };
         if !valid_rect(rect) {
             return Err("merge rectangle overflow".into());
@@ -494,7 +504,7 @@ impl Dimensions<'_, '_> {
 fn axis_error(
     sheet: u32,
     mut cell: CellCoord,
-    row: bool,
+    axis: Axis,
     error: AxisError<String>,
 ) -> WorksheetCompileError {
     let index = match &error {
@@ -502,19 +512,17 @@ fn axis_error(
         AxisError::Extent { index } | AxisError::Read { index, .. } => Some(*index),
     };
     if let Some(index) = index {
-        if row {
-            cell.row = index;
-        } else {
-            cell.col = index;
+        match axis {
+            Axis::Row => cell.row = index,
+            Axis::Column => cell.col = index,
         }
     }
     WorksheetCompileError {
         sheet,
         cell,
-        operation: if row {
-            CellReadOperation::RowHeight
-        } else {
-            CellReadOperation::ColumnWidth
+        operation: match axis {
+            Axis::Row => CellReadOperation::RowHeight,
+            Axis::Column => CellReadOperation::ColumnWidth,
         },
         message: format!("{error:?}"),
     }
