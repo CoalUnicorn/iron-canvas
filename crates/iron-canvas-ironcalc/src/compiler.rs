@@ -212,9 +212,11 @@ impl<'w, 'm> Attempt<'w, 'm> {
         let show_grid = workbook
             .get_show_grid_lines(sheet)
             .map_err(|e| err(CellReadOperation::Sheet, e))?;
-        let links = workbook
+        let mut links = workbook
             .get_links_list(sheet)
             .map_err(|e| err(CellReadOperation::Links, e))?;
+        // Sort once, so the per-cell link lookup can binary search.
+        links.sort_by_key(|link| (link.row, link.column));
         Ok(Self {
             workbook,
             sheet,
@@ -317,6 +319,13 @@ impl<'w, 'm> Attempt<'w, 'm> {
             );
         }
         if !cf.hides_value() {
+            let link = self
+                .links
+                .binary_search_by_key(&(placement.coordinate.row, placement.coordinate.col), |l| {
+                    (l.row, l.column)
+                })
+                .ok()
+                .map(|index| &self.links[index]);
             text::compile_text(
                 &passes[4],
                 self.workbook,
@@ -327,12 +336,7 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 cf.reserved_left(rect),
                 self.metrics,
                 self.theme,
-                self.links
-                    .binary_search_by_key(
-                        &(placement.coordinate.row, placement.coordinate.col),
-                        |l| (l.row, l.column),
-                    )
-                    .is_ok(),
+                link,
                 &mut self.lines,
                 &mut self.scratch,
             );

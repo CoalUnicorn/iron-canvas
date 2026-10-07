@@ -303,3 +303,66 @@ fn prepared_worksheet_reports_the_engine_merged_list() {
     workbook.unmerge_cells(&area).expect("unmerge must succeed");
     assert!(prepared(&workbook).merges.is_empty());
 }
+
+/// Both link kinds look like links: hyperlink color and an underline.
+///
+/// A static link carries that look in the cell style. A formula link does not,
+/// so the text pass must supply it.
+#[test]
+fn linked_cells_paint_the_link_color_and_an_underline() {
+    let mut workbook = UserModel::new_empty("links", "en", "UTC", "en").unwrap();
+    workbook.set_user_input(0, 1, 1, "static").unwrap();
+    workbook
+        .set_user_input(0, 2, 1, "=HYPERLINK(\"https://example.com\",\"formula\")")
+        .unwrap();
+    workbook.set_user_input(0, 3, 1, "plain").unwrap();
+    workbook
+        .set_cell_link(0, 1, 1, external("https://example.com"), None)
+        .expect("link write");
+    workbook.evaluate();
+
+    let theme = CanvasTheme::light();
+    let paint = |row: i32| -> (String, usize, usize) {
+        let prepared = WorksheetCompiler::new()
+            .prepare_cells(
+                &workbook,
+                0,
+                rect(),
+                [CellPlacement {
+                    coordinate: CellCoord { row, col: 1 },
+                    bounds: rect(),
+                }],
+                &Metrics,
+                &theme,
+            )
+            .expect("cell preparation");
+        let mut color = String::new();
+        let mut texts = 0;
+        let mut underlines = 0;
+        for op in prepared.scene.passes[4].iter() {
+            match op {
+                Primitive::Text {
+                    color: op_color, ..
+                } => {
+                    color = op_color.to_string();
+                    texts += 1;
+                }
+                Primitive::TextLine { .. } => underlines += 1,
+                _ => {}
+            }
+        }
+        (color, texts, underlines)
+    };
+
+    let (static_color, static_texts, static_underlines) = paint(1);
+    let (formula_color, formula_texts, formula_underlines) = paint(2);
+    let (plain_color, plain_texts, plain_underlines) = paint(3);
+    assert_eq!((static_texts, formula_texts, plain_texts), (1, 1, 1));
+    assert_eq!(
+        (static_underlines, formula_underlines, plain_underlines),
+        (1, 1, 0)
+    );
+    assert_eq!(static_color, formula_color);
+    assert_ne!(static_color, plain_color);
+    assert_eq!(plain_color, theme.default_text_color.as_ref());
+}

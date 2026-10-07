@@ -4,6 +4,7 @@ use iron_canvas_core::scene::SceneBuilder;
 use iron_canvas_core::{CanvasTheme, PixelRect, text_layout::*};
 use ironcalc_base::{
     UserModel,
+    links::CellLinkView,
     types::{CellType, HorizontalAlignment as H, Style, VerticalAlignment as V},
 };
 
@@ -18,7 +19,7 @@ pub(super) fn compile_text(
     reserved: i32,
     metrics: &dyn TextMetrics,
     theme: &CanvasTheme,
-    link: bool,
+    link: Option<&CellLinkView>,
     lines: &mut Vec<TextLine>,
     scratch: &mut String,
 ) {
@@ -68,7 +69,7 @@ pub(super) fn compile_text(
     let resolved = workbook.resolve_color(&font.color);
     // IronCalc keeps the hyperlink theme slot private. It is OOXML slot 10.
     let link_color =
-        link.then(|| workbook.resolve_color(&ironcalc_base::types::Color::Theme(10, 0.0)));
+        link.map(|_| workbook.resolve_color(&ironcalc_base::types::Color::Theme(10, 0.0)));
     let color = if matches!(kind, CellType::ErrorValue) {
         &theme.error_text_color
     } else if let Some(color) = link_color.as_deref().filter(|color| !color.is_empty()) {
@@ -116,7 +117,7 @@ pub(super) fn compile_text(
         );
         let x1 = line.center_x - line.width / 2.0;
         let x2 = line.center_x + line.width / 2.0;
-        if font.u || link {
+        if font.u || link.is_some() {
             out.stroke_text_hline(
                 x1,
                 x2,
