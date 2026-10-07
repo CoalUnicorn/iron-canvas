@@ -128,15 +128,15 @@ impl<B: RenderBackend> CanvasSession<B> {
     }
     /// The viewport of the last committed request, after a successful commit.
     pub fn committed_viewport(&self) -> Option<WorksheetViewport> {
-        self.committed_request
+        self.committed
             .as_ref()
-            .map(|request| request.viewport)
+            .map(|committed| committed.request.viewport)
     }
     /// The `(row, column)` origin the committed frame actually scrolled to,
     /// after freeze clamping. Falls back to the requested viewport on an axis
     /// with no scrolling band (a frozen band that consumed the extent).
     pub fn scroll_origin(&self) -> Option<CellCoord> {
-        let requested = self.committed_request.as_ref()?.viewport.first_cell;
+        let requested = self.committed.as_ref()?.request.viewport.first_cell;
         let geometry = self.committed_geometry();
         let row = geometry
             .and_then(|g| g.row_bands.iter().find(|b| !b.frozen))
@@ -217,13 +217,12 @@ impl<B: RenderBackend> CanvasSession<B> {
         )
     }
     fn committed_sheet(&self) -> Result<u32, AutoFitError> {
-        self.committed_frame
-            .as_ref()
+        self.committed_frame()
             .map(|frame| frame.sheet)
             .ok_or(AutoFitError::Sheet)
     }
     fn committed_geometry(&self) -> Option<&GridGeometry> {
-        self.committed_frame.as_ref()?.worksheet.geometry.as_deref()
+        self.committed_frame()?.worksheet.geometry.as_deref()
     }
     /// Return an intent. The host decides whether and how to apply it.
     pub fn pointer_intent(&self, point: Point, action: PointerAction) -> Option<HostIntent> {

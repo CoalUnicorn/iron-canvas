@@ -84,16 +84,30 @@ pub struct RenderOutcome {
     pub strategy: RenderStrategy,
 }
 
+/// The published frame with the data a later render can reuse.
+///
+/// One commit establishes these fields together. `invalidate` clears only
+/// `reuse`, because frame queries still describe the published frame.
+struct Committed {
+    frame: PreparedWorksheetFrame,
+    /// The request that produced `frame`.
+    request: RenderRequest,
+    /// Present while a later render can skip preparation.
+    reuse: Option<Reuse>,
+}
+
+/// Prepared content kept for a repeat of the same request.
+struct Reuse {
+    base: PreparedWorksheet,
+    fingerprint: Option<SceneFingerprint>,
+}
+
 /// Owns the current backend and the last successfully committed frame.
 pub struct CanvasSession<B> {
     compiler: WorksheetCompiler,
     backend: B,
-    committed_frame: Option<PreparedWorksheetFrame>,
+    committed: Option<Committed>,
     next_sequence: u64,
-    committed_request: Option<RenderRequest>,
-    base: Option<PreparedWorksheet>,
-    fingerprint: Option<SceneFingerprint>,
-    reusable: bool,
 }
 
 impl<B: RenderBackend> CanvasSession<B> {
@@ -101,19 +115,15 @@ impl<B: RenderBackend> CanvasSession<B> {
         Self {
             compiler: WorksheetCompiler::new(),
             backend,
-            committed_frame: None,
+            committed: None,
             next_sequence: 1,
-            committed_request: None,
-            base: None,
-            fingerprint: None,
-            reusable: false,
         }
     }
 
     /// Prepare and stage a full candidate before publishing either backend
     /// output or queryable frame data.
     ///
-    /// Any preparation or staging error leaves `committed_frame` unchanged
+    /// Any preparation or staging error leaves the committed frame unchanged
     /// and does not call the backend's commit operation. A failed backend
     /// commit also preserves the previous frame under the backend contract.
     pub fn render(
@@ -143,69 +153,64 @@ impl<B: RenderBackend> CanvasSession<B> {
         let next_sequence = sequence
             .checked_add(1)
             .ok_or(RenderError::SequenceExhausted)?;
-        let previous = self
-            .committed_request
+        let cached = self
+            .committed
             .as_ref()
-            .filter(|_| self.reusable && !force);
-        let compatible = previous.is_some_and(|old| {
-            old.sheet == request.sheet
-                && old.revision.workbook_id == request.revision.workbook_id
-                && old.theme == request.theme
+            .filter(|_| !force)
+            .and_then(|committed| Some((committed, committed.reuse.as_ref()?)));
+        let compatible = cached.filter(|(committed, _)| {
+            committed.request.sheet == request.sheet
+                && committed.request.revision.workbook_id == request.revision.workbook_id
+                && committed.request.theme == request.theme
         });
-        let reuse = compatible
-            && previous.is_some_and(|old| {
-                old.revision == request.revision && old.viewport == request.viewport
-            });
-        let base = if reuse {
-            self.base
-                .as_ref()
-                .expect("a reusable request has committed content")
-                .clone()
-        } else {
-            self.compiler
+        let reuse = compatible.filter(|(committed, _)| {
+            committed.request.revision == request.revision
+                && committed.request.viewport == request.viewport
+        });
+        let base = match reuse {
+            Some((_, reuse)) => reuse.base.clone(),
+            None => self
+                .compiler
                 .prepare_reusing_geometry(
                     workbook,
                     request.sheet,
                     request.viewport,
                     self.backend.metrics(),
                     &request.theme,
-                    self.base
-                        .as_ref()
-                        .filter(|_| compatible)
-                        .and_then(|b| b.geometry.as_ref()),
+                    compatible.and_then(|(_, reuse)| reuse.base.geometry.as_ref()),
                 )
-                .map_err(RenderError::Preparation)?
+                .map_err(RenderError::Preparation)?,
         };
-        let reads = if reuse { 0 } else { base.extended_style_reads };
-        let reused_geometry = self
-            .base
-            .as_ref()
-            .and_then(|b| b.geometry.as_ref())
+        let reads = if reuse.is_some() {
+            0
+        } else {
+            base.extended_style_reads
+        };
+        let reused_geometry = compatible
+            .and_then(|(_, reuse)| reuse.base.geometry.as_ref())
             .zip(base.geometry.as_ref())
             .is_some_and(|(a, b)| std::rc::Rc::ptr_eq(a, b));
-        let unchanged = reuse && previous.is_some_and(|old| old.overlays == request.overlays);
-        let mut worksheet = if unchanged {
-            self.committed_frame
-                .as_ref()
-                .expect("unchanged committed frame")
-                .worksheet
-                .clone()
-        } else {
-            let mut composed = base.clone();
-            overlays::compose(
-                &mut composed,
-                request.sheet,
-                &request.overlays,
-                &request.theme,
-            );
-            composed
+        let unchanged =
+            reuse.filter(|(committed, _)| committed.request.overlays == request.overlays);
+        let mut worksheet = match unchanged {
+            Some((committed, _)) => committed.frame.worksheet.clone(),
+            None => {
+                let mut composed = base.clone();
+                overlays::compose(
+                    &mut composed,
+                    request.sheet,
+                    &request.overlays,
+                    &request.theme,
+                );
+                composed
+            }
         };
         worksheet.extended_style_reads = reads;
         let partial = self.backend.supports_partial_updates();
         let fingerprint = if !partial {
             None
-        } else if unchanged {
-            self.fingerprint.clone()
+        } else if let Some((_, reuse)) = unchanged {
+            reuse.fingerprint.clone()
         } else {
             Some(SceneFingerprint::new(&worksheet.scene))
         };
@@ -214,30 +219,23 @@ impl<B: RenderBackend> CanvasSession<B> {
             .backend
             .retained_scale()
             .filter(|s| s.is_finite() && *s > 0.0)
-            && compatible
+            && let Some((committed, reuse)) = compatible
             && worksheet.merges.is_empty()
-            && self
-                .committed_frame
-                .as_ref()
-                .is_some_and(|f| f.worksheet.merges.is_empty())
+            && committed.frame.worksheet.merges.is_empty()
         {
-            let old = self
-                .committed_frame
-                .as_ref()
-                .expect("compatible committed frame");
-            if old.worksheet.geometry == worksheet.geometry {
-                if unchanged {
+            if committed.frame.worksheet.geometry == worksheet.geometry {
+                if unchanged.is_some() {
                     update = SceneUpdate::Reuse;
                 } else if let Some((candidate, painted)) =
-                    fingerprint.as_ref().zip(self.fingerprint.as_ref())
+                    fingerprint.as_ref().zip(reuse.fingerprint.as_ref())
                 {
                     update = candidate.damage(painted);
                 }
             } else if partial
                 && let Some(plan) = retained::scroll_plan(
-                    old,
+                    &committed.frame,
                     &worksheet,
-                    previous.expect("compatible request"),
+                    &committed.request,
                     request,
                     scale,
                 )
@@ -267,29 +265,31 @@ impl<B: RenderBackend> CanvasSession<B> {
             reused_geometry,
             strategy,
         };
-        self.committed_frame = Some(PreparedWorksheetFrame {
-            sequence,
-            sheet: request.sheet,
-            revision: request.revision,
-            worksheet,
+        self.committed = Some(Committed {
+            frame: PreparedWorksheetFrame {
+                sequence,
+                sheet: request.sheet,
+                revision: request.revision,
+                worksheet,
+            },
+            request: request.clone(),
+            reuse: Some(Reuse { base, fingerprint }),
         });
-        self.base = Some(base);
-        self.fingerprint = fingerprint;
-        self.committed_request = Some(request.clone());
-        self.reusable = true;
         self.next_sequence = next_sequence;
         Ok(outcome)
     }
 
     /// Invalidate prepared content after backend fonts or metrics change.
-    /// The next successful render establishes new cache truth.
+    /// The frame stays published; the next render rebuilds it.
     pub fn invalidate(&mut self) {
         self.backend.invalidate_metrics();
-        self.reusable = false;
+        if let Some(committed) = &mut self.committed {
+            committed.reuse = None;
+        }
     }
 
     pub fn committed_frame(&self) -> Option<&PreparedWorksheetFrame> {
-        self.committed_frame.as_ref()
+        self.committed.as_ref().map(|committed| &committed.frame)
     }
 
     pub fn backend(&self) -> &B {
