@@ -16,8 +16,7 @@ const HEADER_FONT_CSS: &str = "12px sans-serif";
 /// row-header strip width.
 const HEADER_LABEL_PADDING: i32 = 16;
 
-/// Floor for the row-header strip width, so a narrow viewport still shows a
-/// usable row-number gutter.
+/// Floor for the row-header strip width.
 const MIN_HEADER_WIDTH: i32 = 48;
 
 #[allow(clippy::too_many_arguments)]

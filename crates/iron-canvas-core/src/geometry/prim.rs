@@ -101,12 +101,8 @@ impl Span {
 
 //  Shared axis - row-vs-column symmetry
 
-/// Horizontal vs vertical axis.
-///
-/// Dispatches geometry on the row/column axis: axis-band sampling, the header
-/// strips, and pane lookup all fork on it. Carries no payload - the row/column
-/// index travels as a separate parameter so the same enum value can be used
-/// across call sites that don't care about a specific index.
+/// Horizontal vs vertical axis. Carries no payload; the index travels as a
+/// separate parameter.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Axis {
     Row,
@@ -173,11 +169,7 @@ impl Side {
     /// corner, so border paint must preserve it.
     pub const ALL: [Self; 4] = [Self::Left, Self::Top, Self::Right, Self::Bottom];
 
-    /// Position of this side in a four-entry, side-keyed array, in
-    /// [`Side::ALL`] order.
-    ///
-    /// Every side-keyed array index goes through this, so the array layout has
-    /// exactly one definition and no call site spells a position.
+    /// Position in a side-keyed array, in [`Side::ALL`] order.
     pub const fn index(self) -> usize {
         match self {
             Side::Left => 0,
@@ -188,8 +180,7 @@ impl Side {
     }
 }
 
-// `index` and `ALL` are two views of one order; a one-sided edit would index
-// the wrong slot in every side-keyed array, so pin them together.
+// `index` must agree with `ALL`.
 const _: () = {
     assert!(matches!(Side::ALL[Side::Left.index()], Side::Left));
     assert!(matches!(Side::ALL[Side::Top.index()], Side::Top));

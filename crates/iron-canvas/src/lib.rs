@@ -245,9 +245,7 @@ impl<B: RenderBackend> CanvasSession<B> {
                 update = plan;
             }
         }
-        // Damage and blit plans are gated on `partial` above: the fingerprint
-        // only exists for a backend that supports partial updates, and
-        // `scroll_plan` is only reached under `partial`.
+        // Both plans need `partial`; see the fingerprint above.
         debug_assert!(
             partial || !matches!(update, SceneUpdate::Damage(_) | SceneUpdate::Blit { .. }),
             "a backend without partial updates cannot stage damage or blit"

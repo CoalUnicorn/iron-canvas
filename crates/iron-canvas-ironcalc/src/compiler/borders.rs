@@ -5,10 +5,8 @@ use ironcalc_base::{
     types::{Border, BorderStyle as B},
 };
 
-/// How one border edge is stroked.
-///
-/// Dash styles keep the baseline's solid stroke policy, so only the width and
-/// the double line treatment reach `Painter` primitives.
+/// How one border edge is stroked. Dash styles keep the solid baseline, so
+/// only the width and the double-line treatment reach `Painter` primitives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Rule {
     /// One line of this width in logical pixels.

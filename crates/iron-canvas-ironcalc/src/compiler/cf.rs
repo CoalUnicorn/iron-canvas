@@ -143,10 +143,7 @@ impl CfDecorationPaint {
         }
     }
 
-    /// Glyph slots the decoration occupies.
-    ///
-    /// Saturating rather than wrapping: the engine's counts arrive as `u32`
-    /// and must not overflow the pixel math below.
+    /// Glyph slots the decoration occupies, saturating on overflow.
     fn glyph_count(&self) -> i32 {
         let rating = self
             .rating
@@ -244,10 +241,7 @@ fn lighten(rgb: [u8; 3], amount: f64) -> [u8; 3] {
     })
 }
 
-/// An engine rating count as `i32`, saturating instead of wrapping.
-///
-/// The counts are small in practice; this exists so an out-of-contract value
-/// cannot overflow the pixel arithmetic that places glyphs.
+/// Engine count as `i32`, saturating on overflow.
 fn count_as_i32(count: u32) -> i32 {
     i32::try_from(count).unwrap_or(i32::MAX)
 }
@@ -332,8 +326,7 @@ fn paint_data_bar(painter: &SceneBuilder, rect: PixelRect, bar: &CfDataBarPaint)
 /// from [`shape::cf`]. Icon geometry is backend-neutral vector work: no font,
 /// no glyph asset, no browser-only API.
 ///
-/// Crate-visible so the glyph-geometry capacity tests can drive every
-/// definition from the shared icon list instead of keeping a second one.
+/// Crate-visible for the glyph capacity tests.
 pub(crate) fn glyph_def(glyph: Icon) -> GlyphDef {
     match glyph {
         Icon::ArrowUp => cf::arrow(-FRAC_PI_2),
@@ -369,13 +362,9 @@ fn rating_def(glyph: Icon) -> GlyphDef {
     }
 }
 
-/// Every `Icon` variant the renderer lowers.
-///
-/// One list, shared by `every_engine_icon_lowers_to_geometry` here and the
-/// glyph-geometry capacity tests in `compiler::glyphs`, so the two cannot
-/// drift apart. Coverage of a new engine variant is enforced by the
-/// exhaustive match in [`glyph_def`]; this list is what makes the geometry
-/// checks see it.
+/// Every `Icon` variant the renderer lowers. The glyph capacity tests use this
+/// list, so the two cannot drift. `glyph_def` makes a new variant a build
+/// error; this list makes the geometry checks see it.
 #[cfg(test)]
 pub(crate) const ALL_ICONS: [Icon; 20] = [
     Icon::ArrowUp,

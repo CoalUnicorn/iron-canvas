@@ -42,12 +42,8 @@ pub struct WorksheetViewport {
     pub height: i32,
 }
 
-/// Frozen row and column counts of the compiled viewport.
-///
-/// Carried on [`PreparedWorksheet`] so a query that combines committed
-/// geometry with live model extents uses the same freeze state the geometry
-/// was built from, instead of re-reading the engine and silently defaulting
-/// when that read fails.
+/// Frozen row and column counts of the compiled viewport. Query paths use
+/// them instead of re-reading the engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct FrozenAxes {
     pub rows: i32,
@@ -182,8 +178,7 @@ fn valid_rect(rect: PixelRect) -> bool {
 fn new_passes() -> [SceneBuilder; 5] {
     std::array::from_fn(|_| SceneBuilder::default())
 }
-/// The engine reads what painted cell needs, fetched at most once per
-/// preparation.
+/// The engine reads one painted cell needs.
 struct CellRecord {
     extended: ExtendedStyle,
     kind: CellType,

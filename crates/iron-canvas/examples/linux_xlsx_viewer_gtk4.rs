@@ -119,8 +119,7 @@ fn main() {
 
 #[cfg(target_os = "linux")]
 fn build_window(application: &Application, state: Rc<RefCell<ViewerState>>, workbook_name: &str) {
-    // Worksheet limits, mirroring `iron-canvas`'s crate-private bounds; an
-    // example cannot see them.
+    // Worksheet limits; the crate keeps these private.
     const LAST_ROW: i32 = 1_048_576;
     const LAST_COLUMN: i32 = 16_384;
 

@@ -31,13 +31,9 @@ pub struct OverlayState {
     /// The host resolves formula references. This type describes only paint.
     pub formula_references: Vec<FormulaOverlay>,
 }
-/// Append the overlay passes to a prepared worksheet's scene.
-///
-/// The overlay passes are appended after the model passes, so the active-cell
-/// restore can re-reference the model passes instead of copying their
-/// primitives. Call this on a freshly prepared worksheet: composing an
-/// already-composed scene would replay the previous overlay passes inside the
-/// restore clip.
+/// Append the overlay passes to a prepared worksheet's scene. Call it on a
+/// freshly prepared worksheet: an already composed scene would replay its own
+/// overlay passes inside the restore clip.
 pub(crate) fn compose(
     worksheet: &mut PreparedWorksheet,
     sheet: u32,
@@ -61,12 +57,9 @@ pub(crate) fn compose(
             );
         }
     }
-    // The active cell's model content is re-painted above the selection fill.
-    // The model passes are re-referenced, not copied: the clip keeps the
-    // repaint to the fragment rectangle, and sharing the pass buffers keeps
-    // this free per frame. Merged-cell and conditional-format content live in
-    // their own passes, which is why every model pass is replayed rather than
-    // only the cell's own.
+    // Re-paint the active cell's model content above the selection fill. The
+    // passes are re-referenced, so the restore copies nothing; merged cells
+    // paint in their own passes, so every model pass must replay.
     let mut restore: Vec<Rc<[Primitive]>> = Vec::new();
     if let Some(active) = state.active_cell {
         let model_passes = worksheet.scene.passes.len();
@@ -214,10 +207,7 @@ fn outline(out: &SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, d
     );
 }
 
-/// Endpoints of one side of the half-pixel-inset outline rectangle.
-///
-/// [`Side::ALL`] walks the four sides as a ring, so the emitted subpaths keep
-/// the order the sides were painted in before they were named.
+/// Endpoints of one side of the half-pixel-inset outline.
 fn side_segment(side: Side, x: f64, y: f64, right: f64, bottom: f64) -> (PointF, PointF) {
     match side {
         Side::Left => (PointF::new(x, bottom), PointF::new(x, y)),

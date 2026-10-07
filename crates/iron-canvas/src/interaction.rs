@@ -149,8 +149,7 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// Minimal `(row, column)` origin that brings `(row, column)` fully inside
     /// the committed scroll pane, or `None` when it already is (or the target
     /// lies in a frozen band). Reads model extents, so it accounts for hidden
-    /// rows/columns and overrides the pane arithmetic cannot see; the frozen
-    /// axes come from the committed frame the geometry was built from.
+    /// rows/columns and overrides the pane arithmetic cannot see.
     pub fn scroll_to_show(
         &self,
         workbook: &UserModel<'_>,

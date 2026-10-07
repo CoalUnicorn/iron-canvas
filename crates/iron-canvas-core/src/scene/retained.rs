@@ -9,11 +9,8 @@ use std::{
     hash::{Hash, Hasher},
 };
 
-/// Height of one damage-fingerprint band, in logical pixels.
-///
-/// A change marks whole bands, so a smaller band buys a tighter damage
-/// rectangle at the cost of more per-band hashes. Every band index derives
-/// from this value.
+/// Damage-fingerprint band height in logical pixels. A change marks whole
+/// bands; every band index derives from this.
 const BAND_HEIGHT: i32 = 32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

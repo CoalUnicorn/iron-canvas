@@ -149,15 +149,12 @@ pub struct RangeFragment {
     pub pane: usize,
     pub range: GridRange,
     pub rect: PixelRect,
-    /// Which of `rect`'s sides are true range edges, keyed by
-    /// [`Side::index`]. A clipped edge is false.
+    /// Sides of `rect` that are true range edges, keyed by [`Side::index`].
+    /// A clipped edge is false.
     pub edges: [bool; 4],
 }
 
 /// Build a [`Side`]-keyed edge array from a per-side predicate.
-///
-/// The one place the array layout is written; every reader indexes through
-/// [`Side::index`].
 fn side_flags(mut edge: impl FnMut(Side) -> bool) -> [bool; 4] {
     let mut edges = [false; 4];
     for side in Side::ALL {

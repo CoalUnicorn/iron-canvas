@@ -246,11 +246,8 @@ pub const THUMBS_DOWN: GlyphDef = GlyphDef {
     rotation: 0.0,
 };
 
-/// Every built-in glyph variant, for capacity and coverage tests.
-///
-/// Derived from the renderer's single `Icon` list plus the rating-only
-/// `RATING_BAR`, so a definition cannot be added without the capacity checks
-/// below seeing it.
+/// Every built-in glyph variant, for the capacity tests. Derived from
+/// `cf::ALL_ICONS` plus the rating-only `RATING_BAR`.
 #[cfg(test)]
 fn all_glyphs() -> Vec<GlyphDef> {
     let mut defs: Vec<GlyphDef> = super::cf::ALL_ICONS

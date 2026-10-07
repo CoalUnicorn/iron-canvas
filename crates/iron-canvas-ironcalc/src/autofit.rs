@@ -26,11 +26,8 @@ pub const FIT_PADDING: f64 = 2.0 * CELL_PADDING;
 /// Floor so an auto-fit never collapses a row or column to a sliver.
 const MIN_EXTENT: f64 = 5.0;
 
-/// Vertical extent handed to the layout when only the line count matters.
-///
-/// It cannot affect the result: `fit_height` counts the lines a wrapped block
-/// produces, and only the wrap width decides that. This value only keeps the
-/// layout rectangle well-formed.
+/// Vertical extent used when only the line count matters. The wrap width
+/// decides that, so this value cannot change the result.
 const UNMEASURED_HEIGHT: i32 = 1_000_000;
 
 /// Upper bound on cells scanned per auto-fit.
