@@ -215,6 +215,10 @@ fn committed_frame_exposes_cell_rects_scroll_pane_and_autofill_handle() {
         .scroll_to_show(&workbook, 60, 60)
         .expect("far target");
     assert!(row > 4 && col > 4);
+    // A target inside a frozen band never moves the origin. The frozen axes
+    // come from the committed frame, so a failed re-read cannot degrade into
+    // "no rows frozen" and scroll a frozen row into the scrolling pane.
+    assert_eq!(session.scroll_to_show(&workbook, 1, 1), None);
 
     // Auto-fit measures the committed sheet with the backend's text metrics.
     let width = session

@@ -137,8 +137,6 @@ const THUMBS_DOWN_FINGER: [(f64, f64); 4] =
 /// a consumer that needs a different star supplies another ratio.
 pub const STAR_INNER: f64 = 0.382;
 
-// The renderer selects the unit-box geometry and applies its rotation through
-// `Placement`; keep the variants in the same order as `Icon`.
 /// Build the shared +x arrow with a clockwise rotation in Y-down space.
 ///
 /// Placement applies the angle to the shared parts. This avoids one static
@@ -249,30 +247,18 @@ pub const THUMBS_DOWN: GlyphDef = GlyphDef {
 };
 
 /// Every built-in glyph variant, for capacity and coverage tests.
+///
+/// Derived from the renderer's single `Icon` list plus the rating-only
+/// `RATING_BAR`, so a definition cannot be added without the capacity checks
+/// below seeing it.
 #[cfg(test)]
-fn all_glyphs() -> [GlyphDef; 20] {
-    [
-        arrow(-std::f64::consts::FRAC_PI_2),
-        arrow(0.0),
-        arrow(std::f64::consts::FRAC_PI_2),
-        arrow(-std::f64::consts::FRAC_PI_4),
-        arrow(std::f64::consts::FRAC_PI_4),
-        CIRCLE,
-        triangle(TriangleStyle::Chevron, 0.0),
-        triangle(TriangleStyle::Chevron, std::f64::consts::PI),
-        triangle(TriangleStyle::Filled, 0.0),
-        triangle(TriangleStyle::Filled, std::f64::consts::PI),
-        FLAT_RECTANGLE,
-        RHOMBUS,
-        FLAG,
-        CHECK,
-        CROSS,
-        EXCLAMATION,
-        STAR,
-        HEART,
-        THUMBS_UP,
-        THUMBS_DOWN,
-    ]
+fn all_glyphs() -> Vec<GlyphDef> {
+    let mut defs: Vec<GlyphDef> = super::cf::ALL_ICONS
+        .into_iter()
+        .map(super::cf::glyph_def)
+        .collect();
+    defs.push(RATING_BAR);
+    defs
 }
 
 #[cfg(test)]
@@ -284,8 +270,7 @@ mod tests {
 
     #[test]
     fn every_glyph_fits_the_placement_buffer() {
-        let all = all_glyphs();
-        for def in all.iter().chain(std::iter::once(&RATING_BAR)) {
+        for def in all_glyphs() {
             for part in def.parts {
                 assert!(
                     part.cmd_count() <= MAX_PART_CMDS,
@@ -298,11 +283,9 @@ mod tests {
 
     #[test]
     fn the_largest_definition_matches_the_published_capacity() {
-        let all = all_glyphs();
-        let largest = all
+        let largest = all_glyphs()
             .iter()
             .flat_map(|def| def.parts.iter())
-            .chain(RATING_BAR.parts.iter())
             .map(GlyphPart::cmd_count)
             .max()
             .expect("at least one glyph");
@@ -314,16 +297,9 @@ mod tests {
 
     #[test]
     fn every_glyph_has_at_least_one_part() {
-        for def in &all_glyphs() {
+        for def in all_glyphs() {
             assert!(!def.parts.is_empty());
         }
-    }
-
-    #[test]
-    fn one_definition_per_icon_variant() {
-        // `Icon` has 20 variants; the renderer's exhaustive match maps
-        // each to one definition here.
-        assert_eq!(all_glyphs().len(), 20);
     }
 
     // D4 rotation-equivalence check: the five arrow variants must be one
