@@ -1,6 +1,7 @@
 //! Generic pane geometry. No worksheet identity or content is stored here.
 use super::{AxisCell, AxisError, CellCoord, sample_axis};
 use crate::{PixelRect, Point, Side};
+use std::rc::Rc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridRange {
@@ -42,7 +43,8 @@ pub struct AxisBand {
     /// `start` is the frozen band's end when one exists. Used to locate the
     /// scrollable pane without re-reading freeze counts.
     pub frozen: bool,
-    pub cells: Vec<AxisCell>,
+    /// Cells this band covers. Every pane on this axis holds this same slice.
+    pub cells: Rc<[AxisCell]>,
 }
 
 /// Sample the frozen band first, then the scrolling band. Both are bounded by
@@ -89,7 +91,7 @@ pub fn sample_bands<E>(
             start: origin,
             extent: used,
             frozen: true,
-            cells,
+            cells: cells.into(),
         });
     }
     if used < pixels && frozen < last {
@@ -110,18 +112,20 @@ pub fn sample_bands<E>(
             start,
             extent: pixels - used,
             frozen: false,
-            cells,
+            cells: cells.into(),
         });
     }
     Ok(bands)
 }
 
+/// One crossing of a row band and a column band. The cell slices are shared
+/// with the bands, so a pane costs no copy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GridPane {
     pub range: GridRange,
     pub clip: PixelRect,
-    pub rows: Vec<AxisCell>,
-    pub columns: Vec<AxisCell>,
+    pub rows: Rc<[AxisCell]>,
+    pub columns: Rc<[AxisCell]>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GridGeometry {
@@ -191,8 +195,8 @@ impl GridGeometry {
                         width: c.extent,
                         height: r.extent,
                     },
-                    rows: r.cells.clone(),
-                    columns: c.cells.clone(),
+                    rows: Rc::clone(&r.cells),
+                    columns: Rc::clone(&c.cells),
                 })
             })
             .filter(|p| p.clip.width > 0 && p.clip.height > 0)
@@ -345,7 +349,7 @@ impl GridGeometry {
 /// First slot whose trailing edge lies within `tolerance` of `pixel`.
 /// Frozen then scrolling, stopping once the edges pass the hot zone.
 fn boundary(bands: &[AxisBand], pixel: i32, tolerance: i32) -> Option<i32> {
-    for cell in bands.iter().flat_map(|band| &band.cells) {
+    for cell in bands.iter().flat_map(|band| band.cells.iter()) {
         let end = cell.start + cell.extent;
         if (end - pixel).abs() <= tolerance {
             return Some(cell.index);

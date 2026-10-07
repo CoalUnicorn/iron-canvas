@@ -89,7 +89,7 @@ pub(super) fn prepare(
     .map_err(|e| axis_error(sheet, first, Axis::Row, e))?;
     let label = rows
         .iter()
-        .flat_map(|b| &b.cells)
+        .flat_map(|b| b.cells.iter())
         .map(|c| c.index)
         .max()
         .unwrap_or(first.row)
@@ -145,8 +145,8 @@ pub(super) fn prepare(
         for pass in &mut passes {
             pass.push_clip(pane.clip);
         }
-        for row in &pane.rows {
-            for col in &pane.columns {
+        for row in pane.rows.iter() {
+            for col in pane.columns.iter() {
                 let cell = CellPlacement {
                     coordinate: CellCoord {
                         row: row.index,
@@ -203,11 +203,11 @@ pub(super) fn prepare(
                     .is_empty();
             // IronCalc stores the border on each perimeter cell. Reuse the
             // records fetched by the ordinary pass, including partial edges.
-            for row in &pane.rows {
+            for row in pane.rows.iter() {
                 if !(range.first.row..=range.last.row).contains(&row.index) {
                     continue;
                 }
-                for col in &pane.columns {
+                for col in pane.columns.iter() {
                     if !(range.first.col..=range.last.col).contains(&col.index) {
                         continue;
                     }
@@ -386,7 +386,7 @@ fn headers(out: &mut SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme)
                 },
             };
             out.push_clip(clip);
-            for cell in &band.cells {
+            for cell in band.cells.iter() {
                 let rect = match axis {
                     Axis::Row => PixelRect {
                         top_left: Point {
