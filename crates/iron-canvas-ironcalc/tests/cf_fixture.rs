@@ -5,11 +5,14 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use iron_canvas_core::scene::{Primitive, RenderBackend};
-use iron_canvas_core::{CanvasTheme, CellCoord};
+use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect, Point};
 use iron_canvas_export::SvgSceneBackend;
-use iron_canvas_ironcalc::{CfDecorationPaint, WorksheetCompiler, WorksheetViewport};
+use iron_canvas_ironcalc::{
+    CellPlacement, CfDecorationPaint, WorksheetCompiler, WorksheetViewport,
+};
 use ironcalc::import::{load_from_xlsx, load_from_xlsx_bytes};
-use ironcalc_base::cf_types::Icon;
+use ironcalc_base::cf_types::{CfRuleInput, Cfvo, Icon};
+use ironcalc_base::types::Color;
 use ironcalc_base::{Model, UserModel};
 
 const FIXTURE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cf_tests.xlsx");
@@ -176,6 +179,94 @@ fn compiler_suppresses_hidden_values_but_keeps_icon_primitives() {
         p,
         Primitive::FillPath { .. } | Primitive::Circle { .. } | Primitive::StrokePath { .. }
     )));
+}
+
+/// The compiled gradient data bar paints the resolved colors: the light shade
+/// at the axis side and the full color at the tip.
+///
+/// Two rules with different colors share one preparation, so the shade memo
+/// must keep them apart.
+#[test]
+fn a_compiled_gradient_bar_uses_the_resolved_shade() {
+    let mut model = load(FIXTURE);
+    for (row, value) in [(2, "5"), (3, "10"), (4, "0")] {
+        model
+            .set_user_input(0, row, 8, value)
+            .expect("write H cell");
+    }
+    for (row, value) in [(1, "5"), (2, "10"), (3, "0")] {
+        model
+            .set_user_input(0, row, 26, value)
+            .expect("write Z cell");
+    }
+    model
+        .add_conditional_formatting(
+            0,
+            "Z1:Z3",
+            CfRuleInput::DataBar {
+                min: Some(Cfvo::Number(0.0)),
+                max: Some(Cfvo::Number(10.0)),
+                positive_color: Color::Rgb("#ff00ff".to_string()),
+                negative_color: Color::Rgb("#ff0000".to_string()),
+                is_gradient: true,
+                show_value: true,
+            },
+        )
+        .expect("add rule");
+    model.evaluate();
+
+    let cell = |row: i32, col: i32, y: i32| {
+        (
+            CellCoord { row, col },
+            PixelRect {
+                top_left: Point { x: 0, y },
+                width: 100,
+                height: 30,
+            },
+        )
+    };
+    let cells = [cell(2, 8, 0), cell(1, 26, 30)];
+    let backend = SvgSceneBackend::new();
+    let prepared = WorksheetCompiler::new()
+        .prepare_cells(
+            &model,
+            0,
+            PixelRect {
+                top_left: Point { x: 0, y: 0 },
+                width: 100,
+                height: 60,
+            },
+            cells.iter().map(|(coordinate, bounds)| CellPlacement {
+                coordinate: *coordinate,
+                bounds: *bounds,
+            }),
+            backend.metrics(),
+            &CanvasTheme::light(),
+        )
+        .expect("cell preparation");
+
+    for (coordinate, bounds) in cells {
+        let bar = decoration(&model, 0, coordinate.row, coordinate.col)
+            .data_bar
+            .expect("a data-bar cell");
+        let gradient = prepared.scene.passes[1]
+            .iter()
+            .find_map(|op| match op {
+                Primitive::Gradient { rect, from, to }
+                    if rect.top() >= bounds.top() && rect.bottom() <= bounds.bottom() =>
+                {
+                    Some((from.to_string(), to.to_string()))
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("a gradient data bar at {coordinate:?}"));
+        let expected = if bar.value >= bar.axis_position {
+            (bar.positive_light.to_string(), bar.positive.to_string())
+        } else {
+            (bar.negative.to_string(), bar.negative_light.to_string())
+        };
+        assert_eq!(gradient, expected, "{coordinate:?}");
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]

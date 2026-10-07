@@ -1,4 +1,5 @@
 //! IronCalc CF placement policy, lowered to generic scene primitives.
+use std::collections::HashMap;
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI};
 use std::rc::Rc;
 
@@ -76,6 +77,18 @@ impl CfDecorationPaint {
     /// positions are the engine's, so a host can read them without
     /// reimplementing the resolution.
     pub fn resolve(deco: &ExtendedStyle, workbook: &UserModel<'_>) -> Self {
+        Self::resolve_memoized(deco, workbook, &mut LightShades::default())
+    }
+
+    /// Resolve with a shade memo.
+    ///
+    /// A preparation resolves many cells, and every data-bar cell of one rule
+    /// shares a color. The memo derives each light shade once.
+    pub(crate) fn resolve_memoized(
+        deco: &ExtendedStyle,
+        workbook: &UserModel<'_>,
+        shades: &mut LightShades,
+    ) -> Self {
         let color = |c: &ironcalc_base::types::Color, fallback: &str| -> Rc<str> {
             let value = workbook.resolve_color(c);
             Rc::from(if value.is_empty() { fallback } else { &value })
@@ -90,8 +103,8 @@ impl CfDecorationPaint {
                 let positive = color(&bar.positive_color, "#638ec6");
                 let negative = color(&bar.negative_color, "#ff0000");
                 CfDataBarPaint {
-                    positive_light: light_color(&positive),
-                    negative_light: light_color(&negative),
+                    positive_light: shades.shade(&positive),
+                    negative_light: shades.shade(&negative),
                     positive,
                     negative,
                     is_gradient: bar.is_gradient,
@@ -219,6 +232,24 @@ const ICON_LEFT_MARGIN: i32 = 3;
 /// How far the gradient's axis-side stop is lightened toward white. Excel's
 /// gradient data bars run the same hue from the tip to the axis.
 const GRADIENT_LIGHTEN: f64 = 0.6;
+
+/// Per-preparation memo for the light shade of a data-bar color.
+///
+/// The shade depends only on the color, so one derivation covers every cell of
+/// a rule.
+#[derive(Default)]
+pub(crate) struct LightShades(HashMap<Rc<str>, Rc<str>>);
+
+impl LightShades {
+    /// The light shade of `color`, derived on first use.
+    fn shade(&mut self, color: &Rc<str>) -> Rc<str> {
+        let shade = self
+            .0
+            .entry(Rc::clone(color))
+            .or_insert_with(|| light_color(color));
+        Rc::clone(shade)
+    }
+}
 
 fn light_color(color: &str) -> Rc<str> {
     let hex = color.trim_start_matches('#');

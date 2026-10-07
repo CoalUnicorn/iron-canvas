@@ -195,6 +195,7 @@ struct Attempt<'w, 'm> {
     links: Vec<CellLinkView>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
     scratch: String,
+    shades: cf::LightShades,
 }
 impl<'w, 'm> Attempt<'w, 'm> {
     fn new(
@@ -228,6 +229,7 @@ impl<'w, 'm> Attempt<'w, 'm> {
             links,
             lines: Vec::new(),
             scratch: String::new(),
+            shades: cf::LightShades::default(),
         })
     }
     fn error(
@@ -305,7 +307,11 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 }),
             );
         }
-        let cf = cf::CfDecorationPaint::resolve(&record.extended, self.workbook);
+        let cf = cf::CfDecorationPaint::resolve_memoized(
+            &record.extended,
+            self.workbook,
+            &mut self.shades,
+        );
         cf.paint(&mut passes[1], rect);
         if !merged {
             // The border pass and the grid pass are two slots of one array.
