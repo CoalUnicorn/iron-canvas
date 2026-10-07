@@ -118,6 +118,8 @@ pub const DARK: CanvasTheme = CanvasTheme {
 
 /// Host-page input shape for a `CanvasTheme`. Each field is `Option<String>`;
 /// any field left `None` falls back to `CanvasTheme::light()` when converted.
+/// Set the fields you need directly, or use
+/// [`ThemeVariables::with_primary`].
 ///
 /// Bridges IronCalc upstream's CSS-var contract (`--palette-sheet-*`,
 /// `--palette-primary-main`, etc.) to the renderer's resolved palette.
@@ -158,76 +160,6 @@ impl ThemeVariables {
         Self::default()
     }
 
-    pub fn with_grid_color(mut self, v: impl Into<String>) -> Self {
-        self.grid_color = Some(v.into());
-        self
-    }
-
-    pub fn with_grid_separator_color(mut self, v: impl Into<String>) -> Self {
-        self.grid_separator_color = Some(v.into());
-        self
-    }
-
-    pub fn with_header_bg(mut self, v: impl Into<String>) -> Self {
-        self.header_bg = Some(v.into());
-        self
-    }
-
-    pub fn with_header_border_color(mut self, v: impl Into<String>) -> Self {
-        self.header_border_color = Some(v.into());
-        self
-    }
-
-    pub fn with_header_text_color(mut self, v: impl Into<String>) -> Self {
-        self.header_text_color = Some(v.into());
-        self
-    }
-
-    pub fn with_header_selected_bg(mut self, v: impl Into<String>) -> Self {
-        self.header_selected_bg = Some(v.into());
-        self
-    }
-
-    pub fn with_header_selected_color(mut self, v: impl Into<String>) -> Self {
-        self.header_selected_color = Some(v.into());
-        self
-    }
-
-    pub fn with_default_text_color(mut self, v: impl Into<String>) -> Self {
-        self.default_text_color = Some(v.into());
-        self
-    }
-
-    pub fn with_error_text_color(mut self, v: impl Into<String>) -> Self {
-        self.error_text_color = Some(v.into());
-        self
-    }
-
-    pub fn with_selection_color(mut self, v: impl Into<String>) -> Self {
-        self.selection_color = Some(v.into());
-        self
-    }
-
-    pub fn with_cell_bg(mut self, v: impl Into<String>) -> Self {
-        self.cell_bg = Some(v.into());
-        self
-    }
-
-    pub fn with_pointing(mut self, v: impl Into<String>) -> Self {
-        self.pointing = Some(v.into());
-        self
-    }
-
-    pub fn with_selection_fill(mut self, v: impl Into<String>) -> Self {
-        self.selection_fill = Some(v.into());
-        self
-    }
-
-    pub fn with_pointing_tint(mut self, v: impl Into<String>) -> Self {
-        self.pointing_tint = Some(v.into());
-        self
-    }
-
     /// Set the four fields IronCalc upstream derives from `--palette-primary-main`
     /// in one call: `selection_color`, `pointing`, `selection_fill` (12% alpha),
     /// `pointing_tint` (8% alpha). Mirrors `from_css_reader`'s primary-main path
@@ -236,8 +168,8 @@ impl ThemeVariables {
     /// Non-hex inputs (`rgb(...)`, named colors) propagate verbatim to
     /// `selection_color` / `pointing` but leave the alpha tints unset, matching
     /// the reader's `malformed_primary_main_skips_alpha_derivation` behavior.
-    /// Granular setters (`with_selection_fill`, `with_pointing_tint`) called
-    /// afterwards still override.
+    /// Set `selection_fill` or `pointing_tint` after this call to override
+    /// them.
     pub fn with_primary(mut self, v: impl Into<String>) -> Self {
         let v = v.into();
         self.selection_fill = derive_rgba(&v, 0.12);

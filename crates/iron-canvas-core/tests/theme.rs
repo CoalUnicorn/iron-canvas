@@ -65,7 +65,11 @@ fn empty_variables_via_builder_round_trip_to_light() {
 
 #[test]
 fn one_field_override_changes_only_that_field() {
-    let theme = ThemeVariables::new().with_header_bg("#123456").build();
+    let theme = ThemeVariables {
+        header_bg: Some("#123456".into()),
+        ..Default::default()
+    }
+    .build();
     let light = CanvasTheme::light();
     assert_eq!(
         theme.header_bg,
@@ -89,7 +93,11 @@ fn one_field_override_changes_only_that_field() {
 
 #[test]
 fn override_field_is_owned_cow_unspecified_stays_borrowed() {
-    let theme = ThemeVariables::new().with_grid_color("#abcdef").build();
+    let theme = ThemeVariables {
+        grid_color: Some("#abcdef".into()),
+        ..Default::default()
+    }
+    .build();
     assert!(matches!(theme.grid_color, Cow::Owned(_)));
     assert!(matches!(theme.cell_bg, Cow::Borrowed(_)));
 }
@@ -108,10 +116,12 @@ fn override_field_is_owned_cow_unspecified_stays_borrowed() {
 
 #[test]
 fn theme_variables_build_is_deterministic() {
-    let vars = ThemeVariables::new()
-        .with_grid_color("#abcdef")
-        .with_header_bg("#fedcba")
-        .with_default_text_color("#222222");
+    let vars = ThemeVariables {
+        grid_color: Some("#abcdef".into()),
+        header_bg: Some("#fedcba".into()),
+        default_text_color: Some("#222222".into()),
+        ..Default::default()
+    };
     let first: CanvasTheme = vars.clone().into();
     let second: CanvasTheme = vars.into();
     assert_eq!(first, second);
@@ -213,10 +223,11 @@ fn with_primary_skips_alpha_for_non_hex_input() {
 }
 
 #[test]
-fn explicit_with_selection_fill_overrides_with_primary() {
-    let v = ThemeVariables::new()
-        .with_primary("#1E6FD9")
-        .with_selection_fill("rgba(0,0,0,0.5)");
+fn explicit_selection_fill_overrides_with_primary() {
+    let v = ThemeVariables {
+        selection_fill: Some("rgba(0,0,0,0.5)".into()),
+        ..ThemeVariables::new().with_primary("#1E6FD9")
+    };
     assert_eq!(v.selection_fill.as_deref(), Some("rgba(0,0,0,0.5)"));
     // pointing_tint untouched by the override.
     assert_eq!(v.pointing_tint.as_deref(), Some("rgba(30,111,217,0.08)"));
@@ -269,22 +280,23 @@ fn full_upstream_var_set_round_trips_through_canvas_theme() {
 
 #[test]
 fn full_override_replaces_every_field() {
-    let theme = ThemeVariables::new()
-        .with_grid_color("#aaa111")
-        .with_grid_separator_color("#aaa222")
-        .with_header_bg("#aaa333")
-        .with_header_border_color("#aaa444")
-        .with_header_text_color("#aaa555")
-        .with_header_selected_bg("#aaa666")
-        .with_header_selected_color("#aaa777")
-        .with_default_text_color("#aaa888")
-        .with_error_text_color("#aaa999")
-        .with_selection_color("#bbb111")
-        .with_cell_bg("#bbb222")
-        .with_pointing("#bbb333")
-        .with_selection_fill("rgba(1,2,3,0.10)")
-        .with_pointing_tint("rgba(4,5,6,0.10)")
-        .build();
+    let theme = ThemeVariables {
+        grid_color: Some("#aaa111".into()),
+        grid_separator_color: Some("#aaa222".into()),
+        header_bg: Some("#aaa333".into()),
+        header_border_color: Some("#aaa444".into()),
+        header_text_color: Some("#aaa555".into()),
+        header_selected_bg: Some("#aaa666".into()),
+        header_selected_color: Some("#aaa777".into()),
+        default_text_color: Some("#aaa888".into()),
+        error_text_color: Some("#aaa999".into()),
+        selection_color: Some("#bbb111".into()),
+        cell_bg: Some("#bbb222".into()),
+        pointing: Some("#bbb333".into()),
+        selection_fill: Some("rgba(1,2,3,0.10)".into()),
+        pointing_tint: Some("rgba(4,5,6,0.10)".into()),
+    }
+    .build();
     let light = CanvasTheme::light();
     assert_ne!(theme, light);
     assert!(matches!(theme.grid_color, Cow::Owned(_)));
