@@ -1,24 +1,20 @@
-# React example
+# React grid example
 
-A small Vite + React host for the `iron-canvas` WebAssembly renderer. The
-workbook and spreadsheet rendering stay in Rust; React owns the canvas element
-and reports its size and device-pixel ratio.
+This example hosts the `iron-canvas` renderer in React, with a worksheet
+tab bar and browser-side `.xlsx` loading.
 
 ## Run
 
-Install Node.js 18 or newer, Rust with the `wasm32-unknown-unknown` target, and
-[`wasm-pack`](https://rustwasm.github.io/wasm-pack/installer/).
+Install the WebAssembly target and `wasm-pack`, then run:
 
 ```sh
-rustup target add wasm32-unknown-unknown
+cd examples/react
 npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite. `npm run dev` builds the Rust WebAssembly
-package before starting the development server. `npm run build` builds the
-WebAssembly package, type-checks the React app, and produces `dist/`.
+The demo opens with a small sample workbook. Use **Load workbook** to choose an
+`.xlsx` file; visible worksheets are shown as tabs along the bottom. Scroll over
+the grid to browse a sheet, and use `+` to add a worksheet.
 
-The renderer's Canvas2D backend has fixed metrics for a session. The example
-creates a new session when the `ResizeObserver` reports a new canvas size or
-device-pixel ratio.
+`npm run build` builds the WASM wrapper before producing the Vite bundle.

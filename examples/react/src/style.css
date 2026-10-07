@@ -2,8 +2,8 @@
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  color: #202a36;
-  background: #f5f7fa;
+  color: #202124;
+  background: #f5f6f7;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -12,138 +12,240 @@
   box-sizing: border-box;
 }
 
-body {
-  min-width: 320px;
-  min-height: 100vh;
-  margin: 0;
-}
-
-.page {
-  width: min(1080px, calc(100% - 40px));
-  margin: 0 auto;
-  padding: 64px 0 40px;
-}
-
-.page-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 24px;
-  margin-bottom: 32px;
-}
-
-.eyebrow {
-  margin: 0 0 10px;
-  color: #627286;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
-
-h1 {
-  margin: 0;
-  color: #162333;
-  font-size: clamp(32px, 5vw, 48px);
-  letter-spacing: -0.045em;
-}
-
-.subtitle {
-  margin: 10px 0 0;
-  color: #617084;
-  font-size: 16px;
-}
-
-.badge {
-  flex: 0 0 auto;
-  margin-top: 22px;
-  padding: 8px 12px;
-  border: 1px solid #d7e0e9;
-  border-radius: 999px;
-  background: #fff;
-  color: #49627b;
-  font-size: 12px;
-  font-weight: 650;
-}
-
-.workbook {
-  overflow: hidden;
-  border: 1px solid #d7dee7;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 16px 42px rgb(34 52 73 / 8%);
-}
-
-.sheet-toolbar {
-  display: flex;
-  min-height: 48px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 18px;
-  border-bottom: 1px solid #e3e8ee;
-}
-
-.sheet-tab {
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-  border-bottom: 2px solid #32845b;
-  color: #263647;
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.sheet-note {
-  color: #7b8896;
-  font-size: 12px;
-}
-
-.canvas-wrap {
-  position: relative;
+html,
+body,
+#root {
   width: 100%;
-  height: min(62vh, 480px);
-  min-height: 300px;
+  height: 100%;
+  min-width: 320px;
+  margin: 0;
+}
+
+button {
+  font: inherit;
+}
+
+.app-shell {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
   background: #fff;
 }
 
-.sheet-canvas {
+.app-header {
+  z-index: 1;
+  display: flex;
+  min-height: 58px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 0 18px;
+  border-bottom: 1px solid #dfe2e5;
+  background: #fff;
+}
+
+.brand,
+.header-actions {
+  display: flex;
+  align-items: center;
+}
+
+.brand {
+  min-width: 0;
+  gap: 10px;
+}
+
+.brand-mark {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 8px;
+  background: #eaf3fb;
+  color: #2774a7;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.brand p {
+  margin: 1px 0 0;
+  color: #687078;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.header-actions {
+  min-width: 0;
+  gap: 14px;
+}
+
+.workbook-name {
+  overflow: hidden;
+  color: #596168;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-input {
+  display: none;
+}
+
+.load-button {
+  min-height: 34px;
+  padding: 0 13px;
+  border: 1px solid #2477ad;
+  border-radius: 5px;
+  background: #277fb8;
+  color: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.load-button:hover:not(:disabled) {
+  background: #206b9d;
+}
+
+.load-button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.error-banner {
+  z-index: 1;
+  padding: 8px 18px;
+  border-bottom: 1px solid #f2b8b5;
+  background: #fff4f3;
+  color: #9e2a22;
+  font-size: 12px;
+}
+
+.grid-region {
+  position: relative;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  background: #fff;
+}
+
+.grid-region canvas {
   display: block;
   width: 100%;
   height: 100%;
 }
 
-.canvas-message {
+.sheet-bar {
+  display: flex;
+  min-height: 42px;
+  align-items: stretch;
+  gap: 8px;
+  padding: 0 12px;
+  border-top: 1px solid #dfe2e5;
+  background: #f5f6f7;
+}
+
+.add-sheet {
+  width: 30px;
+  flex: 0 0 30px;
+  border: 0;
+  background: transparent;
+  color: #4b535a;
+  cursor: pointer;
+  font-size: 21px;
+  font-weight: 300;
+  line-height: 1;
+}
+
+.add-sheet:hover:not(:disabled) {
+  color: #151719;
+}
+
+.add-sheet:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.sheet-tabs {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: stretch;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.sheet-tab {
+  position: relative;
+  min-width: 90px;
+  max-width: 180px;
+  padding: 0 16px;
+  overflow: hidden;
+  border: 0;
+  border-right: 1px solid transparent;
+  background: transparent;
+  color: #454b51;
+  cursor: pointer;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-tab:hover {
+  background: #eceef0;
+}
+
+.sheet-tab.selected {
+  border-right-color: #e0e2e4;
+  border-left: 1px solid #e0e2e4;
+  background: #fff;
+  color: #202124;
+  font-weight: 600;
+}
+
+.sheet-tab.selected::before {
   position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  margin: 0;
-  padding: 24px;
-  color: #617084;
-  font-size: 14px;
-  text-align: center;
-  pointer-events: none;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 2px;
+  background: #ed7d31;
+  content: "";
 }
 
-.footnote {
-  margin: 18px 2px 0;
-  color: #718092;
-  font-size: 13px;
-  line-height: 1.6;
+.sheet-count {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding-left: 8px;
+  color: #727980;
+  font-size: 11px;
 }
 
-@media (max-width: 560px) {
-  .page {
-    width: calc(100% - 24px);
-    padding-top: 36px;
+@media (max-width: 600px) {
+  .app-header {
+    min-height: 54px;
+    padding: 0 10px;
   }
 
-  .page-header {
-    margin-bottom: 22px;
-  }
-
-  .sheet-note {
+  .brand p,
+  .workbook-name,
+  .sheet-count {
     display: none;
+  }
+
+  .header-actions {
+    gap: 8px;
   }
 }
