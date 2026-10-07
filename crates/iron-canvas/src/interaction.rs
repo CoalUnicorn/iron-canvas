@@ -149,19 +149,20 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// Minimal `(row, column)` origin that brings `(row, column)` fully inside
     /// the committed scroll pane, or `None` when it already is (or the target
     /// lies in a frozen band). Reads model extents, so it accounts for hidden
-    /// rows/columns and overrides the pane arithmetic cannot see.
+    /// rows/columns and overrides the pane arithmetic cannot see; the frozen
+    /// axes come from the committed frame the geometry was built from.
     pub fn scroll_to_show(
         &self,
         workbook: &UserModel<'_>,
         row: i32,
         column: i32,
     ) -> Option<(i32, i32)> {
-        let sheet = self.committed_frame()?.sheet;
+        let frame = self.committed_frame()?;
+        let sheet = frame.sheet;
+        let geometry = frame.worksheet.geometry.as_deref()?;
+        let frozen = frame.worksheet.frozen;
         let origin = self.scroll_origin()?;
-        let geometry = self.committed_geometry()?;
         let pane = geometry.scroll_pane_rect();
-        let frozen_rows = workbook.get_frozen_rows_count(sheet).unwrap_or(0);
-        let frozen_cols = workbook.get_frozen_columns_count(sheet).unwrap_or(0);
         let height = |id| {
             workbook
                 .get_row_height(sheet, id)
@@ -174,8 +175,8 @@ impl<B: RenderBackend> CanvasSession<B> {
                 .ok()
                 .map(|w| w.round() as i32)
         };
-        let top = origin_showing(row, origin.row, frozen_rows, pane.height, height)?;
-        let left = origin_showing(column, origin.col, frozen_cols, pane.width, width)?;
+        let top = origin_showing(row, origin.row, frozen.rows, pane.height, height)?;
+        let left = origin_showing(column, origin.col, frozen.cols, pane.width, width)?;
         ((top, left) != (origin.row, origin.col)).then_some((top, left))
     }
     /// Widest formatted value across `col` over `[first_row, last_row]`, plus

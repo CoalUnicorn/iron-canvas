@@ -49,8 +49,10 @@ pub struct CfDataBarPaint {
 pub struct CfRatingPaint {
     pub style: Icon,
     pub color: Rc<str>,
-    pub count: u8,
-    pub max: u8,
+    /// Rating points the engine selected (`1..=max`).
+    pub count: u32,
+    /// Rating scale maximum (3, 4, or 5 for the built-in sets).
+    pub max: u32,
     /// When false, the painted cell value is hidden.
     pub show_value: bool,
 }
@@ -101,8 +103,8 @@ impl CfDecorationPaint {
             rating: deco.rating.as_ref().map(|rating| CfRatingPaint {
                 style: rating.icon.clone(),
                 color: color(&rating.color, "#000000"),
-                count: rating.count.min(255) as u8,
-                max: rating.max.min(255) as u8,
+                count: rating.count,
+                max: rating.max,
                 show_value: rating.show_value,
             }),
         }
@@ -135,19 +137,25 @@ impl CfDecorationPaint {
         if count == 0 {
             0
         } else {
-            (offset + count * size).min(rect.width)
+            offset
+                .saturating_add(count.saturating_mul(size))
+                .min(rect.width)
         }
     }
 
+    /// Glyph slots the decoration occupies.
+    ///
+    /// Saturating rather than wrapping: the engine's counts arrive as `u32`
+    /// and must not overflow the pixel math below.
     fn glyph_count(&self) -> i32 {
-        i32::from(self.icon.is_some())
-            + self
-                .rating
-                .as_ref()
-                .map_or(0, |rating| match &rating.style {
-                    Icon::Circle => i32::from(rating.max > 0),
-                    _ => i32::from(rating.count),
-                })
+        let rating = self
+            .rating
+            .as_ref()
+            .map_or(0, |rating| match &rating.style {
+                Icon::Circle => i32::from(rating.max > 0),
+                _ => count_as_i32(rating.count),
+            });
+        i32::from(self.icon.is_some()).saturating_add(rating)
     }
 
     /// Paint every present decoration over the already-filled cell `rect`,
@@ -163,7 +171,8 @@ impl CfDecorationPaint {
             return;
         };
         let inner = rect.inset(CF_INSET, CF_INSET);
-        let needs_clip = left + self.glyph_count() * size > inner.right();
+        let needs_clip =
+            left.saturating_add(self.glyph_count().saturating_mul(size)) > inner.right();
         if needs_clip {
             painter.push_clip(inner);
         }
@@ -182,8 +191,8 @@ impl CfDecorationPaint {
                 }
                 glyph => {
                     let def = rating_def(glyph.clone());
-                    for i in 0..i32::from(rating.count) {
-                        let glyph_left = left + i * size;
+                    for i in 0..count_as_i32(rating.count) {
+                        let glyph_left = left.saturating_add(i.saturating_mul(size));
                         if glyph_left >= inner.right() {
                             break;
                         }
@@ -233,6 +242,14 @@ fn lighten(rgb: [u8; 3], amount: f64) -> [u8; 3] {
             .round()
             .clamp(0.0, 255.0) as u8
     })
+}
+
+/// An engine rating count as `i32`, saturating instead of wrapping.
+///
+/// The counts are small in practice; this exists so an out-of-contract value
+/// cannot overflow the pixel arithmetic that places glyphs.
+fn count_as_i32(count: u32) -> i32 {
+    i32::try_from(count).unwrap_or(i32::MAX)
 }
 
 /// The icon/rating slot inside `rect`: `(left, top, size)` in pixels, or
@@ -314,7 +331,10 @@ fn paint_data_bar(painter: &SceneBuilder, rect: PixelRect, bar: &CfDataBarPaint)
 /// The exhaustive `Icon` dispatch lives here: it selects a definition
 /// from [`shape::cf`]. Icon geometry is backend-neutral vector work: no font,
 /// no glyph asset, no browser-only API.
-fn glyph_def(glyph: Icon) -> GlyphDef {
+///
+/// Crate-visible so the glyph-geometry capacity tests can drive every
+/// definition from the shared icon list instead of keeping a second one.
+pub(crate) fn glyph_def(glyph: Icon) -> GlyphDef {
     match glyph {
         Icon::ArrowUp => cf::arrow(-FRAC_PI_2),
         Icon::ArrowRight => cf::arrow(0.0),
@@ -349,11 +369,42 @@ fn rating_def(glyph: Icon) -> GlyphDef {
     }
 }
 
+/// Every `Icon` variant the renderer lowers.
+///
+/// One list, shared by `every_engine_icon_lowers_to_geometry` here and the
+/// glyph-geometry capacity tests in `compiler::glyphs`, so the two cannot
+/// drift apart. Coverage of a new engine variant is enforced by the
+/// exhaustive match in [`glyph_def`]; this list is what makes the geometry
+/// checks see it.
+#[cfg(test)]
+pub(crate) const ALL_ICONS: [Icon; 20] = [
+    Icon::ArrowUp,
+    Icon::ArrowRight,
+    Icon::ArrowDown,
+    Icon::ArrowAngleUp,
+    Icon::ArrowAngleDown,
+    Icon::Circle,
+    Icon::TriangleUp,
+    Icon::TriangleDown,
+    Icon::TriangleUpFilled,
+    Icon::TriangleDownFilled,
+    Icon::FlatRectangle,
+    Icon::Rhombus,
+    Icon::Flag,
+    Icon::Check,
+    Icon::Cross,
+    Icon::Exclamation,
+    Icon::Star,
+    Icon::Heart,
+    Icon::ThumbsUp,
+    Icon::ThumbsDown,
+];
+
 /// Map the engine's quarter-circle threshold count to a filled fraction.
 ///
 /// IronCalc counts passed thresholds from zero. Counts zero and one select the
 /// lowest, empty-circle tier. Later tiers add one quarter, up to a full circle.
-fn circle_rating_fraction(count: u8, max: u8) -> Option<f64> {
+fn circle_rating_fraction(count: u32, max: u32) -> Option<f64> {
     if max == 0 {
         return None;
     }
@@ -548,28 +599,7 @@ mod tests {
     }
     #[test]
     fn every_engine_icon_lowers_to_geometry() {
-        for icon in [
-            Icon::ArrowUp,
-            Icon::ArrowRight,
-            Icon::ArrowDown,
-            Icon::ArrowAngleUp,
-            Icon::ArrowAngleDown,
-            Icon::Circle,
-            Icon::TriangleUp,
-            Icon::TriangleDown,
-            Icon::TriangleUpFilled,
-            Icon::TriangleDownFilled,
-            Icon::FlatRectangle,
-            Icon::Rhombus,
-            Icon::Flag,
-            Icon::Check,
-            Icon::Cross,
-            Icon::Exclamation,
-            Icon::Star,
-            Icon::Heart,
-            Icon::ThumbsUp,
-            Icon::ThumbsDown,
-        ] {
+        for icon in ALL_ICONS {
             let mut ext = extended();
             ext.icon = Some(CfIcon {
                 icon,
