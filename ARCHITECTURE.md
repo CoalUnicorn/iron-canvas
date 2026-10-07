@@ -303,6 +303,7 @@ validation and limits.
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |
 | `iron-canvas/src/retained.rs` | scroll-blit planning |
 | `iron-canvas/examples/` | host tools: `linux_xlsx_viewer_gtk4` (GTK4) and the `export_workbook` Clap CLI |
+| `bindings/wasm/` | `wasm-bindgen` adapter used by browser hosts |
 | `examples/react/` | minimal React + WebAssembly browser host |
 | `iron-canvas-canvas2d/src/` | `CanvasPainter`, `Canvas2dSceneBackend`, metric memo, theme bridge |
 | `iron-canvas-native/src/` | Cairo/Pango painter and `NativeSceneBackend` |

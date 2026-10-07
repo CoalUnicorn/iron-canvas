@@ -1,11 +1,3 @@
-<<<<<<< HEAD
 node_modules/
 dist/
-wasm/target/
-src/wasm/pkg/
-||||||| 99e2898
-=======
-/node_modules
-/dist
-/wasm/pkg
->>>>>>> react-example-land
+wasm/pkg/
