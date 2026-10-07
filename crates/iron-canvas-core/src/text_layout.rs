@@ -5,7 +5,7 @@
 //! inputs and backend text metrics; it has no workbook or cell-style concepts.
 
 use crate::geometry::pixel_rect::PixelRect;
-use crate::painter::{TextAlign, TextMetrics};
+use crate::painter::{TextAlign, TextMetrics, approx_text_width};
 
 /// Single-line spacing relative to the font's em size.
 pub const LINE_HEIGHT_FACTOR: f64 = 1.2;
@@ -50,6 +50,8 @@ pub struct TextLayoutOptions {
     pub horizontal_padding: f64,
     pub vertical_inset: f64,
     pub line_height_factor: f64,
+    /// Advance per character when the metrics backend reports no width, in
+    /// logical pixels: the font size [`approx_text_width`] takes.
     pub approx_char_width: f64,
 }
 
@@ -188,12 +190,13 @@ fn layout_lines_into(
 ) {
     // Keep each line's String allocation when a later cell has fewer lines.
     let mut idx = 0usize;
+    // Fall back to the estimate the paint backends use, so wrap matches paint.
     let measure = |s: &str| -> f64 {
         let width = metrics.measure_text_width(s, font_css);
         if width > 0.0 {
             width
         } else {
-            s.len() as f64 * approx_char_w
+            approx_text_width(approx_char_w, s)
         }
     };
 

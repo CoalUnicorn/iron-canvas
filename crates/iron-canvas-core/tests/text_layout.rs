@@ -1,5 +1,8 @@
-use iron_canvas_core::painter::{TextAlign, TextMetrics};
-use iron_canvas_core::{PixelRect, Point, TextLayoutOptions, TextVerticalAlign, layout_text_into};
+use iron_canvas_core::painter::{TextAlign, TextMetrics, approx_text_width};
+use iron_canvas_core::{
+    PixelRect, Point, TextLayoutOptions, TextVerticalAlign, layout_text_into,
+    layout_text_lines_into,
+};
 
 struct FixedMetrics;
 
@@ -7,6 +10,44 @@ impl TextMetrics for FixedMetrics {
     fn measure_text_width(&self, text: &str, _font_css: &str) -> f64 {
         text.chars().count() as f64 * 8.0
     }
+}
+
+/// A backend with no host text metric at all, so every width falls back to the
+/// estimate.
+struct MeasurelessMetrics;
+
+impl TextMetrics for MeasurelessMetrics {
+    fn measure_text_width(&self, _text: &str, _font_css: &str) -> f64 {
+        0.0
+    }
+}
+
+/// A backend with no width must fall back to the estimate `approx_text_width`
+/// gives. `"aa éé"` is 5 characters and 7 bytes: the estimate is 60px and fits
+/// the 70px available, a byte count gives 84px and wraps.
+#[test]
+fn measureless_fallback_uses_the_shared_character_estimate() {
+    let mut lines = Vec::new();
+    layout_text_lines_into(
+        &MeasurelessMetrics,
+        "12px sans-serif",
+        "aa éé",
+        true,
+        70.0,
+        12.0,
+        &mut lines,
+        &mut String::new(),
+    );
+
+    assert_eq!(
+        lines
+            .iter()
+            .map(|line| line.text.as_str())
+            .collect::<Vec<_>>(),
+        ["aa éé"],
+        "a byte-based fallback would wrap this line"
+    );
+    assert_eq!(lines[0].width, approx_text_width(12.0, "aa éé"));
 }
 
 #[test]
