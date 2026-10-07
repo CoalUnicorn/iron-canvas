@@ -180,20 +180,18 @@ fn outline(out: &SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, d
     if rect.width <= 1 || rect.height <= 1 {
         return;
     }
+    // Half-pixel inset so a 1px stroke lands on the pixel grid.
     let x = f64::from(rect.left()) + 0.5;
     let y = f64::from(rect.top()) + 0.5;
     let right = f64::from(rect.right()) - 0.5;
     let bottom = f64::from(rect.bottom()) - 0.5;
     let mut cmds = Vec::with_capacity(8);
-    for (visible, a, b) in [
-        (edges[0], PointF::new(x, bottom), PointF::new(x, y)),
-        (edges[1], PointF::new(x, y), PointF::new(right, y)),
-        (edges[2], PointF::new(right, y), PointF::new(right, bottom)),
-        (edges[3], PointF::new(right, bottom), PointF::new(x, bottom)),
-    ] {
-        if visible {
-            cmds.extend([PathCmd::Move(a), PathCmd::Line(b)]);
+    for side in Side::ALL {
+        if !edges[side.index()] {
+            continue;
         }
+        let (from, to) = side_segment(side, x, y, right, bottom);
+        cmds.extend([PathCmd::Move(from), PathCmd::Line(to)]);
     }
     out.stroke_path(
         &Path::new(&cmds),
@@ -210,4 +208,17 @@ fn outline(out: &SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, d
             },
         },
     );
+}
+
+/// Endpoints of one side of the half-pixel-inset outline rectangle.
+///
+/// [`Side::ALL`] walks the four sides as a ring, so the emitted subpaths keep
+/// the order the sides were painted in before they were named.
+fn side_segment(side: Side, x: f64, y: f64, right: f64, bottom: f64) -> (PointF, PointF) {
+    match side {
+        Side::Left => (PointF::new(x, bottom), PointF::new(x, y)),
+        Side::Top => (PointF::new(x, y), PointF::new(right, y)),
+        Side::Right => (PointF::new(right, y), PointF::new(right, bottom)),
+        Side::Bottom => (PointF::new(right, bottom), PointF::new(x, bottom)),
+    }
 }

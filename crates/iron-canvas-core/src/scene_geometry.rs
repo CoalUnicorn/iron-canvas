@@ -3,7 +3,7 @@ mod composition;
 pub use composition::*;
 
 /// One grid coordinate. Both axes are 1-based; no sheet identity is stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CellCoord {
     pub row: i32,
     pub col: i32,

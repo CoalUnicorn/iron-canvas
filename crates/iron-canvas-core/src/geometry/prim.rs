@@ -197,7 +197,30 @@ impl Side {
     /// The order is observable where differently styled strokes overlap at a
     /// corner, so border paint must preserve it.
     pub const ALL: [Self; 4] = [Self::Left, Self::Top, Self::Right, Self::Bottom];
+
+    /// Position of this side in a four-entry, side-keyed array, in
+    /// [`Side::ALL`] order.
+    ///
+    /// Every side-keyed array index goes through this, so the array layout has
+    /// exactly one definition and no call site spells a position.
+    pub const fn index(self) -> usize {
+        match self {
+            Side::Left => 0,
+            Side::Top => 1,
+            Side::Right => 2,
+            Side::Bottom => 3,
+        }
+    }
 }
+
+// `index` and `ALL` are two views of one order; a one-sided edit would index
+// the wrong slot in every side-keyed array, so pin them together.
+const _: () = {
+    assert!(matches!(Side::ALL[Side::Left.index()], Side::Left));
+    assert!(matches!(Side::ALL[Side::Top.index()], Side::Top));
+    assert!(matches!(Side::ALL[Side::Right.index()], Side::Right));
+    assert!(matches!(Side::ALL[Side::Bottom.index()], Side::Bottom));
+};
 
 /// One of the four corners of a rectangle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

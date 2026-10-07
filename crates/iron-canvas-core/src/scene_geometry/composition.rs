@@ -1,6 +1,6 @@
 //! Generic pane geometry. No worksheet identity or content is stored here.
 use super::{AxisCell, AxisError, CellCoord, sample_axis};
-use crate::{PixelRect, Point};
+use crate::{PixelRect, Point, Side};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GridRange {
@@ -149,8 +149,21 @@ pub struct RangeFragment {
     pub pane: usize,
     pub range: GridRange,
     pub rect: PixelRect,
-    /// True range edges: left, top, right, bottom. Clipped edges are false.
+    /// Which of `rect`'s sides are true range edges, keyed by
+    /// [`Side::index`]. A clipped edge is false.
     pub edges: [bool; 4],
+}
+
+/// Build a [`Side`]-keyed edge array from a per-side predicate.
+///
+/// The one place the array layout is written; every reader indexes through
+/// [`Side::index`].
+fn side_flags(mut edge: impl FnMut(Side) -> bool) -> [bool; 4] {
+    let mut edges = [false; 4];
+    for side in Side::ALL {
+        edges[side.index()] = edge(side);
+    }
+    edges
 }
 impl GridGeometry {
     pub fn new(
@@ -251,12 +264,20 @@ impl GridGeometry {
                         },
                     },
                     rect,
-                    edges: [
-                        range.first.col >= p.range.first.col && rect.left() == c1.start,
-                        range.first.row >= p.range.first.row && rect.top() == r1.start,
-                        range.last.col <= p.range.last.col && rect.right() == c2.start + c2.extent,
-                        range.last.row <= p.range.last.row && rect.bottom() == r2.start + r2.extent,
-                    ],
+                    edges: side_flags(|side| match side {
+                        Side::Left => {
+                            range.first.col >= p.range.first.col && rect.left() == c1.start
+                        }
+                        Side::Top => range.first.row >= p.range.first.row && rect.top() == r1.start,
+                        Side::Right => {
+                            range.last.col <= p.range.last.col
+                                && rect.right() == c2.start + c2.extent
+                        }
+                        Side::Bottom => {
+                            range.last.row <= p.range.last.row
+                                && rect.bottom() == r2.start + r2.extent
+                        }
+                    }),
                 })
             })
             .collect()
@@ -407,8 +428,11 @@ mod tests {
             last: CellCoord { row: 9, col: 9 },
         });
         assert_eq!(fragments.len(), 4);
-        assert_eq!(fragments[0].edges, [true, true, false, false]);
-        assert_eq!(fragments[3].edges, [false, false, false, false]);
+        assert_eq!(
+            fragments[0].edges,
+            side_flags(|side| matches!(side, Side::Left | Side::Top))
+        );
+        assert_eq!(fragments[3].edges, [false; 4]);
         assert_eq!(
             geometry.hit_test(Point { x: 137, y: 113 }),
             Some(GridHit::Cell(CellCoord { row: 8, col: 8 }))
