@@ -4,7 +4,7 @@
 
 # iron-canvas architecture
 
-`iron-canvas` renders spreadsheets read-only from `ironcalc_base::UserModel`.
+`iron-canvas` renders spreadsheets read only from `ironcalc_base::UserModel`.
 The worksheet is lowered once into an owned, backend-independent **resolved
 grid scene**; every backend draws that scene, and the session publishes pixels
 and query metadata together. There is no legacy model-trait adapter and no
