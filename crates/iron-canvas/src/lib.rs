@@ -7,7 +7,9 @@
 mod interaction;
 mod overlays;
 mod retained;
-pub use interaction::{AUTOFILL_HANDLE_PX, DisplayCell, HostIntent, PointerAction};
+pub use interaction::{
+    AUTOFILL_HANDLE_PX, DisplayCell, FormulaRefHit, HostIntent, PointerAction, RefCorner, RefZone,
+};
 pub use iron_canvas_core::scene::retained::RenderStrategy;
 use iron_canvas_core::scene::retained::{SceneFingerprint, SceneUpdate};
 pub use overlays::{FormulaOverlay, OverlayState};
@@ -290,6 +292,10 @@ impl<B: RenderBackend> CanvasSession<B> {
 
     pub fn committed_frame(&self) -> Option<&PreparedWorksheetFrame> {
         self.committed.as_ref().map(|committed| &committed.frame)
+    }
+
+    pub(crate) fn committed_request(&self) -> Option<&RenderRequest> {
+        self.committed.as_ref().map(|committed| &committed.request)
     }
 
     pub fn backend(&self) -> &B {

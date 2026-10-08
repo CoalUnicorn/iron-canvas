@@ -1,7 +1,8 @@
 //! Host intents derived only from the committed worksheet snapshot.
 use crate::{CanvasSession, RenderBackend};
 use iron_canvas_core::{
-    CellCoord, PixelRect, Point,
+    CellCoord, PixelRect, Point, Side,
+    geometry::constants::REF_HANDLE_HIT_PAD_PX,
     scene_geometry::{GridGeometry, GridHit, GridRange, GridResize, RangeFragment, contains},
 };
 use iron_canvas_ironcalc::{
@@ -24,6 +25,34 @@ pub struct DisplayCell<'a> {
     pub fragment: RangeFragment,
     pub link: Option<&'a CellLinkView>,
 }
+
+/// Which part of a formula-reference rectangle the pointer hits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefZone {
+    Body,
+    Edge(Side),
+    Corner(RefCorner),
+}
+
+/// One of the four corners of a formula-reference rectangle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefCorner {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+/// A draggable formula reference under the pointer in the committed frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FormulaRefHit {
+    /// Index in the committed request's `formula_references` list.
+    pub ref_idx: usize,
+    pub zone: RefZone,
+    /// Cell under the pointer. The host uses this to keep the drag offset.
+    pub grab_cell: CellCoord,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerAction {
     Select,
@@ -61,6 +90,39 @@ impl<B: RenderBackend> CanvasSession<B> {
             .as_ref()?
             .hit_test(point)
     }
+
+    /// Resolve a draggable formula-reference overlay against the committed
+    /// frame. Only indices in `draggable_ref_indices` can produce a hit.
+    /// Other sheets, headers, and off-grid points do not produce a hit.
+    pub fn formula_ref_hit_test(
+        &self,
+        point: Point,
+        draggable_ref_indices: &[usize],
+    ) -> Option<FormulaRefHit> {
+        let frame = self.committed_frame()?;
+        let geometry = frame.worksheet.geometry.as_deref()?;
+        let GridHit::Cell(grab_cell) = geometry.hit_test(point)? else {
+            return None;
+        };
+        let request = self.committed_request()?;
+
+        for (ref_idx, reference) in request.overlays.formula_references.iter().enumerate().rev() {
+            if !draggable_ref_indices.contains(&ref_idx) || reference.sheet != frame.sheet {
+                continue;
+            }
+            for fragment in geometry.fragments(reference.range).iter().rev() {
+                if let Some(zone) = classify_ref_zone(*fragment, point) {
+                    return Some(FormulaRefHit {
+                        ref_idx,
+                        zone,
+                        grab_cell,
+                    });
+                }
+            }
+        }
+        None
+    }
+
     pub fn display_cell_at(&self, point: Point) -> Option<DisplayCell<'_>> {
         let worksheet = &self.committed_frame()?.worksheet;
         let geometry = worksheet.geometry.as_ref()?;
@@ -307,6 +369,52 @@ impl<B: RenderBackend> CanvasSession<B> {
         }
     }
 }
+fn classify_ref_zone(fragment: RangeFragment, point: Point) -> Option<RefZone> {
+    let rect = fragment.rect;
+    let x = i64::from(point.x);
+    let y = i64::from(point.y);
+    let left = i64::from(rect.left());
+    let top = i64::from(rect.top());
+    let right = i64::from(rect.right());
+    let bottom = i64::from(rect.bottom());
+    let pad = i64::from(REF_HANDLE_HIT_PAD_PX);
+
+    if x < left - pad || x > right + pad || y < top - pad || y > bottom + pad {
+        return None;
+    }
+
+    let near_left = fragment.edges[Side::Left.index()] && (x - left).abs() <= pad;
+    let near_right = fragment.edges[Side::Right.index()] && (x - right).abs() <= pad;
+    let near_top = fragment.edges[Side::Top.index()] && (y - top).abs() <= pad;
+    let near_bottom = fragment.edges[Side::Bottom.index()] && (y - bottom).abs() <= pad;
+
+    let corner = match (near_top, near_right, near_bottom, near_left) {
+        (true, _, _, true) => Some(RefCorner::TopLeft),
+        (true, true, _, _) => Some(RefCorner::TopRight),
+        (_, _, true, true) => Some(RefCorner::BottomLeft),
+        (_, true, true, _) => Some(RefCorner::BottomRight),
+        _ => None,
+    };
+    if let Some(corner) = corner {
+        return Some(RefZone::Corner(corner));
+    }
+
+    if near_top {
+        return Some(RefZone::Edge(Side::Top));
+    }
+    if near_bottom {
+        return Some(RefZone::Edge(Side::Bottom));
+    }
+    if near_left {
+        return Some(RefZone::Edge(Side::Left));
+    }
+    if near_right {
+        return Some(RefZone::Edge(Side::Right));
+    }
+
+    Some(RefZone::Body)
+}
+
 pub(crate) fn autofill_handle_rect(geometry: &GridGeometry, range: GridRange) -> Option<PixelRect> {
     let corner = geometry.autofill_handle(range)?;
     Some(PixelRect {

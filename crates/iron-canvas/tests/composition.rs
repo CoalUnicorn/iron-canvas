@@ -1,9 +1,9 @@
 use iron_canvas::{
-    CanvasSession, FormulaOverlay, HostIntent, OverlayState, PointerAction, RenderBackend,
-    RenderRequest, RevisionToken,
+    CanvasSession, FormulaOverlay, FormulaRefHit, HostIntent, OverlayState, PointerAction,
+    RefCorner, RefZone, RenderBackend, RenderRequest, RevisionToken,
 };
 use iron_canvas_core::{
-    CanvasTheme, CellCoord, Point,
+    CanvasTheme, CellCoord, Point, Side,
     painter::TextMetrics,
     scene::{GridScene, Primitive},
     scene_geometry::{GridHit, GridRange},
@@ -286,6 +286,104 @@ fn pdf_and_svg_stage_the_identical_prepared_scene_with_overlays() {
     assert!(session.backend().document().unwrap().contains("#3358B7"));
     assert!(!session.backend().document().unwrap().contains("#F0C419"));
 }
+
+#[test]
+fn formula_ref_hit_test_classifies_zones_and_skips_static_overlays() {
+    let w = workbook();
+    let mut request = request();
+    let reference = range(5, 5, 8, 8);
+    request.overlays.formula_references = vec![
+        FormulaOverlay {
+            sheet: 0,
+            range: reference,
+            color_index: 0,
+        },
+        FormulaOverlay {
+            sheet: 0,
+            range: reference,
+            color_index: 1,
+        },
+    ];
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+    let draggable_refs = [0];
+
+    let rect = session.visible_fragments(reference)[0].rect;
+    let body = Point {
+        x: rect.left() + rect.width / 2,
+        y: rect.top() + rect.height / 2,
+    };
+    let Some(GridHit::Cell(grab_cell)) = session.hit_test(body) else {
+        panic!("formula reference body must cover a grid cell");
+    };
+    assert_eq!(
+        session.formula_ref_hit_test(body, &draggable_refs),
+        Some(FormulaRefHit {
+            ref_idx: 0,
+            zone: RefZone::Body,
+            grab_cell,
+        })
+    );
+
+    let top_left = Point {
+        x: rect.left(),
+        y: rect.top(),
+    };
+    assert!(matches!(
+        session.formula_ref_hit_test(top_left, &draggable_refs),
+        Some(FormulaRefHit {
+            ref_idx: 0,
+            zone: RefZone::Corner(RefCorner::TopLeft),
+            ..
+        })
+    ));
+
+    let right_edge = Point {
+        x: rect.right(),
+        y: rect.top() + rect.height / 2,
+    };
+    assert!(matches!(
+        session.formula_ref_hit_test(right_edge, &draggable_refs),
+        Some(FormulaRefHit {
+            ref_idx: 0,
+            zone: RefZone::Edge(Side::Right),
+            ..
+        })
+    ));
+}
+
+#[test]
+fn formula_ref_hit_test_treats_frozen_pane_edges_as_body() {
+    let w = workbook();
+    let mut request = request();
+    let reference = range(1, 5, 5, 8);
+    request.overlays.formula_references = vec![FormulaOverlay {
+        sheet: 0,
+        range: reference,
+        color_index: 0,
+    }];
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+
+    let fragments = session.visible_fragments(reference);
+    let frozen_fragment = fragments
+        .iter()
+        .find(|fragment| !fragment.edges[Side::Bottom.index()])
+        .expect("reference crosses the frozen-row boundary");
+    let point = Point {
+        x: frozen_fragment.rect.left() + frozen_fragment.rect.width / 2,
+        y: frozen_fragment.rect.bottom() - 1,
+    };
+
+    assert!(matches!(
+        session.formula_ref_hit_test(point, &[0]),
+        Some(FormulaRefHit {
+            zone: RefZone::Body,
+            ..
+        })
+    ));
+}
+
 #[test]
 fn dragged_range_overlay_covers_both_corners_and_draws_its_handle() {
     let w = workbook();
