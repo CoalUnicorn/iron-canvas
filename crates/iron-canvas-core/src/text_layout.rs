@@ -137,14 +137,15 @@ fn position_lines(
 ) {
     let right = rect.right();
     let bottom = rect.bottom();
-    let center = rect.center();
+    let center_x = f64::from(rect.left()) + f64::from(rect.width) / 2.0;
+    let center_y = f64::from(rect.top()) + f64::from(rect.height) / 2.0;
     let line_count = lines.len() as f64;
     for (i, line) in lines.iter_mut().enumerate() {
         let i_f = i as f64;
         let tw = line.width;
         line.center_x = match h_align {
             TextAlign::End => f64::from(right) - horizontal_padding - tw / 2.0,
-            TextAlign::Center => f64::from(center.x),
+            TextAlign::Center => center_x,
             TextAlign::Start => f64::from(rect.left()) + horizontal_padding + tw / 2.0,
         };
         line.center_y = match v_align {
@@ -152,9 +153,7 @@ fn position_lines(
                 f64::from(bottom) - size_px / 2.0 - vertical_inset
                     + (i_f - line_count + 1.0) * line_height
             }
-            TextVerticalAlign::Center => {
-                f64::from(center.y) + (i_f + (1.0 - line_count) / 2.0) * line_height
-            }
+            TextVerticalAlign::Center => center_y + (i_f + (1.0 - line_count) / 2.0) * line_height,
             TextVerticalAlign::Top => {
                 f64::from(rect.top()) + size_px / 2.0 + vertical_inset + i_f * line_height
             }
@@ -330,8 +329,8 @@ mod tests {
     #[test]
     fn positions_centered_text_from_resolved_alignment() {
         let mut layout = options(TextVerticalAlign::Center);
-        layout.bounds.top_left = crate::geometry::prim::Point { x: 10, y: 20 };
-        layout.bounds.width = 100;
+        layout.bounds.width = 101;
+        layout.bounds.height = 61;
         layout.clip = layout.bounds;
         layout.horizontal = TextAlign::Center;
         let mut lines = Vec::new();
@@ -344,8 +343,8 @@ mod tests {
             &mut String::new(),
         );
 
-        assert_eq!(lines[0].center_x, 60.0);
-        assert_eq!(lines[0].center_y, 50.0);
+        assert_eq!(lines[0].center_x, 50.5);
+        assert_eq!(lines[0].center_y, 30.5);
     }
 
     #[test]
