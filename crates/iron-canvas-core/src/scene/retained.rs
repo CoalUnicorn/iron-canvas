@@ -367,7 +367,11 @@ pub(super) fn coverage(op: &Primitive, clip: PixelRect, delta: Point) -> Option<
     let bottom = (bounds.3 + f64::from(delta.y))
         .ceil()
         .min(f64::from(clip.bottom())) as i32;
-    (left < right && top < bottom).then_some(PixelRect {
+    if left >= right || top >= bottom {
+        return None;
+    }
+
+    Some(PixelRect {
         top_left: Point { x: left, y: top },
         width: right - left,
         height: bottom - top,
@@ -393,6 +397,23 @@ mod tests {
             passes: vec![Rc::from([op])],
         }
     }
+    #[test]
+    fn coverage_returns_none_for_far_offscreen_circle() {
+        let clip = PixelRect {
+            top_left: Point::default(),
+            width: 100,
+            height: 96,
+        };
+        let circle = Primitive::Circle {
+            cx: 1.0e20,
+            cy: 10.0,
+            radius: 1.0,
+            color: Rc::from("red"),
+        };
+
+        assert_eq!(coverage(&circle, clip, Point::default()), None);
+    }
+
     #[test]
     fn paint_inputs_change_fingerprints() {
         let rect = PixelRect {
