@@ -58,8 +58,10 @@ pub struct TextLayoutOptions {
 /// Lay out text into reusable storage and report whether clipping is required.
 ///
 /// Newline-separated paragraphs are always retained. When wrapping is enabled,
-/// words are moved to the next line as needed; an individual word wider than
-/// the available width remains intact and is clipped by the caller.
+/// words are moved to the next line as needed while source whitespace is
+/// preserved. Non-breaking spaces remain attached to their words. An
+/// individual word wider than the available width remains intact and is clipped
+/// by the caller.
 ///
 /// Existing line strings are overwritten in place so callers can reuse their
 /// allocations across cells and frames. `scratch` is likewise reused while
@@ -177,6 +179,10 @@ fn lines_escape_clip(lines: &[TextLine], usable_w: f64, rect: PixelRect, line_he
     })
 }
 
+fn is_breakable_whitespace(ch: char) -> bool {
+    ch.is_whitespace() && !matches!(ch, '\u{00a0}' | '\u{2007}' | '\u{202f}')
+}
+
 #[allow(clippy::too_many_arguments)]
 fn layout_lines_into(
     metrics: &dyn TextMetrics,
@@ -209,27 +215,21 @@ fn layout_lines_into(
         return;
     }
 
-    let space_w = measure(" ");
     for raw_line in text.split('\n') {
         wrap_buf.clear();
         let mut current_w = 0.0;
-        for word in raw_line.split_whitespace() {
-            let word_w = measure(word);
-            let separator_w = if wrap_buf.is_empty() { 0.0 } else { space_w };
-            let tentative_w = current_w + separator_w + word_w;
-
-            if tentative_w > usable_w && !wrap_buf.is_empty() {
+        for piece in raw_line.split_inclusive(is_breakable_whitespace) {
+            let piece_w = measure(piece);
+            if !piece.chars().all(is_breakable_whitespace)
+                && current_w + piece_w > usable_w
+                && !wrap_buf.is_empty()
+            {
                 write_line(out, &mut idx, wrap_buf, current_w);
                 wrap_buf.clear();
-                wrap_buf.push_str(word);
-                current_w = word_w;
-            } else {
-                if !wrap_buf.is_empty() {
-                    wrap_buf.push(' ');
-                }
-                wrap_buf.push_str(word);
-                current_w = tentative_w;
+                current_w = 0.0;
             }
+            wrap_buf.push_str(piece);
+            current_w += piece_w;
         }
         write_line(out, &mut idx, wrap_buf, current_w);
     }
@@ -306,9 +306,49 @@ mod tests {
                 .iter()
                 .map(|line| line.text.as_str())
                 .collect::<Vec<_>>(),
-            ["one", "two", "three"]
+            ["one ", "two", "three"]
         );
         assert!(!clipped);
+    }
+
+    #[test]
+    fn wrapping_preserves_leading_repeated_and_trailing_whitespace() {
+        let mut lines = Vec::new();
+        layout_text_lines_into(
+            &FixedMetrics,
+            "12px sans-serif",
+            "  a  b  ",
+            true,
+            52.0,
+            12.0,
+            &mut lines,
+            &mut String::new(),
+        );
+
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            ["  a  ", "b  "]
+        );
+    }
+
+    #[test]
+    fn wrapping_keeps_nonbreaking_spaces_within_words() {
+        let mut lines = Vec::new();
+        layout_text_lines_into(
+            &FixedMetrics,
+            "12px sans-serif",
+            "a\u{00a0}b",
+            true,
+            20.0,
+            12.0,
+            &mut lines,
+            &mut String::new(),
+        );
+
+        assert_eq!(lines[0].text, "a\u{00a0}b");
     }
 
     #[test]

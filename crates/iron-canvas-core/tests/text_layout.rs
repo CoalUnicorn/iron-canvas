@@ -83,8 +83,8 @@ fn public_layout_api_wraps_and_positions_resolved_text() {
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>(),
-        ["one", "two"]
+        ["one ", "two"]
     );
-    assert_eq!(lines[0].center_x, 26.0);
+    assert_eq!(lines[0].center_x, 30.0);
     assert!(!needs_clip);
 }
