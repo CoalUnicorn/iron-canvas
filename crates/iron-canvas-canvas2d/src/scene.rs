@@ -196,6 +196,7 @@ impl RenderBackend for Canvas2dSceneBackend {
             return Ok(());
         }
         // No resize occurs here. A failed copy leaves the previous pixels intact.
+        self.context.set_global_composite_operation("copy")?;
         self.context
             .draw_image_with_html_canvas_element(&staged, 0.0, 0.0)?;
         self.spare = Some(staged);

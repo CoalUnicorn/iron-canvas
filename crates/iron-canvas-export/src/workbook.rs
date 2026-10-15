@@ -132,6 +132,7 @@ impl Error for WorkbookExportError {
 /// `sheet` accepts a case-insensitive worksheet name or a zero-based index.
 /// When omitted, the first worksheet is exported. The output extension chooses
 /// SVG or PDF; the workbook's frozen rows and columns remain visible.
+/// Formulas are evaluated after import. Export does not use cached XLSX results.
 ///
 /// Returns the zero-based index of the worksheet exported.
 pub fn export_xlsx(
@@ -490,8 +491,8 @@ fn parse_cell(input: &str) -> Result<CellCoord, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "svg")]
     use ironcalc::export::save_to_xlsx;
-    use ironcalc_base::UserModel;
 
     #[test]
     fn parses_single_cells_and_ranges_case_insensitively() {
@@ -531,6 +532,7 @@ mod tests {
         assert!(output_format(Path::new("out.png")).is_err());
     }
 
+    #[cfg(feature = "svg")]
     #[test]
     fn xlsx_export_recalculates_stale_formula_results() {
         let stem = format!("iron-canvas-formula-export-{}", std::process::id());

@@ -47,6 +47,38 @@ pub struct AxisBand {
     pub cells: Rc<[AxisCell]>,
 }
 
+/// Retain hidden indices at the viewport edge without adding another visible cell.
+fn sample_band_axis<E>(
+    first: i32,
+    last: i32,
+    pixels: i32,
+    extent: &mut impl FnMut(i32) -> Result<f64, E>,
+) -> Result<(Vec<AxisCell>, i32), AxisError<E>> {
+    let mut last_index = first - 1;
+    let cells = sample_axis(first, last, pixels, |index| {
+        let value = extent(index)?;
+        last_index = index;
+        Ok(value)
+    })?;
+    if cells
+        .last()
+        .is_some_and(|cell| cell.start + cell.extent == pixels)
+    {
+        while last_index < last {
+            let index = last_index + 1;
+            let value = extent(index).map_err(|error| AxisError::Read { index, error })?;
+            if !value.is_finite() || value < 0.0 || value.round() > f64::from(i32::MAX) {
+                return Err(AxisError::Extent { index });
+            }
+            if value.round() > 0.0 {
+                break;
+            }
+            last_index = index;
+        }
+    }
+    Ok((cells, last_index))
+}
+
 /// Sample the frozen band first, then the scrolling band. Both are bounded by
 /// the viewport. A frozen band can consume the entire drawable extent.
 pub fn sample_bands<E>(
@@ -70,7 +102,7 @@ pub fn sample_bands<E>(
     let mut bands = Vec::new();
     let mut used = 0;
     if frozen > 0 && pixels > 0 {
-        let mut cells = sample_axis(1, frozen, pixels, &mut extent)?;
+        let (mut cells, last_index) = sample_band_axis(1, frozen, pixels, &mut extent)?;
         used = cells.last().map_or(0, |c| c.start + c.extent).min(pixels);
         for cell in &mut cells {
             cell.start = cell
@@ -83,11 +115,7 @@ pub fn sample_bands<E>(
         }
         bands.push(AxisBand {
             first_index: 1,
-            last_index: if used < pixels {
-                frozen
-            } else {
-                cells.last().map_or(frozen, |c| c.index)
-            },
+            last_index,
             start: origin,
             extent: used,
             frozen: true,
@@ -97,7 +125,8 @@ pub fn sample_bands<E>(
     if used < pixels && frozen < last {
         let start = origin + used;
         let scroll_extent = pixels - used;
-        let mut cells = sample_axis(first.max(frozen + 1), last, scroll_extent, extent)?;
+        let (mut cells, last_index) =
+            sample_band_axis(first.max(frozen + 1), last, scroll_extent, &mut extent)?;
         for cell in &mut cells {
             cell.start = cell
                 .start
@@ -107,16 +136,9 @@ pub fn sample_bands<E>(
                 .checked_add(cell.extent)
                 .ok_or(AxisError::Extent { index: cell.index })?;
         }
-        let sampled_extent = cells
-            .last()
-            .map_or(0, |cell| cell.start + cell.extent - start);
         bands.push(AxisBand {
             first_index: first.max(frozen + 1),
-            last_index: if sampled_extent < scroll_extent {
-                last
-            } else {
-                cells.last().map_or(last, |c| c.index)
-            },
+            last_index,
             start,
             extent: scroll_extent,
             frozen: false,
@@ -485,6 +507,50 @@ mod tests {
         assert_eq!(fragments[0].rect.width, 40);
         assert_eq!(fragments[0].rect.height, 40);
         assert_eq!(fragments[0].edges, [true; 4]);
+    }
+
+    #[test]
+    fn hidden_boundary_cells_keep_edges_and_handle_at_exact_viewport_extent() {
+        for frozen in [0, 4] {
+            let sample = || {
+                sample_bands(1, 4, frozen, 0, 40, |index| {
+                    Ok::<_, ()>(if index >= 3 { 0.0 } else { 20.0 })
+                })
+                .unwrap()
+            };
+            let geometry = GridGeometry::new(
+                PixelRect {
+                    top_left: Point::default(),
+                    width: 40,
+                    height: 40,
+                },
+                Point::default(),
+                sample(),
+                sample(),
+            );
+            let range = GridRange {
+                first: CellCoord { row: 1, col: 1 },
+                last: CellCoord { row: 4, col: 4 },
+            };
+            assert_eq!(geometry.fragments(range)[0].edges, [true; 4]);
+            assert_eq!(
+                geometry.autofill_handle(range),
+                Some(Point { x: 40, y: 40 })
+            );
+        }
+    }
+
+    #[test]
+    fn exact_viewport_boundary_stops_before_the_next_visible_cell() {
+        let mut reads = Vec::new();
+        let bands = sample_bands(1, 10, 0, 0, 40, |index| {
+            reads.push(index);
+            Ok::<_, ()>(if (3..=4).contains(&index) { 0.0 } else { 20.0 })
+        })
+        .unwrap();
+        assert_eq!(reads, [1, 2, 3, 4, 5]);
+        assert_eq!(bands[0].last_index, 4);
+        assert_eq!(bands[0].cells.len(), 2);
     }
 
     #[test]

@@ -201,6 +201,43 @@ fn zero_width_placement_at_max_coordinate_is_ignored_safely() {
 }
 
 #[test]
+fn one_pixel_placement_at_max_coordinate_is_ignored_safely() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    for bounds in [
+        PixelRect {
+            top_left: Point {
+                x: i32::MAX - 1,
+                y: 0,
+            },
+            width: 1,
+            height: 30,
+        },
+        PixelRect {
+            top_left: Point {
+                x: 0,
+                y: i32::MAX - 1,
+            },
+            width: 100,
+            height: 1,
+        },
+    ] {
+        WorksheetCompiler::new()
+            .prepare_cells(
+                &workbook,
+                0,
+                rect(),
+                [CellPlacement {
+                    coordinate: CellCoord { row: 1, col: 1 },
+                    bounds,
+                }],
+                &Metrics,
+                &CanvasTheme::light(),
+            )
+            .unwrap();
+    }
+}
+
+#[test]
 fn explicit_sheet_does_not_change_selection() {
     let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
     workbook.new_sheet().unwrap();

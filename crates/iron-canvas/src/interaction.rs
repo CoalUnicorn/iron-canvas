@@ -353,6 +353,8 @@ impl<B: RenderBackend> CanvasSession<B> {
             extend: action == PointerAction::ExtendSelection,
         })
     }
+    /// Build an intent for the exact header divider at `point`.
+    /// For a tolerance-based drag, retain the target from `resize_target`.
     pub fn resize_intent(&self, point: Point, pixels: i32) -> Option<HostIntent> {
         if pixels < 0 {
             return None;

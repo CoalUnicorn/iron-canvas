@@ -348,7 +348,7 @@ mod tests {
     #[test]
     fn fit_height_uses_full_width_of_merged_anchor() {
         let mut workbook = UserModel::new_empty("fit", "en", "UTC", "en").unwrap();
-        workbook.set_user_input(0, 1, 1, "twelvechars").unwrap();
+        workbook.set_user_input(0, 1, 1, "one two three").unwrap();
         workbook.set_columns_width(0, 1, 3, 60.0).unwrap();
         workbook
             .update_range_style(
@@ -362,6 +362,9 @@ mod tests {
                 "alignment.wrap_text",
                 "true",
             )
+            .unwrap();
+        let unmerged_height = fit_height(&workbook, &FixedWidth, 0, 1, 1, 3)
+            .unwrap()
             .unwrap();
         workbook
             .merge_cells(&Area {
@@ -381,6 +384,7 @@ mod tests {
             f64::from(style.font.sz) * LINE_HEIGHT_FACTOR,
         )
         .max(MIN_EXTENT);
+        assert!(unmerged_height > one_line_height);
         assert_eq!(height, Some(one_line_height));
     }
 }

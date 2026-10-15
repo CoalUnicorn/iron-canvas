@@ -5,6 +5,36 @@ Workspace: current checkout at `b898b430d5251982079374bbd2f1a854caada60b` when t
 Scope: Rust crates under `crates/`, with direct inspection of the workbook export boundary.  
 Review posture: findings only; no production code was changed for this review.
 
+## Fix status: 2026-10-15
+
+The findings below describe the original checkout. Branch `crate-review` fixes
+findings 1–14 against local `main` (`6cbaf30`). The branch review started at
+`a0157b0`. Additional review fixes are recorded in the branch history.
+
+| Finding | Current result | Evidence |
+| --- | --- | --- |
+| 1 | Fixed | Disjoint extreme rectangle regression in `geometry/pixel_rect.rs` |
+| 2 | Fixed | Offscreen circle coverage regression in `scene/retained.rs` |
+| 3 | Fixed | Source spaces and non-breaking spaces are retained by core layout tests |
+| 4 | Fixed | Hidden terminal cells retain selection edges, including exact viewport and frozen boundaries |
+| 5 | Fixed | Hidden terminal cells use the visible selection corner; fully hidden ranges have no handle |
+| 6 | Fixed | Odd rectangle dimensions retain fractional text centers |
+| 7 | Fixed | Column auto-fit includes the compiler's CF icon reservation |
+| 8 | Fixed | Row auto-fit sums the merged anchor's column widths |
+| 9 | Fixed | Compiler test preserves explicit black text on the dark theme |
+| 10 | Fixed | Column auto-fit measures newline-separated lines individually |
+| 11 | Fixed | Zero and tiny placements at maximum coordinates do not overflow, including CF decorations |
+| 12 | Fixed | Row and column divider intents match their resize targets |
+| 13 | Fixed | Commit restores `copy`; browser pixels prove replacement after context changes and size reset |
+| 14 | Fixed | SVG and PDF fixture exports evaluate absent numeric, absent untyped, and stale formula caches |
+| 15–18 | Open | Export encoding, arc, font-style, and whitespace work remains |
+
+Workspace tests, clippy, formatting, the Wasm workspace check, export feature
+tests, and all seven browser tests passed during this review. These results
+apply to the reviewed source and fixtures. P1 remains open for findings 15–18.
+See [the branch review](docs/reviews/2026-10-15-crate-review-base.md) and
+[the PR draft](PR-draft-fix-base.md).
+
 ## Findings
 
 ### `iron-canvas-core`

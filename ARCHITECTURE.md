@@ -103,6 +103,8 @@ depends on `iron-canvas` except the host.
 - `text_layout` — generic wrapping and placement: `layout_text_into`,
   `layout_text_lines_into`, `TextLayoutOptions`, `TextLine`,
   `TextVerticalAlign`, `CELL_PADDING`, `LINE_HEIGHT_FACTOR`, `TEXT_V_INSET_PX`.
+  Wrapping retains source whitespace and keeps non-breaking spaces in words.
+  Text centers use fractional coordinates for odd rectangle dimensions.
 - `theme::{CanvasTheme, ThemeVariables, FORMULA_REF_COLORS, FORMULA_REF_TINTS}`
   — grid paint defaults. The host derives `CanvasTheme` from CSS variables.
 
@@ -160,6 +162,9 @@ pub struct PreparedWorksheet {
   used-range span with the backend's `TextMetrics`, using the same font-CSS
   rule as the text pass so measured equals painted. The span is capped at
   20,000 cells; an empty span is `Ok(None)`, a failed read is `Err`.
+  Column fitting measures each explicit line and includes CF icon space.
+  Row fitting uses the full column span of a merged anchor.
+  `AutoFitError::RowExtent` and `MergedCells` report the added read failures.
 
 ## Rendering session
 
@@ -213,6 +218,11 @@ row, col)`, `autofill_handle`/`autofill_handle_rect`, `fit_column_width`,
 
 `HostIntent` (`Select`, `ActivateLink`, `ResizeRow`, `ResizeColumn`) is a
 request; only the host applies writes.
+`resize_intent` expects an exact header divider. A drag with a hit tolerance
+retains the target returned by `resize_target`.
+Sampled bands retain hidden indices at their visible boundary, including when
+visible cells exactly fill the viewport. This preserves selection edges and
+the autofill corner without giving hidden cells a hit rectangle.
 
 ## Overlays
 
@@ -243,6 +253,8 @@ its staging surface only after successful presentation. `CanvasPainter` draws
 primitives; text metrics are memoized (`measure_cache`); `theme_from_element`
 reads the CSS-var palette into a `CanvasTheme`. Fixed size and scale per
 instance.
+`commit_frame` restores the target's `copy` composite mode before publication.
+Transparent staged pixels replace the old pixels.
 
 ### Native (`iron-canvas-native`)
 
@@ -259,9 +271,10 @@ its Pango width cache is bounded and clears on `invalidate_metrics`.
 same scene (`svg::SvgPainter`, `pdf::PdfPainter`, `pdf::PdfDocument`).
 `common/` holds shared color, escaping, and metrics helpers. PDF keeps the
 font and opaque-color limits; the scene backends do not read the workbook.
-`workbook::export_xlsx` loads the workbook, resolves the sheet and cell range,
+`workbook::export_xlsx` loads and evaluates the workbook, resolves the sheet and cell range,
 uses `WorksheetCompiler` to prepare a scene, then writes it through the
 selected scene backend.
+This API exports evaluated formulas. It does not preserve cached XLSX results.
 
 ## Host integration
 
@@ -277,7 +290,7 @@ committed frame through the session's query surface.
 The migration is recorded milestone by milestone; each review states its
 validation and limits.
 
-- M0 baseline — [`docs/m0-baseline.md`](docs/m0-baseline.md).
+- M0 baseline — `docs/m0-baseline.md` is absent from this checkout.
 - M1 scene path — [review](docs/reviews/2026-10-04-m1-grid-core.md).
 - M2 worksheet composition — [review](docs/reviews/2026-10-05-m2-worksheet-composition.md).
 - M3 measured reuse — [review and measurements](docs/reviews/2026-10-05-m3-measured-optimizations.md).
