@@ -10,8 +10,9 @@
 //! Font CSS is built with the same rule as [`crate::compiler`]'s text pass,
 //! so measured widths match painted widths.
 
+use crate::compiler::CfDecorationPaint;
 use iron_canvas_core::{
-    PixelRect,
+    PixelRect, Point,
     painter::{TextAlign, TextMetrics},
     text_layout::{
         CELL_PADDING, LINE_HEIGHT_FACTOR, TEXT_V_INSET_PX, TextLayoutOptions, TextLine,
@@ -41,6 +42,8 @@ pub enum AutoFitError {
     Sheet,
     /// A column width could not be read as a valid slot extent.
     ColumnExtent,
+    /// A row height could not be read as a valid slot extent.
+    RowExtent,
     /// A formatted cell value could not be read.
     CellValue,
     /// A non-empty cell's style could not be read.
@@ -52,6 +55,7 @@ impl std::fmt::Display for AutoFitError {
         let message = match self {
             Self::Sheet => "no sheet is committed to measure",
             Self::ColumnExtent => "a column width could not be read as a valid extent",
+            Self::RowExtent => "a row height could not be read as a valid extent",
             Self::CellValue => "a formatted cell value could not be read",
             Self::CellStyle => "a cell style could not be read",
         };
@@ -104,11 +108,28 @@ pub fn fit_width(
         if text.is_empty() {
             continue;
         }
-        let style = workbook
+        let extended = workbook
             .get_extended_cell_style(sheet, row, col)
-            .map_err(|_| AutoFitError::CellStyle)?
-            .style;
-        let width = metrics.measure_text_width(&text, &font_css(&style));
+            .map_err(|_| AutoFitError::CellStyle)?;
+        let reserved_left = if extended.icon.is_some() || extended.rating.is_some() {
+            let height = workbook
+                .get_row_height(sheet, row)
+                .map_err(|_| AutoFitError::RowExtent)?;
+            if !height.is_finite() || height < 0.0 || height.round() > f64::from(i32::MAX) {
+                return Err(AutoFitError::RowExtent);
+            }
+            let rect = PixelRect {
+                top_left: Point::default(),
+                // Do not let the current column width clip the needed reservation.
+                width: i32::MAX,
+                height: height.round() as i32,
+            };
+            CfDecorationPaint::resolve(&extended, workbook).reserved_left(rect)
+        } else {
+            0
+        };
+        let width = metrics.measure_text_width(&text, &font_css(&extended.style))
+            + f64::from(reserved_left);
         if width > max {
             max = width;
         }
@@ -194,6 +215,8 @@ fn line_block_height(line_count: usize, size_px: f64, line_height: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ironcalc_base::cf_types::{CfRuleInput, Cfvo, Icon, IconThreshold};
+    use ironcalc_base::types::Color;
 
     struct FixedWidth;
     impl TextMetrics for FixedWidth {
@@ -216,6 +239,62 @@ mod tests {
         assert_eq!(width, Some(60.0 + FIT_PADDING));
         // An empty span has nothing to fit to.
         assert_eq!(fit_width(&workbook, &FixedWidth, 0, 5, 1, 3).unwrap(), None);
+    }
+
+    #[test]
+    fn fit_width_includes_visible_conditional_formatting_icon_space() {
+        let mut workbook = UserModel::new_empty("fit", "en", "UTC", "en").unwrap();
+        workbook.set_user_input(0, 1, 1, "1234").unwrap();
+        workbook.set_rows_height(0, 1, 1, 26.0).unwrap();
+        workbook
+            .add_conditional_formatting(
+                0,
+                "A1:A1",
+                CfRuleInput::IconSet {
+                    thresholds: vec![
+                        IconThreshold {
+                            icon: Icon::ArrowDown,
+                            cfvo: Cfvo::Min,
+                            color: Color::Rgb("#e43400".into()),
+                            is_strict: false,
+                        },
+                        IconThreshold {
+                            icon: Icon::ArrowRight,
+                            cfvo: Cfvo::Percent(33.0),
+                            color: Color::Rgb("#ffeb84".into()),
+                            is_strict: false,
+                        },
+                        IconThreshold {
+                            icon: Icon::ArrowUp,
+                            cfvo: Cfvo::Percent(67.0),
+                            color: Color::Rgb("#84cb1f".into()),
+                            is_strict: false,
+                        },
+                    ],
+                    show_value: true,
+                },
+            )
+            .unwrap();
+
+        let extended = workbook.get_extended_cell_style(0, 1, 1).unwrap();
+        assert!(extended.icon.is_some(), "the test cell must have a CF icon");
+        let height = workbook.get_row_height(0, 1).unwrap().round() as i32;
+        let rect = PixelRect {
+            top_left: Point::default(),
+            width: i32::MAX,
+            height,
+        };
+        let icon_space = CfDecorationPaint::resolve(&extended, &workbook).reserved_left(rect);
+        assert!(icon_space > 0, "the test icon must reserve text space");
+        let value = workbook.get_formatted_cell_value(0, 1, 1).unwrap();
+        let expected = FixedWidth.measure_text_width(&value, &font_css(&extended.style))
+            + f64::from(icon_space)
+            + FIT_PADDING;
+
+        assert_eq!(
+            fit_width(&workbook, &FixedWidth, 0, 1, 1, 1).unwrap(),
+            Some(expected)
+        );
     }
 
     #[test]
