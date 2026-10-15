@@ -32,6 +32,15 @@ use crate::pdf::doc::stream::ContentStream;
 /// `4/3 * (sqrt(2) - 1)`.
 const CIRCLE_KAPPA: f64 = 0.552_284_749_8;
 
+fn pdf_font_resource(font_css: &str) -> &'static str {
+    match crate::common::font::bold_italic(font_css) {
+        (false, false) => "F1",
+        (true, false) => "F2",
+        (false, true) => "F3",
+        (true, true) => "F4",
+    }
+}
+
 pub struct PdfPainter {
     body: Rc<RefCell<ContentStream>>,
     pub(super) width: u32,
@@ -454,6 +463,7 @@ impl Painter for PdfPainter {
     ) {
         let font_str = font_css.as_str();
         let size = parse_font_size_px(font_str);
+        let font_resource = pdf_font_resource(font_str);
 
         // Real Helvetica width — same as measure_text_width, recomputed
         // here to avoid a borrow round-trip. Must stay in sync: `Tm`
@@ -487,7 +497,7 @@ impl Painter for PdfPainter {
         buf.clear();
         let _ = write!(
             buf,
-            "BT\n/F1 {size:.3} Tf\n{r:.3} {g:.3} {b:.3} rg\n1 0 0 -1 {tx:.3} {ty:.3} Tm\n("
+            "BT\n/{font_resource} {size:.3} Tf\n{r:.3} {g:.3} {b:.3} rg\n1 0 0 -1 {tx:.3} {ty:.3} Tm\n("
         );
         pdf_string_escape(text, &mut buf);
         let _ = write!(buf, ") Tj\nET\n");
@@ -607,6 +617,40 @@ mod tests {
         );
         assert!(painter.shadings().borrow().is_empty());
         assert!(content(&painter).is_empty());
+    }
+
+    #[test]
+    fn fill_text_selects_matching_helvetica_style_face() {
+        let painter = PdfPainter::new(100, 50);
+        for font_css in [
+            "12px Calibri",
+            "bold 12px Calibri",
+            "italic 12px Calibri",
+            "bold italic 12px Calibri",
+        ] {
+            painter.fill_text(
+                "styled",
+                0.0,
+                12.0,
+                PaintColor::Static(font_css),
+                PaintColor::Static("#000"),
+                TextAlign::Start,
+                TextBaseline::Alphabetic,
+            );
+        }
+
+        let output = content(&painter);
+        for (font, size) in [
+            ("F1", "12.000"),
+            ("F2", "12.000"),
+            ("F3", "12.000"),
+            ("F4", "12.000"),
+        ] {
+            assert!(
+                output.contains(&format!("/{font} {size} Tf")),
+                "missing /{font}: {output}"
+            );
+        }
     }
 
     #[test]

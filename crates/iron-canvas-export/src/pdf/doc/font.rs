@@ -15,9 +15,12 @@ use crate::common::color::parse_css_color;
 /// order, matching the `/Sh{index}` names the painter emitted). Returned as a
 /// complete dict ready for `PdfDocument::add_object`.
 pub fn resources_object_with_helvetica(shadings: &[(String, String)]) -> Vec<u8> {
-    let mut out = Vec::from(
-        &b"<< /Font << /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> >>"[..],
-    );
+    let mut out = Vec::from(&b"<< /Font << \
+        /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> \
+        /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> \
+        /F3 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Oblique /Encoding /WinAnsiEncoding >> \
+        /F4 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-BoldOblique /Encoding /WinAnsiEncoding >> \
+        >>"[..]);
     if !shadings.is_empty() {
         out.extend_from_slice(b" /Shading <<");
         for (index, (from, to)) in shadings.iter().enumerate() {
@@ -50,5 +53,18 @@ mod tests {
         let resources = resources_object_with_helvetica(&[]);
 
         assert!(String::from_utf8_lossy(&resources).contains("/Encoding /WinAnsiEncoding"));
+    }
+
+    #[test]
+    fn helvetica_resources_include_bold_and_italic_faces() {
+        let resources = String::from_utf8_lossy(&resources_object_with_helvetica(&[])).into_owned();
+
+        for face in [
+            "Helvetica-Bold",
+            "Helvetica-Oblique",
+            "Helvetica-BoldOblique",
+        ] {
+            assert!(resources.contains(face), "missing PDF font face {face}");
+        }
     }
 }

@@ -5,10 +5,11 @@
 //! it disagrees badly with what's actually painted — that mismatch is what
 //! clips exported text (see `docs/reviews/2026-07-01-export-font-metrics-plan.md`).
 //!
-//! Both functions below measure the font each backend actually *draws*, not
-//! the cell's declared family: SVG always renders (and now always emits) the
-//! bundled Inter TTF; PDF always draws the base-14 Helvetica font regardless
-//! of the cell's style. Any character missing from a table falls back to
+//! Both functions below measure the font family each backend draws, not the
+//! cell's declared family: SVG always renders (and now always emits) the
+//! bundled Inter TTF; PDF draws a base-14 Helvetica face. Style variants are
+//! selected during painting, while these metrics use the regular face. Any
+//! character missing from a table falls back to
 //! `approx_text_width` for that one character only, so every other script
 //! keeps working exactly as before.
 

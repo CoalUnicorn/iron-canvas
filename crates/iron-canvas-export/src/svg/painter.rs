@@ -418,6 +418,7 @@ impl Painter for SvgPainter {
         baseline: TextBaseline,
     ) {
         let size = parse_font_size_px(font_css.as_str());
+        let (bold, italic) = crate::common::font::bold_italic(font_css.as_str());
         let anchor = match align {
             TextAlign::Start => "start",
             TextAlign::Center => "middle",
@@ -438,9 +439,16 @@ impl Painter for SvgPainter {
         let mut body = self.body.borrow_mut();
         let _ = write!(
             body,
-            "<text x=\"{:.3}\" y=\"{:.3}\" font-family=\"Inter\" font-size=\"{:.3}\" fill=\"",
+            "<text x=\"{:.3}\" y=\"{:.3}\" font-family=\"Inter\" font-size=\"{:.3}\"",
             x, y, size
         );
+        if bold {
+            body.push_str(" font-weight=\"bold\"");
+        }
+        if italic {
+            body.push_str(" font-style=\"italic\"");
+        }
+        body.push_str(" fill=\"");
         xml_escape(color.as_str(), &mut body);
         let _ = write!(
             body,
@@ -672,6 +680,24 @@ mod tests {
         assert!(svg.contains("a&lt;b&amp;c&quot;d"));
         assert!(svg.contains("text-anchor=\"start\""));
         assert!(svg.contains("dominant-baseline=\"alphabetic\""));
+    }
+
+    #[test]
+    fn fill_text_emits_bold_and_italic_styles() {
+        let p = SvgPainter::new(10, 10);
+        p.fill_text(
+            "styled",
+            1.0,
+            2.0,
+            PaintColor::Static("bold italic 12px Calibri"),
+            PaintColor::Static("#000"),
+            TextAlign::Start,
+            TextBaseline::Alphabetic,
+        );
+
+        let svg = p.finish();
+        assert!(svg.contains("font-weight=\"bold\""));
+        assert!(svg.contains("font-style=\"italic\""));
     }
 
     #[test]
