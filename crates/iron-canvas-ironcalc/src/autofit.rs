@@ -44,6 +44,8 @@ pub enum AutoFitError {
     ColumnExtent,
     /// A row height could not be read as a valid slot extent.
     RowExtent,
+    /// Merged-cell metadata could not be read.
+    MergedCells,
     /// A formatted cell value could not be read.
     CellValue,
     /// A non-empty cell's style could not be read.
@@ -56,6 +58,7 @@ impl std::fmt::Display for AutoFitError {
             Self::Sheet => "no sheet is committed to measure",
             Self::ColumnExtent => "a column width could not be read as a valid extent",
             Self::RowExtent => "a row height could not be read as a valid extent",
+            Self::MergedCells => "merged-cell metadata could not be read",
             Self::CellValue => "a formatted cell value could not be read",
             Self::CellStyle => "a cell style could not be read",
         };
@@ -148,6 +151,9 @@ pub fn fit_height(
     last_col: i32,
 ) -> Result<Option<f64>, AutoFitError> {
     let (first, last) = capped_range(first_col, last_col);
+    let merged_cells = workbook
+        .get_merged_cells(sheet)
+        .map_err(|_| AutoFitError::MergedCells)?;
     let mut lines: Vec<TextLine> = Vec::new();
     let mut scratch = String::new();
     let mut max_height = 0.0_f64;
@@ -162,13 +168,30 @@ pub fn fit_height(
             .get_extended_cell_style(sheet, row, col)
             .map_err(|_| AutoFitError::CellStyle)?
             .style;
-        let raw = workbook
-            .get_column_width(sheet, col)
-            .map_err(|_| AutoFitError::ColumnExtent)?;
-        if !raw.is_finite() || raw < 0.0 {
-            return Err(AutoFitError::ColumnExtent);
+        let merged = merged_cells
+            .iter()
+            .find(|merged| merged.row == row && merged.column == col);
+        let last_width_col = match merged {
+            Some(merged) => merged
+                .width
+                .checked_sub(1)
+                .and_then(|width| merged.column.checked_add(width))
+                .ok_or(AutoFitError::ColumnExtent)?,
+            None => col,
+        };
+        let mut width = 0_i32;
+        for width_col in col..=last_width_col {
+            let raw = workbook
+                .get_column_width(sheet, width_col)
+                .map_err(|_| AutoFitError::ColumnExtent)?;
+            if !raw.is_finite() || raw < 0.0 || raw.round() > f64::from(i32::MAX) {
+                return Err(AutoFitError::ColumnExtent);
+            }
+            width = width
+                .checked_add(raw.round() as i32)
+                .ok_or(AutoFitError::ColumnExtent)?;
         }
-        let width = (raw.round() as i32).max(1);
+        let width = width.max(1);
         let size = f64::from(style.font.sz);
         let bounds = PixelRect {
             top_left: iron_canvas_core::Point { x: 0, y: 0 },
@@ -216,6 +239,7 @@ fn line_block_height(line_count: usize, size_px: f64, line_height: f64) -> f64 {
 mod tests {
     use super::*;
     use ironcalc_base::cf_types::{CfRuleInput, Cfvo, Icon, IconThreshold};
+    use ironcalc_base::expressions::types::Area;
     use ironcalc_base::types::Color;
 
     struct FixedWidth;
@@ -304,5 +328,44 @@ mod tests {
         let height = fit_height(&workbook, &FixedWidth, 0, 1, 1, 1).unwrap();
         // A single line is font height + padding, floored at MIN_EXTENT.
         assert!(height.is_some_and(|h| h >= MIN_EXTENT));
+    }
+
+    #[test]
+    fn fit_height_uses_full_width_of_merged_anchor() {
+        let mut workbook = UserModel::new_empty("fit", "en", "UTC", "en").unwrap();
+        workbook.set_user_input(0, 1, 1, "twelvechars").unwrap();
+        workbook.set_columns_width(0, 1, 3, 60.0).unwrap();
+        workbook
+            .update_range_style(
+                &Area {
+                    sheet: 0,
+                    row: 1,
+                    column: 1,
+                    width: 3,
+                    height: 1,
+                },
+                "alignment.wrap_text",
+                "true",
+            )
+            .unwrap();
+        workbook
+            .merge_cells(&Area {
+                sheet: 0,
+                row: 1,
+                column: 1,
+                width: 3,
+                height: 1,
+            })
+            .unwrap();
+
+        let height = fit_height(&workbook, &FixedWidth, 0, 1, 1, 3).unwrap();
+        let style = workbook.get_extended_cell_style(0, 1, 1).unwrap().style;
+        let one_line_height = line_block_height(
+            1,
+            f64::from(style.font.sz),
+            f64::from(style.font.sz) * LINE_HEIGHT_FACTOR,
+        )
+        .max(MIN_EXTENT);
+        assert_eq!(height, Some(one_line_height));
     }
 }
