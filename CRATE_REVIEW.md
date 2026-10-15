@@ -28,11 +28,12 @@ findings 1–14 against local `main` (`6cbaf30`). The branch review started at
 | 13 | Fixed | Commit restores `copy`; browser pixels prove replacement after context changes and size reset |
 | 14 | Fixed | SVG and PDF fixture exports evaluate absent numeric, absent untyped, and stale formula caches |
 | 15 | Fixed | PDF text maps accented Latin and currency symbols to WinAnsi and declares the matching font encoding |
-| 16–18 | Open | SVG arc, font-style, and whitespace work remains |
+| 16 | Fixed | SVG path data moves to an initial arc start and connects prior current points to later arc starts |
+| 17–18 | Open | Export font-style and SVG whitespace work remains |
 
 Workspace tests, clippy, formatting, the Wasm workspace check, export feature
 tests, and all seven browser tests passed during this review. These results
-apply to the reviewed source and fixtures. Findings 16–18 remain open.
+apply to the reviewed source and fixtures. Findings 17–18 remain open.
 See [the branch review](docs/reviews/2026-10-15-crate-review-base.md) and
 [the PR draft](PR-draft-fix-base.md).
 
@@ -93,8 +94,8 @@ See [the branch review](docs/reviews/2026-10-15-crate-review-base.md) and
 15. **Fixed — PDF text encoding corrupted accented text and currency symbols.** [common/escape.rs](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/common/escape.rs)
     PDF text now maps supported characters to WinAnsi bytes, and the Helvetica resource declares `/WinAnsiEncoding`. Characters outside WinAnsi are replaced with `?`. Unit regressions cover `café £ € ’`, unsupported text, and the font resource encoding.
 
-16. **P2 — SVG arc paths omit the arc start point.** [svg/painter.rs:157](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/svg/painter.rs:157)  
-    The emitted `A` command assumes the SVG path cursor is already at the arc start. An arc-only path begins with `A`, which has no current point; an arc after an unrelated move connects from the wrong point. Emit the start move or connecting segment as required.
+16. **Fixed — SVG arc paths omitted the arc start point.** [svg/painter.rs](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/svg/painter.rs)
+    SVG path output now starts an arc-only subpath with `M` at the arc start and emits a connecting line when the current point differs from that start. Regression tests cover both cases.
 
 17. **P2 — SVG and PDF export discard bold and italic cell styles.** [svg/painter.rs:417](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/svg/painter.rs:417), [pdf/painter.rs:488](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/pdf/painter.rs:488)  
     The compiler supplies font weight and style, but SVG emits neither and PDF always uses regular Helvetica. Bold, italic, and bold-italic workbook text therefore renders as regular text.
