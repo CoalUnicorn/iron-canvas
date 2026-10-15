@@ -32,7 +32,11 @@ impl PixelRect {
         let top = self.top().max(other.top());
         let right = self.right().min(other.right());
         let bottom = self.bottom().min(other.bottom());
-        (left < right && top < bottom).then_some(Self {
+        if left >= right || top >= bottom {
+            return None;
+        }
+
+        Some(Self {
             top_left: Point { x: left, y: top },
             width: right - left,
             height: bottom - top,
@@ -141,6 +145,14 @@ mod tests {
     fn intersection_rejects_edge_only_contact_and_disjoint_rects() {
         assert_eq!(rect(0, 0, 5, 5).intersection(rect(5, 0, 4, 4)), None);
         assert_eq!(rect(0, 0, 5, 5).intersection(rect(8, 8, 2, 2)), None);
+    }
+
+    #[test]
+    fn intersection_returns_none_for_far_offscreen_rectangles() {
+        assert_eq!(
+            rect(i32::MIN, 0, 1, 1).intersection(rect(2, 0, 100, 96)),
+            None
+        );
     }
 
     #[test]
