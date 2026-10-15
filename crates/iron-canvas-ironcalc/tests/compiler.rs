@@ -177,6 +177,30 @@ fn invalid_late_coordinate_returns_an_error_instead_of_partial_scene() {
 }
 
 #[test]
+fn zero_width_placement_at_max_coordinate_is_ignored_safely() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    let prepared = WorksheetCompiler::new()
+        .prepare_cells(
+            &workbook,
+            0,
+            rect(),
+            [CellPlacement {
+                coordinate: CellCoord { row: 1, col: 1 },
+                bounds: PixelRect {
+                    top_left: Point { x: i32::MAX, y: 0 },
+                    width: 0,
+                    height: 30,
+                },
+            }],
+            &Metrics,
+            &CanvasTheme::light(),
+        )
+        .unwrap();
+
+    assert_eq!(prepared.cells.len(), 1);
+}
+
+#[test]
 fn explicit_sheet_does_not_change_selection() {
     let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
     workbook.new_sheet().unwrap();

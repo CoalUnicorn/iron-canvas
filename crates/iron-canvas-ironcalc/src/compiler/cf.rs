@@ -280,6 +280,9 @@ fn count_as_i32(count: u32) -> i32 {
 /// The icon/rating slot inside `rect`: `(left, top, size)` in pixels, or
 /// `None` when the cell is too small to hold one.
 fn icon_slot(rect: PixelRect) -> Option<(i32, i32, i32)> {
+    if rect.width <= 0 || rect.height <= 0 {
+        return None;
+    }
     let inner = rect.inset(CF_INSET, CF_INSET);
     if inner.width <= 0 || inner.height <= 0 {
         return None;
