@@ -452,7 +452,7 @@ impl Painter for SvgPainter {
         xml_escape(color.as_str(), &mut body);
         let _ = write!(
             body,
-            "\" text-anchor=\"{}\" dominant-baseline=\"{}\">",
+            "\" text-anchor=\"{}\" dominant-baseline=\"{}\" xml:space=\"preserve\">",
             anchor, dom_baseline
         );
         xml_escape(text, &mut body);
@@ -698,6 +698,23 @@ mod tests {
         let svg = p.finish();
         assert!(svg.contains("font-weight=\"bold\""));
         assert!(svg.contains("font-style=\"italic\""));
+    }
+
+    #[test]
+    fn fill_text_preserves_repeated_and_leading_whitespace() {
+        let p = SvgPainter::new(10, 10);
+        p.fill_text(
+            "  A  B  ",
+            1.0,
+            2.0,
+            PaintColor::Static("12px Calibri"),
+            PaintColor::Static("#000"),
+            TextAlign::Center,
+            TextBaseline::Alphabetic,
+        );
+
+        let svg = p.finish();
+        assert!(svg.contains("xml:space=\"preserve\">  A  B  </text>"));
     }
 
     #[test]
