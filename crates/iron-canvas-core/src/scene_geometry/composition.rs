@@ -96,7 +96,8 @@ pub fn sample_bands<E>(
     }
     if used < pixels && frozen < last {
         let start = origin + used;
-        let mut cells = sample_axis(first.max(frozen + 1), last, pixels - used, extent)?;
+        let scroll_extent = pixels - used;
+        let mut cells = sample_axis(first.max(frozen + 1), last, scroll_extent, extent)?;
         for cell in &mut cells {
             cell.start = cell
                 .start
@@ -106,11 +107,18 @@ pub fn sample_bands<E>(
                 .checked_add(cell.extent)
                 .ok_or(AxisError::Extent { index: cell.index })?;
         }
+        let sampled_extent = cells
+            .last()
+            .map_or(0, |cell| cell.start + cell.extent - start);
         bands.push(AxisBand {
             first_index: first.max(frozen + 1),
-            last_index: cells.last().map_or(last, |c| c.index),
+            last_index: if sampled_extent < scroll_extent {
+                last
+            } else {
+                cells.last().map_or(last, |c| c.index)
+            },
             start,
-            extent: pixels - used,
+            extent: scroll_extent,
             frozen: false,
             cells: cells.into(),
         });
@@ -439,6 +447,36 @@ mod tests {
             Some(GridHit::Cell(CellCoord { row: 8, col: 8 }))
         );
         assert_eq!(geometry.hit_test(Point { x: 138, y: 113 }), None);
+    }
+
+    #[test]
+    fn fragments_keep_edges_when_range_ends_in_hidden_row_and_column() {
+        let sample_axis = || {
+            sample_bands(1, 3, 0, 0, 100, |index| {
+                Ok::<_, ()>(if index == 3 { 0.0 } else { 20.0 })
+            })
+            .unwrap()
+        };
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point::default(),
+                width: 100,
+                height: 100,
+            },
+            Point::default(),
+            sample_axis(),
+            sample_axis(),
+        );
+
+        let fragments = geometry.fragments(GridRange {
+            first: CellCoord { row: 1, col: 1 },
+            last: CellCoord { row: 3, col: 3 },
+        });
+
+        assert_eq!(fragments.len(), 1);
+        assert_eq!(fragments[0].rect.width, 40);
+        assert_eq!(fragments[0].rect.height, 40);
+        assert_eq!(fragments[0].edges, [true; 4]);
     }
 
     #[test]
