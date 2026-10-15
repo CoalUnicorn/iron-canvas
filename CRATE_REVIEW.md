@@ -8,8 +8,12 @@ Review posture: findings only; no production code was changed for this review.
 ## Fix status: 2026-10-15
 
 The findings below describe the original checkout. Branch `crate-review` fixes
-findings 1–14 against local `main` (`6cbaf30`). The branch review started at
-`a0157b0`. Additional review fixes are recorded in the branch history.
+findings 1–19 against local `main` (`6cbaf30`), including the current working-tree
+fix for finding 19. The first branch review started
+at `a0157b0`. The export follow-up reviewed `336b5c7..e5b9937`.
+That follow-up found one new P2 defect, finding 19. Its repair now passes the
+regressions and the PDF bounding-box probe. The P1 correctness gate passes
+locally; the final repair and document updates still need to be committed.
 
 | Finding | Current result | Evidence |
 | --- | --- | --- |
@@ -31,12 +35,18 @@ findings 1–14 against local `main` (`6cbaf30`). The branch review started at
 | 16 | Fixed | SVG path data moves to an initial arc start and connects prior current points to later arc starts |
 | 17 | Fixed | SVG emits bold/italic attributes; PDF selects regular, bold, oblique, or bold-oblique Helvetica |
 | 18 | Fixed | SVG text declares `xml:space="preserve"` so emitted whitespace matches layout input |
+| 19 | Fixed in working tree | PDF measurement and placement share the selected face and emitted WinAnsi glyph widths; all four faces end at x=220 in the probe |
 
 Workspace tests, clippy, formatting, the Wasm workspace check, export feature
 tests, and all seven browser tests passed during this review. These results
-apply to the reviewed source and fixtures. Findings 15–18 are now fixed.
+apply to `e5b9937` plus the finding 19 repair and the reviewed fixtures.
+Findings 1–19 are addressed.
+PDF extraction confirms the WinAnsi encoding repair. A rendered SVG probe
+confirms the initial arc. The repaired PDF probe confirms matching bold widths
+and placement. P1 implementation checks pass locally; integration remains.
 See [the branch review](docs/reviews/2026-10-15-crate-review-base.md) and
-[the PR draft](PR-draft-fix-base.md).
+[the export follow-up](docs/reviews/2026-10-15-crate-review-exports.md).
+The [PR draft](PR-draft-fix-base.md) records the fix commit links.
 
 ## Findings
 
@@ -100,11 +110,15 @@ See [the branch review](docs/reviews/2026-10-15-crate-review-base.md) and
 
 17. **Fixed — SVG and PDF export discarded bold and italic cell styles.** [svg/painter.rs](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/svg/painter.rs), [pdf/painter.rs](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/pdf/painter.rs)
     SVG emits `font-weight` and `font-style` when the compiled font shorthand requests them. PDF selects the matching built-in Helvetica face, including bold-italic. Regressions cover SVG attributes, all four PDF face choices, and the PDF font resources.
+    Style selection and the width mismatch tracked as finding 19 are repaired.
 
 18. **Fixed — SVG collapsed whitespace that layout metrics count.** [svg/painter.rs](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/svg/painter.rs)
     SVG text now sets `xml:space="preserve"`, retaining leading, repeated, and trailing spaces for centered, right-aligned, and left-aligned text. A regression checks the emitted attribute and whitespace.
 
-## Validation
+19. **Fixed — PDF bold text used regular-font widths.** [common/helvetica.rs](crates/iron-canvas-export/src/common/helvetica.rs)
+    At `e5b9937`, measurement and text placement used regular Helvetica advances for bold faces. A 40 px `iiii` run right-aligned at x=220 ended at x=228.96. The working-tree repair selects one `HelveticaFace` for both measurement and painting. Its WinAnsi tables derive from Adobe's AFMs and use the same encoded bytes as PDF output, including `?` replacement. Regressions cover all four faces, start/center/end alignment, wrapping, accented text, symbols, and unsupported characters. The PDF probe now reports 35.52 px for regular/oblique and 44.48 px for bold/bold-oblique, with all four right edges at x=220.
+
+## Original validation: 2026-10-09
 
 - `cargo test --workspace --locked` passed on the reviewed checkout.
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` passed.

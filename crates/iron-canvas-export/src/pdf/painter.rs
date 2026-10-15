@@ -25,21 +25,12 @@ use iron_canvas_core::painter::{
 
 use crate::common::color::parse_css_color;
 use crate::common::escape::pdf_string_escape;
-use crate::common::metrics;
+use crate::common::helvetica::HelveticaFace;
 use crate::pdf::doc::stream::ContentStream;
 
 /// Control-point offset that turns one cubic Bézier into a quarter circle:
 /// `4/3 * (sqrt(2) - 1)`.
 const CIRCLE_KAPPA: f64 = 0.552_284_749_8;
-
-fn pdf_font_resource(font_css: &str) -> &'static str {
-    match crate::common::font::bold_italic(font_css) {
-        (false, false) => "F1",
-        (true, false) => "F2",
-        (false, true) => "F3",
-        (true, true) => "F4",
-    }
-}
 
 pub struct PdfPainter {
     body: Rc<RefCell<ContentStream>>,
@@ -256,13 +247,10 @@ fn join_code(join: LineJoin) -> u8 {
 }
 
 impl TextMetrics for PdfPainter {
-    // `fill_text` below always draws the base-14 standard Helvetica font
-    // (`/F1`), regardless of the cell's declared family — PDF has no
-    // embedded-font path, so `helvetica_advance_width` is the font that's
-    // actually painted, not an approximation of it.
+    // Measurement and painting use the same face and encoded character codes.
     fn measure_text_width(&self, text: &str, font_css: &str) -> f64 {
         let size = parse_font_size_px(font_css);
-        metrics::helvetica_advance_width(text, size)
+        HelveticaFace::from_css(font_css).advance_width(text, size)
     }
 }
 
@@ -463,12 +451,10 @@ impl Painter for PdfPainter {
     ) {
         let font_str = font_css.as_str();
         let size = parse_font_size_px(font_str);
-        let font_resource = pdf_font_resource(font_str);
+        let face = HelveticaFace::from_css(font_str);
+        let font_resource = face.resource_name();
 
-        // Real Helvetica width — same as measure_text_width, recomputed
-        // here to avoid a borrow round-trip. Must stay in sync: `Tm`
-        // below positions the run using this same estimate.
-        let text_width = metrics::helvetica_advance_width(text, size);
+        let text_width = face.advance_width(text, size);
 
         // Painter coords are Y-down. After the outer Y-flip CTM,
         // a counter-flipping text matrix (`1 0 0 -1 tx ty Tm`) restores

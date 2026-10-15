@@ -14,7 +14,12 @@ The implementation follows roadmap P1. It keeps model writes in the host.
 It keeps generic geometry in core and spreadsheet policy in the compiler.
 No separate feature design is required for these repairs to existing behavior.
 
-Findings 15–18 remain open. P1 is partial. P2 remains blocked by P1.
+Findings 15–18 were outside this review. The
+[export follow-up](2026-10-15-crate-review-exports.md) reviewed their fixes at
+`e5b9937` and found the PDF width defect, finding 19. The subsequent working-tree
+repair passes its width, alignment, and wrapping regressions and the PDF bounds
+probe. All P1 correctness findings are addressed locally. Final commit and
+integration remain.
 The branch does not include the .NET or workbook-review tool integration.
 The [PR draft](../../PR-draft-fix-base.md) describes the complete proposed diff.
 

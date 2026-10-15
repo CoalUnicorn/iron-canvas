@@ -5,10 +5,14 @@ Scope: sequencing of the in-flight designs, plans, reviews, and tooling for the
 iron-canvas workspace and its engine fork.
 Status: sequencing proposal, with P1 implementation progress recorded below.
 
-P1 progress reviewed on 2026-10-15: branch `crate-review` implements findings
-1–14, including the additional branch review fixes. Findings 15–18 remain
-open. See [the branch review](reviews/2026-10-15-crate-review-base.md) for
-evidence and [the PR draft](../PR-draft-fix-base.md) for the proposed change set.
+P1 progress reviewed on 2026-10-15: branch `crate-review` implements the original
+findings 1–18. The export follow-up at `e5b9937` found PDF bold text using
+regular-font widths (finding 19). The working-tree repair now passes its
+regressions and PDF bounds probe. All 19 correctness findings are addressed.
+The P1 implementation gate passes locally. Commit and integration remain.
+See [the branch review](reviews/2026-10-15-crate-review-base.md),
+[the export follow-up](reviews/2026-10-15-crate-review-exports.md), and
+[the PR draft](../PR-draft-fix-base.md).
 
 This document owns the order. Each design or plan owns its own detail. When the
 two disagree on order, this document wins. When they disagree on content, the
@@ -45,13 +49,14 @@ design or plan wins, and this document gets a correction.
 | `docs/research/2026-09-26-extended-grid-navigation-and-crdt.md` | research | no implementation | Reference only. No CRDT dependency |
 | `docs/reviews/2026-10-04-m1..2026-10-05-m4` | reviews | landed | Historical |
 | `docs/reviews/2026-10-10-navigation-design-after-canvas-split.md` | review | review only | Adopt its recommendations into the navigation plan |
-| `CRATE_REVIEW.md` | findings | 18 findings; tracked on `crate-review` | Findings 1–14 fixed on that branch; 15–18 remain in P1 |
+| `CRATE_REVIEW.md` | findings | Original 18 findings plus follow-up finding 19; tracked on `crate-review` | All 19 addressed, including the uncommitted width repair. P1 checks pass locally |
 
 ## 3. Baseline facts
 
 The baseline below records the 2026-10-13 `dot-net` snapshot.
 The 2026-10-15 P1 review used `crate-review` at `a0157b0`, plus its review fixes,
 against local `main` at `6cbaf30`. It does not include the .NET branch.
+The export follow-up reviewed `336b5c7..e5b9937` on the same branch.
 The engine pin remains `7e6ae21c0f163cacf56b9d47acf777454bfaa243`.
 Local refs only; no remote fetch.
 Database counts below are historical and were not refreshed.
@@ -170,7 +175,8 @@ H7 Windows smoke and H9 backend replacement do not wait for P6/P7.
 
 ### P1 Correctness
 
-Source: `CRATE_REVIEW.md`, 18 findings. Close each finding here. Reproduce each against the integrated baseline before assigning a fix. Some
+Source: `CRATE_REVIEW.md`, the original 18 findings and follow-up finding 19.
+Close each finding here. Reproduce each against the integrated baseline before assigning a fix. Some
 export fixes require a font/encoding policy and may not be small. Record closure
 or an explicit supported limitation; passing workspace tests alone is not closure.
 
@@ -180,11 +186,14 @@ or an explicit supported limitation; passing workspace tests alone is not closur
 | C1b | Findings 4, 5 (hidden final edge, autofill handle at a hidden cell) | `iron-canvas-core` | Fixed, including exact viewport and frozen boundaries. Regressions pass |
 | I1 | 7, 8, 9, 10, 11 (auto-fit, theme color, icon layout) | `iron-canvas-ironcalc` | Fixed. Tiny-placement overflow also repaired. Regressions pass |
 | B1 | 13 (canvas2d composite on commit), 12 (resize target versus intent) | `iron-canvas-canvas2d`, `iron-canvas` | Fixed. Native intent tests and seven browser tests pass |
-| X1 | 14 to 18 (export evaluation, PDF encoding, SVG arc, bold and italic, whitespace) | `iron-canvas-export` | 14 fixed and checked with three XLSX cache fixtures in SVG and PDF. 15–18 open |
+| X1 | 14 to 18 (export evaluation, PDF encoding, SVG arc, bold and italic, whitespace) | `iron-canvas-export` | Addressed. Three XLSX cache fixtures, PDF extraction, an SVG arc raster probe, and style/whitespace output checks passed |
+| X2 | 19 (PDF bold metrics and alignment) | `iron-canvas-export` | Fixed in working tree. Selected-face WinAnsi advances drive measurement and placement. All-face alignment/wrap regressions and PDF bounds probe pass |
 
-P1 is partial. The 2026-10-15 branch review records passing workspace tests,
+P1 correctness checks pass locally. The finding 19 repair records passing workspace tests,
 clippy, formatting, the Wasm check, export feature tests, and browser pixels.
-This gate evidence covers findings 1–14. P2 still waits for P1 closure.
+The PDF bounding-box probe now ends at x=220 for all four faces.
+Commit and integrate the final repair before treating P1 as closed on the
+integration line. P0 document/branch cleanup still needs its own closure.
 
 Findings 4, 5, and 12 touch semantics that P4 also touches. Fix them here so P4
 builds on fixed behavior.
@@ -440,7 +449,7 @@ Phase additions:
 
 | Phase | Extra gate |
 | --- | --- |
-| P1 | Export fixture check for findings 14 to 18 |
+| P1 | Export fixture check for findings 14 to 18; selected-face width and alignment regression for finding 19 |
 | P2 | Cache unit tests; the zero-read tab-return session test |
 | P3a/P3b | Per-stage criteria, host input tests, React build; all 12 rows for P3b |
 | P4 | `visibility_contract.rs`; plan acceptance rows |
@@ -467,7 +476,7 @@ cite a rule instead of re-arguing it.
 | `D-3` | Engine navigation helper | **Decided: fork** | Add the anchor and focus helper to the fork. The pinned engine has no moving focus, and the navigation plan forbids inferring it |
 | `D-4` | Review tool home | **Decided: branch now, repository later** | The tool was migrated to branch `ux-review-tool` in this repository, pinned to the current engine revision. The branch has source plus small XLSX issue fixtures. Generated databases, snapshots, and captures stay outside Git. Move it to its own repository only when the corpus or CI weight justifies it. Section T lists the constraints |
 | `D-5` | .NET native head | **Decided: defer, no WPF** | No WPF head. A separate Avalonia example comes later. Phase 6 (Windows bring-up) proceeds without a GUI head, because the C ABI and the smoke tool cover the native path |
-| `D-6` | Untracked documents | **Decided: commit, partially done** | The roadmap pointer landed on `dot-net` (`09ebb6e`). `docs/` and `CRATE_REVIEW.md` are still untracked and go to the new branch. `D1` still includes tracking the plans/reviews plus the scratch/artifact decision |
+| `D-6` | Untracked documents | **Decided: commit, partially done** | The roadmap pointer landed on `dot-net` (`09ebb6e`). `9d4f8a5` tracked the roadmap, original crate review, base branch review, and local canvas guidance on `crate-review`. Other plans, designs, and historical reviews remain untracked. D1 still includes those documents and the scratch/artifact decision |
 
 ## 12. Risks
 

@@ -15,7 +15,7 @@ pub fn xml_escape(s: &str, out: &mut String) {
 /// Characters without a WinAnsi representation are replaced with `?`.
 pub fn pdf_string_escape(s: &str, out: &mut Vec<u8>) {
     for ch in s.chars() {
-        let b = win_ansi_byte(ch).unwrap_or(b'?');
+        let b = pdf_text_byte(ch);
         match b {
             b'(' => out.extend_from_slice(b"\\("),
             b')' => out.extend_from_slice(b"\\)"),
@@ -26,6 +26,11 @@ pub fn pdf_string_escape(s: &str, out: &mut Vec<u8>) {
             b => out.push(b),
         }
     }
+}
+
+/// The character code shared by PDF output and its advance-width lookup.
+pub(crate) fn pdf_text_byte(ch: char) -> u8 {
+    win_ansi_byte(ch).unwrap_or(b'?')
 }
 
 fn win_ansi_byte(ch: char) -> Option<u8> {

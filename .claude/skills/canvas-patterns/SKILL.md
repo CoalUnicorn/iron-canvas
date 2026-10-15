@@ -215,6 +215,12 @@ visuals on the overlay.
   `export_xlsx` loads and evaluates the workbook, resolves the sheet and range, prepares with
   `WorksheetCompiler`, and writes through the selected backend. The scene
   backends do not read the workbook.
+  SVG preserves whitespace and emits bold/italic attributes. Arc output moves
+  or connects to the arc start. PDF uses four Helvetica faces with WinAnsi
+  encoding; unsupported characters become `?`. `HelveticaFace` selects the
+  resource and matching AFM advances for both measurement and placement.
+  The serializer and metrics share the encoded-byte mapping, including `?`.
+  SVG embeds Inter Regular; it does not embed separate style faces.
 
 Forward device pixel ratio as `f64`; only backing-size conversion rounds.
 

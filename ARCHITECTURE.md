@@ -271,6 +271,17 @@ its Pango width cache is bounded and clears on `invalidate_metrics`.
 same scene (`svg::SvgPainter`, `pdf::PdfPainter`, `pdf::PdfDocument`).
 `common/` holds shared color, escaping, and metrics helpers. PDF keeps the
 font and opaque-color limits; the scene backends do not read the workbook.
+SVG emits bold/italic attributes and preserves text whitespace with
+`xml:space="preserve"`. SVG paths establish an arc's start point before `A`.
+PDF uses the regular, bold, oblique, or bold-oblique Helvetica face with
+WinAnsi encoding. Unsupported characters become `?`.
+`HelveticaFace` selects the font resource and the matching AFM advance table.
+Measurement and placement use the WinAnsi bytes emitted by the serializer,
+including the `?` replacement. Oblique advances share the regular table;
+bold-oblique advances share the bold table. The source notice is
+`crates/iron-canvas-export/assets/HELVETICA-NOTICE.txt`.
+PDF metrics do not add kerning or glyph overhang bounds. SVG embeds Inter Regular and uses
+regular-face advances; it does not embed separate bold or italic fonts.
 `workbook::export_xlsx` loads and evaluates the workbook, resolves the sheet and cell range,
 uses `WorksheetCompiler` to prepare a scene, then writes it through the
 selected scene backend.
