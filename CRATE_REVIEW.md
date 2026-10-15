@@ -27,11 +27,12 @@ findings 1–14 against local `main` (`6cbaf30`). The branch review started at
 | 12 | Fixed | Row and column divider intents match their resize targets |
 | 13 | Fixed | Commit restores `copy`; browser pixels prove replacement after context changes and size reset |
 | 14 | Fixed | SVG and PDF fixture exports evaluate absent numeric, absent untyped, and stale formula caches |
-| 15–18 | Open | Export encoding, arc, font-style, and whitespace work remains |
+| 15 | Fixed | PDF text maps accented Latin and currency symbols to WinAnsi and declares the matching font encoding |
+| 16–18 | Open | SVG arc, font-style, and whitespace work remains |
 
 Workspace tests, clippy, formatting, the Wasm workspace check, export feature
 tests, and all seven browser tests passed during this review. These results
-apply to the reviewed source and fixtures. P1 remains open for findings 15–18.
+apply to the reviewed source and fixtures. Findings 16–18 remain open.
 See [the branch review](docs/reviews/2026-10-15-crate-review-base.md) and
 [the PR draft](PR-draft-fix-base.md).
 
@@ -89,8 +90,8 @@ See [the branch review](docs/reviews/2026-10-15-crate-review-base.md) and
 14. **P1 — XLSX export can display missing or stale formula results.** [workbook.rs:147](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/workbook.rs:147)  
     The export path loads the workbook and prepares it without evaluating formulas. A workbook with `A1 = 1+1` and a missing numeric cached result exported as `0`; a missing cache with no numeric cell type exported as `#ERROR!`. Stale cached results are also at risk. Evaluate after loading, or define and apply an explicit cached-value policy.
 
-15. **P1 — PDF encoding corrupts accented text and currency symbols.** [common/escape.rs:23](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/common/escape.rs:23)  
-    The code emits UTF-8 bytes as separate PDF character codes, while the font resource does not declare the WinAnsi encoding assumed by the comments. A PDF text probe containing `café £ € '` was extracted as `cafˆ' ´£ ‹ ’`. This also makes measurement disagree with rendered glyphs.
+15. **Fixed — PDF text encoding corrupted accented text and currency symbols.** [common/escape.rs](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/common/escape.rs)
+    PDF text now maps supported characters to WinAnsi bytes, and the Helvetica resource declares `/WinAnsiEncoding`. Characters outside WinAnsi are replaced with `?`. Unit regressions cover `café £ € ’`, unsupported text, and the font resource encoding.
 
 16. **P2 — SVG arc paths omit the arc start point.** [svg/painter.rs:157](/home/mmm/01_Dev/iron-canvas/crates/iron-canvas-export/src/svg/painter.rs:157)  
     The emitted `A` command assumes the SVG path cursor is already at the arc start. An arc-only path begins with `A`, which has no current point; an arc after an unrelated move connects from the wrong point. Emit the start move or connecting segment as required.
