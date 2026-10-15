@@ -331,7 +331,15 @@ impl GridGeometry {
     /// row/column; core does not know engine bounds.
     pub fn autofill_handle(&self, range: GridRange) -> Option<Point> {
         let range = range.normalized();
-        let rect = self.cell_rect(range.last.row, range.last.col)?;
+        let Some(rect) = self.cell_rect(range.last.row, range.last.col) else {
+            let fragment = self.fragments(range).into_iter().find(|fragment| {
+                fragment.edges[Side::Right.index()] && fragment.edges[Side::Bottom.index()]
+            })?;
+            return Some(Point {
+                x: fragment.rect.right(),
+                y: fragment.rect.bottom(),
+            });
+        };
         Some(Point {
             x: rect.right(),
             y: rect.bottom(),
@@ -477,6 +485,62 @@ mod tests {
         assert_eq!(fragments[0].rect.width, 40);
         assert_eq!(fragments[0].rect.height, 40);
         assert_eq!(fragments[0].edges, [true; 4]);
+    }
+
+    #[test]
+    fn autofill_handle_uses_visible_corner_when_range_ends_in_hidden_row_and_column() {
+        let sample_axis = || {
+            sample_bands(1, 3, 0, 0, 100, |index| {
+                Ok::<_, ()>(if index == 3 { 0.0 } else { 20.0 })
+            })
+            .unwrap()
+        };
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point::default(),
+                width: 100,
+                height: 100,
+            },
+            Point::default(),
+            sample_axis(),
+            sample_axis(),
+        );
+
+        assert_eq!(
+            geometry.autofill_handle(GridRange {
+                first: CellCoord { row: 1, col: 1 },
+                last: CellCoord { row: 3, col: 3 },
+            }),
+            Some(Point { x: 40, y: 40 })
+        );
+    }
+
+    #[test]
+    fn autofill_handle_is_absent_for_a_fully_hidden_range() {
+        let sample_axis = || {
+            sample_bands(1, 3, 0, 0, 100, |index| {
+                Ok::<_, ()>(if index == 3 { 0.0 } else { 20.0 })
+            })
+            .unwrap()
+        };
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point::default(),
+                width: 100,
+                height: 100,
+            },
+            Point::default(),
+            sample_axis(),
+            sample_axis(),
+        );
+
+        assert_eq!(
+            geometry.autofill_handle(GridRange {
+                first: CellCoord { row: 3, col: 3 },
+                last: CellCoord { row: 3, col: 3 },
+            }),
+            None
+        );
     }
 
     #[test]
