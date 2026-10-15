@@ -358,14 +358,13 @@ impl<B: RenderBackend> CanvasSession<B> {
             return None;
         }
         let sheet = self.committed_frame()?.sheet;
-        match self.hit_test(point)? {
-            GridHit::RowHeader(row) => Some(HostIntent::ResizeRow { sheet, row, pixels }),
-            GridHit::ColumnHeader(column) => Some(HostIntent::ResizeColumn {
+        match self.resize_target(point, 0)? {
+            GridResize::Row(row) => Some(HostIntent::ResizeRow { sheet, row, pixels }),
+            GridResize::Column(column) => Some(HostIntent::ResizeColumn {
                 sheet,
                 column,
                 pixels,
             }),
-            _ => None,
         }
     }
 }

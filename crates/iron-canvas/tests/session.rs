@@ -1,4 +1,6 @@
-use iron_canvas::{CanvasSession, RenderBackend, RenderError, RenderRequest, RevisionToken};
+use iron_canvas::{
+    CanvasSession, HostIntent, RenderBackend, RenderError, RenderRequest, RevisionToken,
+};
 use iron_canvas_core::{
     CanvasTheme, CellCoord, PixelRect, Point,
     painter::TextMetrics,
@@ -203,6 +205,20 @@ fn committed_frame_exposes_cell_rects_scroll_pane_and_autofill_handle() {
             2
         ),
         Some(GridResize::Column(1))
+    );
+    assert_eq!(
+        session.resize_intent(
+            Point {
+                x: frozen.right(),
+                y: 1,
+            },
+            144,
+        ),
+        Some(HostIntent::ResizeColumn {
+            sheet: 0,
+            column: 1,
+            pixels: 144,
+        })
     );
     // The cell body is not a resize zone.
     assert_eq!(session.resize_target(scroll.top_left, 2), None);
