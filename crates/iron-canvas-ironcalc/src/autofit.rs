@@ -131,7 +131,11 @@ pub fn fit_width(
         } else {
             0
         };
-        let width = metrics.measure_text_width(&text, &font_css(&extended.style))
+        let font = font_css(&extended.style);
+        let width = text
+            .split('\n')
+            .map(|line| metrics.measure_text_width(line, &font))
+            .fold(0.0_f64, f64::max)
             + f64::from(reserved_left);
         if width > max {
             max = width;
@@ -263,6 +267,17 @@ mod tests {
         assert_eq!(width, Some(60.0 + FIT_PADDING));
         // An empty span has nothing to fit to.
         assert_eq!(fit_width(&workbook, &FixedWidth, 0, 5, 1, 3).unwrap(), None);
+    }
+
+    #[test]
+    fn fit_width_measures_newline_separated_lines_individually() {
+        let mut workbook = UserModel::new_empty("fit", "en", "UTC", "en").unwrap();
+        workbook.set_user_input(0, 1, 1, "abcd\nabcdefgh").unwrap();
+
+        assert_eq!(
+            fit_width(&workbook, &FixedWidth, 0, 1, 1, 1).unwrap(),
+            Some(80.0 + FIT_PADDING)
+        );
     }
 
     #[test]
