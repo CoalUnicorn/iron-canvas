@@ -18,6 +18,7 @@ pub(super) fn compile_text(
     text: &str,
     rect: PixelRect,
     reserved: i32,
+    spill_clip: Option<PixelRect>,
     shaper: &mut TextShaper<'_>,
     theme: &CanvasTheme,
     link: Option<&CellLinkView>,
@@ -38,34 +39,13 @@ pub(super) fn compile_text(
     if f64::from(rect.width) <= 2.0 * CELL_PADDING {
         return;
     }
-    let alignment = style.alignment.as_ref();
-    let horizontal = match alignment.map(|a| &a.horizontal) {
-        Some(H::Right) => TextAlign::End,
-        Some(H::Center | H::CenterContinuous) => TextAlign::Center,
-        None | Some(H::General) => {
-            if matches!(kind, CellType::Number) {
-                TextAlign::End
-            } else {
-                TextAlign::Start
-            }
-        }
-        Some(H::Left | H::Fill | H::Justify | H::Distributed) => TextAlign::Start,
-    };
-    let vertical = match alignment.map(|a| &a.vertical) {
-        None | Some(V::Bottom) => TextVerticalAlign::Bottom,
-        Some(V::Center) => TextVerticalAlign::Center,
-        Some(V::Top | V::Justify | V::Distributed) => TextVerticalAlign::Top,
-    };
+    let Layout {
+        css,
+        horizontal,
+        size,
+        overflows,
+    } = layout(shaper, style, kind, text, rect, lines);
     let font = &style.font;
-    let size = f64::from(font.sz);
-    let family = font.name.trim();
-    let family = if family.is_empty() { "Calibri" } else { family };
-    let family = family.replace(['"', '\\', '\n', '\r'], "");
-    let css = format!(
-        "{}{}{size}px \"{family}\"",
-        if font.b { "bold " } else { "" },
-        if font.i { "italic " } else { "" }
-    );
     let resolved = workbook.resolve_color(&font.color);
     // IronCalc keeps the hyperlink theme slot private. It is OOXML slot 10.
     let link_color =
@@ -79,25 +59,13 @@ pub(super) fn compile_text(
     } else {
         resolved.as_str()
     };
-    shaper.layout_text_into(
-        &css,
-        text,
-        TextLayoutOptions {
-            bounds: rect,
-            clip: rect,
-            font_size_px: size,
-            horizontal,
-            vertical,
-            wrap: alignment.is_some_and(|a| a.wrap_text),
-            horizontal_padding: CELL_PADDING,
-            vertical_inset: TEXT_V_INSET_PX,
-            line_height_factor: LINE_HEIGHT_FACTOR,
-            approx_char_width: size,
-        },
-        lines,
-    );
-    // A cell clip supplies a proven paint bound for retained rendering.
-    out.push_clip(rect);
+    // Keep the source anchor. Only the resolved clip can extend into neighbors.
+    // Retained rendering and backend culling use this clip as the ink bound.
+    out.push_clip(if overflows {
+        spill_clip.unwrap_or(rect)
+    } else {
+        rect
+    });
     for line in lines {
         let x = match horizontal {
             TextAlign::Start => f64::from(rect.left()) + CELL_PADDING,
@@ -129,4 +97,73 @@ pub(super) fn compile_text(
         }
     }
     out.pop_clip();
+}
+
+pub(super) struct Layout {
+    css: String,
+    horizontal: TextAlign,
+    size: f64,
+    pub overflows: bool,
+}
+
+/// Use identical placement for spill planning and scene emission.
+pub(super) fn layout(
+    shaper: &mut TextShaper<'_>,
+    style: &Style,
+    kind: &CellType,
+    text: &str,
+    rect: PixelRect,
+    lines: &mut Vec<TextLine>,
+) -> Layout {
+    let alignment = style.alignment.as_ref();
+    let horizontal = match alignment.map(|a| &a.horizontal) {
+        Some(H::Right) => TextAlign::End,
+        Some(H::Center | H::CenterContinuous) => TextAlign::Center,
+        None | Some(H::General) => {
+            if matches!(kind, CellType::Number) {
+                TextAlign::End
+            } else {
+                TextAlign::Start
+            }
+        }
+        Some(H::Left | H::Fill | H::Justify | H::Distributed) => TextAlign::Start,
+    };
+    let vertical = match alignment.map(|a| &a.vertical) {
+        None | Some(V::Bottom) => TextVerticalAlign::Bottom,
+        Some(V::Center) => TextVerticalAlign::Center,
+        Some(V::Top | V::Justify | V::Distributed) => TextVerticalAlign::Top,
+    };
+    let font = &style.font;
+    let size = f64::from(font.sz);
+    let family = font.name.trim();
+    let family = if family.is_empty() { "Calibri" } else { family };
+    let family = family.replace(['"', '\\', '\n', '\r'], "");
+    let css = format!(
+        "{}{}{size}px \"{family}\"",
+        if font.b { "bold " } else { "" },
+        if font.i { "italic " } else { "" }
+    );
+    let overflows = shaper.layout_text_into(
+        &css,
+        text,
+        TextLayoutOptions {
+            bounds: rect,
+            clip: rect,
+            font_size_px: size,
+            horizontal,
+            vertical,
+            wrap: alignment.is_some_and(|a| a.wrap_text),
+            horizontal_padding: CELL_PADDING,
+            vertical_inset: TEXT_V_INSET_PX,
+            line_height_factor: LINE_HEIGHT_FACTOR,
+            approx_char_width: size,
+        },
+        lines,
+    );
+    Layout {
+        css,
+        horizontal,
+        size,
+        overflows,
+    }
 }

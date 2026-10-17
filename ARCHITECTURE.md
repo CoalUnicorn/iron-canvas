@@ -1,5 +1,7 @@
 <!-- last-verified-against: M4 completion (2026-10-06) -->
 <!-- working-tree-verified: P2 cache sections, 2026-10-17 -->
+<!-- working-tree-verified: P6 stage 0 text cache, 2026-10-17 -->
+<!-- working-tree-verified: P6 stage 1 text spill, 2026-10-17 -->
 <!-- covers: iron-canvas/crates/ iron-canvas/Cargo.toml -->
 
 # iron-canvas architecture
@@ -105,6 +107,12 @@ depends on `iron-canvas` except the host.
   `TextVerticalAlign`, `CELL_PADDING`, `LINE_HEIGHT_FACTOR`, `TEXT_V_INSET_PX`.
   Wrapping retains source whitespace and keeps non-breaking spaces in words.
   Text centers use fractional coordinates for odd rectangle dimensions.
+- `text_shaper::{TextShaper, TextLayoutCache, TextMetricsKey}` caches line text
+  and widths before placement. The default limits are 500 entries and 1 MiB
+  of entry data. The cache removes the least recently used entry first.
+  Metric identity, font, source text, usable width, wrap, and fallback width
+  determine validity. Placement and clipping apply after lookup.
+  The shaper keeps the existing break policy. It does not predict widths.
 - `theme::{CanvasTheme, ThemeVariables, FORMULA_REF_COLORS, FORMULA_REF_TINTS}`
   — grid paint defaults. The host derives `CanvasTheme` from CSS variables.
 
@@ -150,6 +158,16 @@ pub struct PreparedWorksheet {
 - `prepare_reusing_geometry` resamples dimensions but reuses a previous
   `GridGeometry` when `bounds`, `origin`, and bands are equal, so a revision
   change need not rebuild equal geometry.
+- `prepare_with_shaper` accepts a shaper with caller-owned text storage.
+  The existing compiler entry points use a temporary text cache.
+- Complete viewport preparation plans text spill before painting each row.
+  Eligible unwrapped text keeps its source anchor and uses a wider clip.
+  Occupied cells, merges, hidden columns, pane boundaries, and formatting
+  blockers stop spill. Each direction has a 64-column limit. Offscreen source
+  searches use the same limit. Offscreen sources do not add hit-test cells.
+  Crossed vertical grid lines are omitted. Horizontal and explicit borders stay.
+  `prepare_cells` keeps cell clips because arbitrary placements do not establish
+  adjacent worksheet geometry. See the text design, sections 13-14, for limits.
 - Preparation is bounded and cached per attempt: a preparation-local record
   serves ordinary cells, offscreen merge anchors, and active-cell restoration;
   each distinct needed cell is read once (`get_extended_cell_style`).
@@ -191,11 +209,20 @@ pub struct PreparedWorksheet {
 7. `RenderOutcome { sequence, sheet, revision, cell_count,
    extended_style_reads, content_cached, reused_geometry, strategy }` reports the frame.
 
-`render_fresh` bypasses reuse for reference comparisons.
+`render_fresh` bypasses content, text layout, and pixel reuse for reference comparisons.
 `CanvasSession::invalidate` (and `backend_mut`) clears backend metric caches
-and forces the next successful render to prepare. This also bypasses shared
+and the session's text cache. It forces the next successful render to prepare.
+This also bypasses shared
 cache hits. A failed attempt keeps the invalidation pending. Call it after
 fonts change. Target size and scale are fixed per backend instance.
+
+Each session retains measured lines across preparations with equal metrics.
+An explicit metric key change clears those lines. A switch between local
+metrics (`render`) and keyed metrics (`render_cached`) also clears them.
+The session tracks this scope for each attempt, including failed attempts.
+Measured lines contain no workbook state. A failed attempt can retain them
+without publishing worksheet content or pixels.
+Headers and auto-fit do not share this cache yet.
 
 ### Shared worksheet cache
 
@@ -211,6 +238,7 @@ and compares the axes before it accepts that geometry. A theme or metric key
 change starts preparation without a geometry donor.
 
 `TextMetricsKey::new(profile, generation)` identifies a metric environment.
+Core owns this type. `iron-canvas` keeps its existing public export.
 Equal keys promise equal measurements and font resolution. Use different
 profiles for different backends unless equal metrics are proved. Advance the
 generation after fonts change. Use checked counters. Clear shared entries and

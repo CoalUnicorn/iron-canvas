@@ -51,6 +51,49 @@ fn compare(
     let differences = a.iter().zip(&b).filter(|(a, b)| a != b).count();
     assert_eq!(differences, 0, "retained pixels must match Fresh");
 }
+
+#[test]
+fn native_spill_matches_fresh_after_offscreen_source_and_blocker_edits() {
+    for scale in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = fixture();
+        model
+            .range_clear_all(&Area {
+                sheet: 0,
+                row: 1,
+                column: 1,
+                width: 20,
+                height: 100,
+            })
+            .unwrap();
+        model.set_columns_width(0, 1, 20, 60.0).unwrap();
+        request.viewport.first_cell.col = 2;
+        model
+            .set_user_input(0, 4, 1, "Offscreen text extends across empty cells")
+            .unwrap();
+        let mut session = CanvasSession::new(NativeSceneBackend::new(scale).unwrap());
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        let before = pixels(&session);
+        model.set_user_input(0, 4, 2, "=\"\"").unwrap();
+        request.revision.revision += 1;
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        assert_ne!(pixels(&session), before);
+        model
+            .range_clear_contents(&Area {
+                sheet: 0,
+                row: 4,
+                column: 2,
+                width: 1,
+                height: 1,
+            })
+            .unwrap();
+        request.revision.revision += 1;
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        assert_eq!(pixels(&session), before);
+    }
+}
 #[test]
 fn native_reuses_stable_frames_and_falls_back_for_partial_work() {
     for scale in [1.0, 1.25, 1.5] {

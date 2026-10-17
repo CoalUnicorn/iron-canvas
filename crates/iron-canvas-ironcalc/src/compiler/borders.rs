@@ -44,6 +44,7 @@ impl Rule {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn compile_borders(
     out: &mut SceneBuilder,
     grid: &mut SceneBuilder,
@@ -51,6 +52,7 @@ pub(super) fn compile_borders(
     border: &Border,
     rect: PixelRect,
     show_grid: bool,
+    hide_left_grid: bool,
     theme: &CanvasTheme,
 ) {
     for (side, item) in [
@@ -82,7 +84,7 @@ pub(super) fn compile_borders(
                     rule.width(),
                 );
             }
-        } else if show_grid && matches!(side, Side::Left | Side::Top) {
+        } else if show_grid && (side == Side::Top || (side == Side::Left && !hide_left_grid)) {
             grid.stroke_line(
                 side.line(rect),
                 PaintColor::Borrowed(&theme.grid_color),
@@ -120,6 +122,7 @@ mod tests {
                 height: 30,
             },
             true,
+            false,
             &CanvasTheme::light(),
         );
         let grid = grid.finish();

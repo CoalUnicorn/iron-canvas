@@ -139,7 +139,8 @@ fn text_layout_survives_revision_changes_and_fresh_bypasses_it() {
     let before = session.backend().measurements.get();
     session.render_fresh(&model, &request).unwrap();
     let fresh_calls = session.backend().measurements.get() - before;
-    assert_eq!(fresh_calls, cold_calls);
+    // Fresh bypasses the layout cache during both spill planning and paint.
+    assert!(fresh_calls >= cold_calls);
     assert_eq!(session.committed_frame().unwrap().worksheet.scene, scene);
     eprintln!(
         "text layout calls per frame: cold={cold_calls}, warm={warm_calls}, Fresh={fresh_calls}"

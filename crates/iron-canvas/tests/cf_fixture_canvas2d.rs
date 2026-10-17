@@ -300,6 +300,115 @@ fn assert_fresh(
 }
 
 #[wasm_bindgen_test]
+fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
+    use iron_canvas_core::scene_geometry::GridRange;
+    use ironcalc_base::expressions::types::Area;
+
+    for dpr in [1.0, 1.25, 2.0] {
+        let mut model = UserModel::new_empty("spill pixels", "en", "UTC", "en").unwrap();
+        model.set_columns_width(0, 1, 12, 60.0).unwrap();
+        model.set_rows_height(0, 1, 20, 32.0).unwrap();
+        let left_text = "Offscreen left source extends into empty cells";
+        let right_text = "Offscreen right source extends into empty cells";
+        for row in 2..=8 {
+            let (col, text, alignment) = match row % 3 {
+                0 => (8, right_text, "right"),
+                1 => (4, "Centered text extends on both sides", "center"),
+                _ => (1, left_text, "left"),
+            };
+            model.set_user_input(0, row, col, text).unwrap();
+            model
+                .update_range_style(
+                    &Area {
+                        sheet: 0,
+                        row,
+                        column: col,
+                        width: 1,
+                        height: 1,
+                    },
+                    "alignment.horizontal",
+                    alignment,
+                )
+                .unwrap();
+        }
+        let metrics = CanvasMetrics::new(CanvasSize { w: 348.0, h: 280.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 2 },
+                width: 348,
+                height: 280,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        let before = pixels(session.backend().canvas());
+        for step in 0..10 {
+            match step {
+                0 => model.set_user_input(0, 2, 1, "short").unwrap(),
+                1 => model.set_user_input(0, 2, 1, left_text).unwrap(),
+                2 => model.set_user_input(0, 2, 2, "=\"\"").unwrap(),
+                3 => model
+                    .range_clear_contents(&Area {
+                        sheet: 0,
+                        row: 2,
+                        column: 2,
+                        width: 1,
+                        height: 1,
+                    })
+                    .unwrap(),
+                4 => {
+                    request.overlays.selection = vec![GridRange {
+                        first: CellCoord { row: 2, col: 2 },
+                        last: CellCoord { row: 5, col: 5 },
+                    }];
+                    request.overlays.active_cell = Some(CellCoord { row: 2, col: 2 });
+                }
+                5 => {
+                    request.overlays = Default::default();
+                    request.viewport.first_cell.row = 2;
+                }
+                6 => model.set_columns_hidden(0, 3, 3, true).unwrap(),
+                7 => model.set_columns_hidden(0, 3, 3, false).unwrap(),
+                8 => {
+                    model.set_frozen_columns_count(0, 2).unwrap();
+                    model.set_frozen_rows_count(0, 2).unwrap();
+                    request.viewport.first_cell.col = 4;
+                }
+                _ => model
+                    .merge_cells(&Area {
+                        sheet: 0,
+                        row: 4,
+                        column: 4,
+                        width: 2,
+                        height: 1,
+                    })
+                    .unwrap(),
+            }
+            if step != 4 && step != 5 {
+                request.revision.revision += 1;
+            }
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            if step == 0 {
+                assert_ne!(pixels(session.backend().canvas()), before);
+            }
+            if step == 1 || step == 3 {
+                assert_eq!(pixels(session.backend().canvas()), before);
+            }
+        }
+    }
+}
+
+#[wasm_bindgen_test]
 fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
     use iron_canvas::{TextMetricsKey, WorksheetCache};
     use ironcalc_base::expressions::types::Area;
