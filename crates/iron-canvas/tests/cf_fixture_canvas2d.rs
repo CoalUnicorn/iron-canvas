@@ -300,6 +300,112 @@ fn assert_fresh(
 }
 
 #[wasm_bindgen_test]
+fn selection_union_headers_freeze_and_removal_match_fresh_at_four_scales() {
+    use iron_canvas::{
+        AreaId, SelectionArea, SelectionKind, SelectionMode, SelectionSnapshot, SelectionTarget,
+    };
+    use iron_canvas_core::{Point, scene_geometry::GridRange};
+    use ironcalc_base::expressions::types::Area;
+    let mut model = UserModel::new_empty("selection union", "en", "UTC", "en").unwrap();
+    model.set_rows_height(0, 1, 50, 24.0).unwrap();
+    model.set_columns_width(0, 1, 20, 60.0).unwrap();
+    model.set_frozen_rows_count(0, 2).unwrap();
+    model.set_frozen_columns_count(0, 2).unwrap();
+    model.set_rows_hidden(0, 2, 2, true).unwrap();
+    model.set_columns_hidden(0, 2, 2, true).unwrap();
+    model
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 5,
+            column: 5,
+            width: 2,
+            height: 2,
+        })
+        .unwrap();
+    let cell = |row, col| CellCoord { row, col };
+    let area = |id, first, last| {
+        SelectionArea::new(
+            AreaId(id),
+            SelectionTarget::new(SelectionKind::Cells, first, last, GridRange { first, last })
+                .unwrap(),
+        )
+    };
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let canvas = make_canvas();
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(canvas.clone(), metrics).unwrap());
+        let first = area(1, cell(1, 1), cell(6, 6));
+        let second = area(2, cell(3, 3), cell(8, 8));
+        let snapshot = |areas| {
+            SelectionSnapshot::new(1, 0, 1, areas, AreaId(1), cell(5, 5), SelectionMode::Normal)
+                .unwrap()
+        };
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: cell(3, 3),
+                width: 640,
+                height: 400,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        request.overlays.selection_snapshot = Some(snapshot(vec![first]));
+        session.render(&model, &request).unwrap();
+        let base = pixels(&canvas);
+        let rect = session.cell_rect(4, 4).unwrap();
+        let points = [
+            rect.center(),
+            Point {
+                x: 1,
+                y: rect.center().y,
+            },
+            Point {
+                x: rect.center().x,
+                y: 1,
+            },
+        ];
+        request.overlays.selection_snapshot = Some(snapshot(vec![first, second]));
+        assert_eq!(
+            session
+                .render(&model, &request)
+                .unwrap()
+                .extended_style_reads,
+            0
+        );
+        let union = pixels(&canvas);
+        for point in points {
+            let x = (f64::from(point.x) * dpr).floor() as usize;
+            let y = (f64::from(point.y) * dpr).floor() as usize;
+            let offset = (y * canvas.width() as usize + x) * 4;
+            assert_eq!(
+                &union[offset..offset + 4],
+                &base[offset..offset + 4],
+                "one fill at {point:?}, scale {dpr}"
+            );
+        }
+        assert_fresh(&session, &model, &request, dpr);
+        let old_stamp = session.interaction_frame();
+        request.revision.workbook_id = 2;
+        assert!(session.render(&model, &request).is_err());
+        assert_eq!(session.interaction_frame(), old_stamp);
+        assert_eq!(pixels(&canvas), union);
+        request.revision.workbook_id = 1;
+        request.viewport.first_cell = cell(4, 4);
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        request.overlays.selection_snapshot = None;
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+    }
+}
+
+#[wasm_bindgen_test]
 fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
     use iron_canvas::{OverlayState, RenderStrategy, TextMetricsKey, WorksheetCache};
     use iron_canvas_core::scene_geometry::GridRange;

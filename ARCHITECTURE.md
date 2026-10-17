@@ -1,5 +1,5 @@
 <!-- last-verified-against: M4 completion (2026-10-06) -->
-<!-- working-tree-verified: P2 cache sections, 2026-10-17 -->
+<!-- working-tree-verified: P2 cache and P3a interaction sections, 2026-10-17 -->
 <!-- covers: iron-canvas/crates/ iron-canvas/Cargo.toml -->
 
 # iron-canvas architecture
@@ -240,6 +240,77 @@ the revision with a checked counter. Workbook replacement advances the workbook
 identity. Browser font events clear the cache, advance the metric generation,
 and invalidate the session.
 
+### Navigation and selection (P3a)
+
+`classify_navigation` maps a normalized key and modifiers to a typed
+`NavigationIntent`. `HostIntent::Navigate` carries this intent to a host.
+The classifier reads no workbook. Both binding profiles expose Basic commands.
+Extended commands stay unhandled until P3b passes its engine gate.
+
+`interaction_frame` returns an owned stamp for the committed frame. The stamp
+contains sequence, sheet, content token, viewport, and an optional selection
+revision. It identifies committed data. A host separately proves that its
+surface presents that frame.
+
+`navigation_geometry(expected)` returns ready geometry or a pending reason.
+It checks workbook identity, sheet, content revision, logical size, theme,
+geometry availability, and session invalidation. A selection-only change or
+a new requested scroll origin does not invalidate pane dimensions.
+`scroll_to_show_checked` starts from that requested origin and preserves
+pending, bounds, and extent errors. It returns `Unchanged` or `ScrollTo`.
+The old optional `scroll_to_show` remains available. The host supplies the
+workbook that matches the expected content token.
+
+A `SelectionSnapshot` is an immutable description of accepted selection.
+Checked constructors validate the areas, active area, active cell, and bounds.
+`SelectionKind` preserves full rows, full columns, and whole-sheet meaning.
+`propose_selection` returns a candidate for replace, add, extend, subtract,
+activate, or mode changes. Work depends on rectangle count. The limits are
+256 areas and 256 disjoint coverage pieces. Subtraction keeps the identity
+nearest the old focus. A private counter prevents reuse of removed identities.
+The host validates merge closure and assigns the next selection revision
+before acceptance. This API neither changes the engine nor accepts a proposal.
+
+`OverlayState::selection_snapshot` replaces legacy `selection` and
+`active_cell` paint input when present. A workbook or sheet mismatch returns
+`RenderError::InvalidOverlay` before preparation or staging. The previous frame
+and cache remain unchanged. `OverlayState` is an additive field change.
+External exhaustive struct literals add the new field or use `..Default::default()`.
+External exhaustive matches also handle `HostIntent::Navigate` and
+`RenderError::InvalidOverlay`.
+
+Selection fill coverage is disjoint. Header spans form their own unions.
+Logical area boundaries determine outlines, so coverage seams stay invisible.
+The active area has a solid outline; other areas have dashed outlines.
+The compiler's prepared content restores one active logical cell.
+Several areas produce no autofill handle. One finite area, or a legacy active
+cell without a range, retains the existing handle and sheet-limit rules.
+Selection-only changes reuse prepared content without a content revision bump.
+
+React owns a queue with at most 64 pending commands. It consumes recognized
+keys before execution. Repeat events beyond the limit are dropped. Other
+excess commands report an error. Commands bind to workbook, sheet, and grid
+interaction identity. Focus loss, composition entry, disposal, sheet changes,
+and workbook replacement cancel the queue. Failed preparation retains
+unstarted commands. Execution removes each command before engine movement,
+so a failed execution or presentation cannot replay it.
+
+The host uses the pinned engine's movement methods. Basic Shift+Arrow passes
+real-engine merge extend/contract tests in both horizontal directions.
+Tab and Enter collapse a larger selection and take one logical step in P3a.
+Retained-set traversal remains P3b. A page command in a zero-height pane is a
+no-op. Navigation does not create a content undo entry.
+
+A presentation stamp records the committed frame and host selection revision
+only after `CanvasRenderer::render_grid_scene` succeeds. A click requires that
+stamp to match the full current viewport and request. A failed presentation
+blocks hits against the unseen candidate frame. The DOM route handles only
+focused grid keys. IME composition and unrelated input keep their keys.
+
+P3b requires E9 and Tasks 6–11 in the navigation plan. Extended bindings,
+multi-area pointer selection, retained-set traversal, selection-border hits,
+and transfer previews remain unavailable.
+
 ### Retained rendering
 
 Core hashes every resolved primitive and its effective clip into 32-pixel
@@ -369,6 +440,9 @@ validation and limits.
 | `iron-canvas/src/lib.rs` | `CanvasSession`, request/outcome/error, frame publication |
 | `iron-canvas/src/cache.rs` | `WorksheetCache`, `TextMetricsKey`, content validity and use order |
 | `iron-canvas/src/interaction.rs` | committed queries and `HostIntent` |
+| `iron-canvas/src/navigation.rs` | Pure keyboard classification and typed navigation intents |
+| `iron-canvas/src/navigation_queries.rs` | Interaction stamps, readiness, and checked visibility |
+| `iron-canvas/src/selection.rs` | Validated snapshots and bounded rectangle algebra |
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |
 | `iron-canvas/src/retained.rs` | scroll-blit planning |
 | `iron-canvas/examples/` | host tools: `linux_xlsx_viewer_gtk4` (GTK4) and the `export_workbook` Clap CLI |

@@ -1,6 +1,7 @@
 //! Spreadsheet overlay composition from owned, already prepared content.
 
 use crate::interaction::{LAST_COLUMN, LAST_ROW, autofill_handle_rect, logical_range};
+use crate::selection::{SelectionKind, SelectionSnapshot, union_ranges};
 use iron_canvas_core::{
     CanvasTheme, CellCoord, PixelRect, Point, Side,
     geometry::{
@@ -25,12 +26,39 @@ pub struct FormulaOverlay {
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OverlayState {
+    /// A snapshot replaces legacy selection and active-cell paint input.
+    pub selection_snapshot: Option<SelectionSnapshot>,
     pub selection: Vec<GridRange>,
     pub active_cell: Option<CellCoord>,
     pub clipboard: Option<GridRange>,
     /// The host resolves formula references. This type describes only paint.
     pub formula_references: Vec<FormulaOverlay>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OverlayError {
+    Workbook,
+    Sheet,
+}
+impl std::fmt::Display for OverlayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "selection snapshot mismatch: {self:?}")
+    }
+}
+impl std::error::Error for OverlayError {}
+impl OverlayState {
+    pub(crate) fn validate(&self, request: &crate::RenderRequest) -> Result<(), OverlayError> {
+        if let Some(selection) = &self.selection_snapshot {
+            if selection.workbook_id() != request.revision.workbook_id {
+                return Err(OverlayError::Workbook);
+            }
+            if selection.sheet() != request.sheet {
+                return Err(OverlayError::Sheet);
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Append the overlay passes to a prepared worksheet's scene. Call it on a
 /// freshly prepared worksheet: an already composed scene would replay its own
 /// overlay passes inside the restore clip.
@@ -43,17 +71,46 @@ pub(crate) fn compose(
     let Some(geometry) = worksheet.geometry.as_ref() else {
         return;
     };
+    // Logical coverage stays disjoint before pane clipping. This prevents
+    // overlapping areas from applying the transparent fill more than once.
+    let ranges: Vec<_> = state.selection_snapshot.as_ref().map_or_else(
+        || state.selection.clone(),
+        |snapshot| snapshot.areas().iter().map(|area| area.range()).collect(),
+    );
+    let active = state
+        .selection_snapshot
+        .as_ref()
+        .map_or(state.active_cell, |snapshot| Some(snapshot.active_cell()));
+    let active_index = state.selection_snapshot.as_ref().map_or_else(
+        || {
+            active
+                .and_then(|cell| ranges.iter().rposition(|range| range.contains(cell)))
+                .or_else(|| ranges.len().checked_sub(1))
+        },
+        |snapshot| {
+            snapshot
+                .areas()
+                .iter()
+                .position(|area| area.id() == snapshot.active_area())
+        },
+    );
     let mut fills = SceneBuilder::default();
     let mut strokes = SceneBuilder::default();
-    for range in &state.selection {
-        for fragment in geometry.fragments(*range) {
+    for range in union_ranges(ranges.iter().copied()) {
+        for fragment in geometry.fragments(range) {
             fills.rect_fill(fragment.rect, PaintColor::Borrowed(&theme.selection_fill));
+        }
+    }
+    // Keep area boundaries separate from coverage pieces. Decomposition seams
+    // have no visible outline and cannot become future gesture borders.
+    for (index, range) in ranges.iter().enumerate() {
+        for fragment in geometry.fragments(*range) {
             outline(
                 &mut strokes,
                 fragment.rect,
                 fragment.edges,
                 &theme.selection_color,
-                false,
+                active_index != Some(index),
             );
         }
     }
@@ -61,7 +118,7 @@ pub(crate) fn compose(
     // passes are re-referenced, so the restore copies nothing; merged cells
     // paint in their own passes, so every model pass must replay.
     let mut restore: Vec<Rc<[Primitive]>> = Vec::new();
-    if let Some(active) = state.active_cell {
+    if let Some(active) = active {
         let model_passes = worksheet.scene.passes.len();
         for fragment in geometry.fragments(logical_range(worksheet, active)) {
             restore.push(Rc::from([Primitive::Clip {
@@ -108,54 +165,63 @@ pub(crate) fn compose(
     }
     // Header highlights stay clipped to their strips and preserve the labels.
     let mut header = SceneBuilder::default();
-    let mut highlighted = Vec::new();
-    for range in &state.selection {
+    let mut rows = Vec::new();
+    let mut columns = Vec::new();
+    for range in &ranges {
         for fragment in geometry.fragments(*range) {
-            let row = PixelRect {
-                top_left: Point {
-                    x: 0,
-                    y: fragment.rect.top(),
-                },
-                width: geometry.origin.x,
-                height: fragment.rect.height,
-            };
-            let col = PixelRect {
-                top_left: Point {
-                    x: fragment.rect.left(),
-                    y: 0,
-                },
-                width: fragment.rect.width,
-                height: geometry.origin.y,
-            };
-            for (rect, side) in [(row, Side::Right), (col, Side::Bottom)] {
-                if !highlighted.contains(&rect) {
-                    header.rect_fill(rect, PaintColor::Borrowed(&theme.selection_fill));
-                    header.stroke_line(
-                        side.line(rect),
-                        PaintColor::Borrowed(&theme.selection_color),
-                        HEADER_SELECTION_STROKE_WIDTH,
-                    );
-                    highlighted.push(rect);
-                }
-            }
+            rows.push((fragment.rect.top(), fragment.rect.bottom()));
+            columns.push((fragment.rect.left(), fragment.rect.right()));
         }
     }
-    let autofill_range = state
-        .active_cell
-        .and_then(|active| {
-            state
-                .selection
-                .iter()
-                .rev()
-                .find(|range| range.contains(active))
-                .copied()
-        })
-        .or_else(|| state.selection.last().copied())
-        .or_else(|| {
-            state
-                .active_cell
-                .map(|active| logical_range(worksheet, active))
+    for (spans, side) in [(&mut rows, Side::Right), (&mut columns, Side::Bottom)] {
+        spans.sort_unstable();
+        let mut merged: Vec<(i32, i32)> = Vec::new();
+        for &(start, end) in spans.iter() {
+            if let Some(last) = merged.last_mut()
+                && start <= last.1
+            {
+                last.1 = last.1.max(end);
+            } else {
+                merged.push((start, end));
+            }
+        }
+        for (start, end) in merged {
+            let rect = if side == Side::Right {
+                PixelRect {
+                    top_left: Point { x: 0, y: start },
+                    width: geometry.origin.x,
+                    height: end - start,
+                }
+            } else {
+                PixelRect {
+                    top_left: Point { x: start, y: 0 },
+                    width: end - start,
+                    height: geometry.origin.y,
+                }
+            };
+            header.rect_fill(rect, PaintColor::Borrowed(&theme.selection_fill));
+            header.stroke_line(
+                side.line(rect),
+                PaintColor::Borrowed(&theme.selection_color),
+                HEADER_SELECTION_STROKE_WIDTH,
+            );
+        }
+    }
+    let single_finite = state
+        .selection_snapshot
+        .as_ref()
+        .map_or(ranges.len() <= 1, |snapshot| {
+            snapshot.areas().len() == 1
+                && snapshot.areas()[0].target().kind() == SelectionKind::Cells
         });
+    let autofill_range = if single_finite {
+        ranges
+            .first()
+            .copied()
+            .or_else(|| active.map(|cell| logical_range(worksheet, cell)))
+    } else {
+        None
+    };
     let mut autofill = SceneBuilder::default();
     if let Some(range) = autofill_range {
         let last = range.normalized().last;

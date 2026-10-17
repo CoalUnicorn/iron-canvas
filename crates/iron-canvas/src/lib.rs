@@ -6,8 +6,14 @@
 
 mod cache;
 mod interaction;
+mod navigation;
+mod navigation_queries;
+mod selection;
 use cache::CacheLookup;
 pub use cache::{TextMetricsKey, WorksheetCache};
+pub use navigation::*;
+pub use navigation_queries::*;
+pub use selection::*;
 mod overlays;
 mod retained;
 pub use interaction::{
@@ -15,7 +21,7 @@ pub use interaction::{
 };
 pub use iron_canvas_core::scene::retained::RenderStrategy;
 use iron_canvas_core::scene::retained::{SceneFingerprint, SceneUpdate};
-pub use overlays::{FormulaOverlay, OverlayState};
+pub use overlays::{FormulaOverlay, OverlayError, OverlayState};
 
 use std::fmt;
 
@@ -63,6 +69,7 @@ pub enum RenderError<E> {
     Preparation(WorksheetCompileError),
     Backend(E),
     SequenceExhausted,
+    InvalidOverlay(OverlayError),
 }
 
 impl<E: fmt::Display> fmt::Display for RenderError<E> {
@@ -70,6 +77,7 @@ impl<E: fmt::Display> fmt::Display for RenderError<E> {
         match self {
             Self::Preparation(error) => write!(f, "worksheet preparation failed: {error}"),
             Self::Backend(error) => write!(f, "backend frame failed: {error}"),
+            Self::InvalidOverlay(error) => write!(f, "invalid overlay: {error}"),
             Self::SequenceExhausted => f.write_str("render frame sequence exhausted"),
         }
     }
@@ -182,6 +190,10 @@ impl<B: RenderBackend> CanvasSession<B> {
         request: &RenderRequest,
         source: ContentSource<'_>,
     ) -> Result<RenderOutcome, RenderError<B::Error>> {
+        request
+            .overlays
+            .validate(request)
+            .map_err(RenderError::InvalidOverlay)?;
         let sequence = self.next_sequence;
         let next_sequence = sequence
             .checked_add(1)

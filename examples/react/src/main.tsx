@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent, WheelEvent } from "react";
+import type { ChangeEvent, WheelEvent, KeyboardEvent, PointerEvent } from "react";
 import { createRoot } from "react-dom/client";
-import init, { Workbook } from "../wasm/pkg/iron_canvas_react_example.js";
+import init, { Workbook, classifyKey } from "../wasm/pkg/iron_canvas_react_example.js";
 import "./style.css";
 
 interface SheetTab {
@@ -17,6 +17,9 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const workbookRef = useRef<Workbook | null>(null);
+  const navigationFrame = useRef<number | null>(null);
+  const composing = useRef(false);
+  const [activeCell, setActiveCell] = useState("A1");
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(false);
   const [sheets, setSheets] = useState<SheetTab[]>([]);
@@ -25,6 +28,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   const refreshWorkbook = (workbook: Workbook) => {
+    setActiveCell(workbook.activeCell());
     setSheets(workbook.getSheets());
     setSelectedSheet(workbook.selectedSheet());
     setWorkbookName(workbook.workbookName());
@@ -51,6 +55,8 @@ function App() {
             const { width, height } = canvas.getBoundingClientRect();
             if (width > 0 && height > 0) {
               workbook.resize(width, height, window.devicePixelRatio || 1);
+              workbook.flushNavigation();
+              setActiveCell(workbook.activeCell());
             }
           } catch (resizeError) {
             setError(messageFromError(resizeError));
@@ -64,6 +70,8 @@ function App() {
         onFontsLoaded = () => {
           try {
             workbook.invalidateFonts();
+            workbook.flushNavigation();
+            setActiveCell(workbook.activeCell());
           } catch (fontError) {
             setError(messageFromError(fontError));
           }
@@ -77,15 +85,20 @@ function App() {
       }
     };
 
+    window.addEventListener("blur", cancelNavigation);
     void start();
     return () => {
       cancelled = true;
+      window.removeEventListener("blur", cancelNavigation);
       observer?.disconnect();
       if (onWindowResize) window.removeEventListener("resize", onWindowResize);
       if (onFontsLoaded) {
         document.fonts.removeEventListener("loadingdone", onFontsLoaded);
         document.fonts.removeEventListener("loadingerror", onFontsLoaded);
       }
+      if (navigationFrame.current !== null) cancelAnimationFrame(navigationFrame.current);
+      navigationFrame.current = null;
+      workbookRef.current?.cancelNavigation();
       workbookRef.current = null;
     };
   }, []);
@@ -133,6 +146,66 @@ function App() {
       setError(null);
     } catch (sheetError) {
       setError(messageFromError(sheetError));
+    }
+  };
+
+  const cancelNavigation = () => {
+    if (navigationFrame.current !== null) cancelAnimationFrame(navigationFrame.current);
+    navigationFrame.current = null;
+    try {
+      workbookRef.current?.cancelNavigation();
+    } catch (navigationError) {
+      setError(messageFromError(navigationError));
+    }
+  };
+
+  const navigateGrid = (event: KeyboardEvent<HTMLCanvasElement>) => {
+    const canvas = event.currentTarget;
+    if (event.target !== canvas || document.activeElement !== canvas ||
+        event.defaultPrevented || composing.current || event.nativeEvent.isComposing ||
+        event.keyCode === 229) return;
+    const usesCommand = /Mac|iPhone|iPad|iPod/.test(navigator.platform);
+    if ((usesCommand && event.ctrlKey) || (!usesCommand && event.metaKey)) return;
+    const command = classifyKey(event.key, usesCommand ? event.metaKey : event.ctrlKey,
+      event.shiftKey, event.altKey, event.getModifierState("AltGraph"));
+    const workbook = workbookRef.current;
+    if (!command || !workbook) return;
+    // Consume recognized keys before execution. Errors cannot invoke browser
+    // navigation, and later keys join the same ordered command queue.
+    event.preventDefault();
+    try {
+      workbook.enqueueNavigation(command, event.repeat);
+      if (navigationFrame.current === null) {
+        navigationFrame.current = requestAnimationFrame(() => {
+          navigationFrame.current = null;
+          try {
+            workbook.flushNavigation();
+            setError(null);
+          } catch (navigationError) {
+            setError(messageFromError(navigationError));
+          } finally {
+            setActiveCell(workbook.activeCell());
+          }
+        });
+      }
+    } catch (navigationError) {
+      setError(messageFromError(navigationError));
+    }
+  };
+
+  const selectCell = (event: PointerEvent<HTMLCanvasElement>) => {
+    const canvas = event.currentTarget;
+    canvas.focus();
+    if (event.button !== 0 || event.shiftKey || event.ctrlKey || event.metaKey || event.altKey) return;
+    const workbook = workbookRef.current;
+    if (!workbook) return;
+    const rect = canvas.getBoundingClientRect();
+    try {
+      workbook.selectAt(Math.floor(event.clientX - rect.left), Math.floor(event.clientY - rect.top));
+      setActiveCell(workbook.activeCell());
+      setError(null);
+    } catch (selectionError) {
+      setError(messageFromError(selectionError));
     }
   };
 
@@ -204,7 +277,14 @@ function App() {
       <section className="grid-region" aria-label="Worksheet grid">
         <canvas
           ref={canvasRef}
-          aria-label={`${workbookName} worksheet`}
+          aria-label={`${workbookName} worksheet, ${activeCell}`}
+          role="grid"
+          tabIndex={0}
+          onKeyDown={navigateGrid}
+          onPointerDown={selectCell}
+          onBlur={cancelNavigation}
+          onCompositionStart={() => { composing.current = true; cancelNavigation(); }}
+          onCompositionEnd={() => { composing.current = false; }}
           onWheel={scrollGrid}
         />
       </section>
