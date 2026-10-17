@@ -3,5 +3,3 @@ target/*
 */target/**
 tools/*
 .worktrees/
-.workbook-review/*
-examples/dotnet/*
