@@ -1,5 +1,5 @@
 <!-- last-verified-against: M4 completion (2026-10-06) -->
-<!-- working-tree-verified: 2026-10-06 -->
+<!-- working-tree-verified: P2 cache sections, 2026-10-17 -->
 <!-- covers: iron-canvas/crates/ iron-canvas/Cargo.toml -->
 
 # iron-canvas architecture
@@ -17,7 +17,7 @@ The crate keeps a strict split:
 - **iron-canvas-ironcalc** owns worksheet compilation and spreadsheet semantics
   (styles, conditional formatting, borders, links, merges, auto-fit).
 - **iron-canvas** owns the render session: request, reuse, frame publication,
-  host queries, and overlays.
+  host queries, overlays, and the shared worksheet cache.
 - **iron-canvas-export** owns SVG/PDF backends plus workbook loading, range
   selection, and export orchestration; it delegates worksheet compilation to
   `iron-canvas-ironcalc`.
@@ -48,7 +48,7 @@ flowchart TD
 | --- | --- | --- |
 | `iron-canvas-core` | Coordinates, bounds, canvas metrics, axis sampling, pane geometry and fragments, hit/resize geometry, text layout, resolved paint primitives and scene execution, retained-pixel fingerprints and damage bands, grid theme defaults | `UserModel`, CF enums, workbook themes, formula references, browser or Cairo calls |
 | `iron-canvas-ironcalc` | Direct immutable IronCalc reads, worksheet preparation, style/CF/border/text lowering, merge and link semantics, the CF glyph catalogue, auto-fit measurement | Workbook writes, backends, host event loop |
-| `iron-canvas` | `CanvasSession` state and invalidation, request/frame planning, prepare/stage/commit coordination, committed-frame queries and host intents, spreadsheet overlay composition | Formula evaluation, duplicate engine getters, backend drawing |
+| `iron-canvas` | Shared `WorksheetCache`, `CanvasSession` state and invalidation, request/frame planning, prepare/stage/commit coordination, committed-frame queries and host intents, spreadsheet overlay composition | Formula evaluation, duplicate engine getters, backend drawing |
 | `iron-canvas-canvas2d` | Browser `<canvas>` surfaces, the Canvas2D painter, text metrics and memo, the CSS-var theme bridge, the scene backend | IronCalc, workbook scheduling |
 | `iron-canvas-native` | Cairo/Pango metrics and raster primitives, staged image surfaces | Window ownership, workbook access |
 | `iron-canvas-export` | SVG and PDF painters and their scene backends, font resources, document assembly, XLSX loading, sheet/range selection, export orchestration | A separate worksheet renderer or CF resolver |
@@ -189,12 +189,56 @@ pub struct PreparedWorksheet {
    pixels, query geometry, base content, and fingerprints published together.
    Any preparation/stage/commit error keeps the previous frame and cache truth.
 7. `RenderOutcome { sequence, sheet, revision, cell_count,
-   extended_style_reads, reused_geometry, strategy }` reports the frame.
+   extended_style_reads, content_cached, reused_geometry, strategy }` reports the frame.
 
 `render_fresh` bypasses reuse for reference comparisons.
 `CanvasSession::invalidate` (and `backend_mut`) clears backend metric caches
-and forces the next render to prepare; call it after fonts change. Target size
-and scale are fixed per backend instance.
+and forces the next successful render to prepare. This also bypasses shared
+cache hits. A failed attempt keeps the invalidation pending. Call it after
+fonts change. Target size and scale are fixed per backend instance.
+
+### Shared worksheet cache
+
+`WorksheetCache::new(capacity)` holds one prepared viewport per workbook and
+sheet. `render_cached(&mut cache, workbook, request, metrics_key)` uses this
+content. Several sessions can borrow one cache in sequence. Each session keeps
+its own surface and committed frame.
+
+The key contains `workbook_id` and the engine sheet index. Revision, viewport,
+canvas theme, and `TextMetricsKey` determine content validity. A revision or
+viewport change can supply geometry to the compiler. The compiler resamples
+and compares the axes before it accepts that geometry. A theme or metric key
+change starts preparation without a geometry donor.
+
+`TextMetricsKey::new(profile, generation)` identifies a metric environment.
+Equal keys promise equal measurements and font resolution. Use different
+profiles for different backends unless equal metrics are proved. Advance the
+generation after fonts change. Use checked counters. Clear shared entries and
+invalidate every affected session after a shared font change.
+
+The cache holds content before overlay composition. Fingerprints stay with
+the session's composed frame. A return to another sheet can skip all engine
+reads, but its pixel plan stays `Fresh`. The previous committed frame remains
+the only source for retained pixel planning. Switching between `render` and
+`render_cached` also disables previous-frame reuse until metric keys match.
+
+Cache lookup leaves entries and use order unchanged. A successful frame commit
+inserts or replaces the sheet entry and makes it the most recently used entry.
+The cache removes the least recently used entries when it exceeds capacity.
+`set_capacity` applies the limit immediately. Capacity zero disables shared
+content reuse. `clear` releases all entries. Workbook replacement uses a new
+identity and clears old entries.
+
+`RenderOutcome::content_cached` is true only when the shared cache supplies
+content without compilation. Zero style reads alone do not prove a cache hit.
+An empty viewport can also report zero reads.
+
+GTK uses one cache with a fixed Pango metric profile. It prints cache hits and
+style reads for each draw. React sizes its cache from visible sheets. Sheet
+selection and scrolling keep the content revision. Sheet insertion advances
+the revision with a checked counter. Workbook replacement advances the workbook
+identity. Browser font events clear the cache, advance the metric generation,
+and invalidate the session.
 
 ### Retained rendering
 
@@ -323,6 +367,7 @@ validation and limits.
 | `iron-canvas-ironcalc/src/compiler.rs`, `compiler/` | worksheet preparation, style/CF/border/text/merge lowering, glyph catalogue |
 | `iron-canvas-ironcalc/src/autofit.rs` | auto-fit measurement |
 | `iron-canvas/src/lib.rs` | `CanvasSession`, request/outcome/error, frame publication |
+| `iron-canvas/src/cache.rs` | `WorksheetCache`, `TextMetricsKey`, content validity and use order |
 | `iron-canvas/src/interaction.rs` | committed queries and `HostIntent` |
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |
 | `iron-canvas/src/retained.rs` | scroll-blit planning |

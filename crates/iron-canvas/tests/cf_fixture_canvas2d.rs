@@ -298,6 +298,104 @@ fn assert_fresh(
         "retained Canvas2D must match forced Fresh byte for byte"
     );
 }
+
+#[wasm_bindgen_test]
+fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
+    use iron_canvas::{OverlayState, RenderStrategy, TextMetricsKey, WorksheetCache};
+    use iron_canvas_core::scene_geometry::GridRange;
+
+    let mut model = UserModel::new_empty("cached panes", "en", "UTC", "en").unwrap();
+    model.new_sheet().unwrap();
+    for sheet in 0..2 {
+        for row in 1..20 {
+            model
+                .set_user_input(sheet, row, 1, &format!("sheet {sheet} row {row}"))
+                .unwrap();
+        }
+    }
+    for dpr in [1.0, 1.25, 2.0] {
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut first =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut second =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut cache = WorksheetCache::new(2);
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 640,
+                height: 400,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let key = TextMetricsKey::new(1, 0);
+        for sheet in [0, 1, 0] {
+            request.sheet = sheet;
+            let outcome = first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap();
+            assert_eq!(outcome.strategy, RenderStrategy::Fresh);
+            if outcome.sequence == 3 {
+                assert!(outcome.content_cached);
+                assert_eq!(outcome.extended_style_reads, 0);
+            }
+            assert_fresh(&first, &model, &request, dpr);
+        }
+        request.overlays.selection = vec![GridRange {
+            first: CellCoord { row: 2, col: 1 },
+            last: CellCoord { row: 3, col: 2 },
+        }];
+        request.overlays.active_cell = Some(CellCoord { row: 2, col: 1 });
+        assert!(
+            second
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&second, &model, &request, dpr);
+        assert!(
+            first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&first, &model, &request, dpr);
+        request.overlays = OverlayState::default();
+        first
+            .render_cached(&mut cache, &model, &request, key)
+            .unwrap();
+        assert_fresh(&first, &model, &request, dpr);
+        request.viewport.first_cell.row = 2;
+        assert!(
+            !first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&first, &model, &request, dpr);
+        first.invalidate();
+        assert!(
+            !first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&first, &model, &request, dpr);
+        let next = TextMetricsKey::new(1, 1);
+        let outcome = first
+            .render_cached(&mut cache, &model, &request, next)
+            .unwrap();
+        assert!(!outcome.content_cached);
+        assert_eq!(outcome.strategy, RenderStrategy::Fresh);
+        assert_fresh(&first, &model, &request, dpr);
+    }
+}
 #[wasm_bindgen_test]
 fn retained_damage_scroll_overlay_and_revert_match_fresh() {
     use iron_canvas::RenderStrategy;

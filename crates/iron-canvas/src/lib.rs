@@ -4,7 +4,10 @@
 //! prepares an owned candidate frame; backends stage that complete frame
 //! before the session publishes it.
 
+mod cache;
 mod interaction;
+use cache::CacheLookup;
+pub use cache::{TextMetricsKey, WorksheetCache};
 mod overlays;
 mod retained;
 pub use interaction::{
@@ -82,6 +85,8 @@ pub struct RenderOutcome {
     pub revision: RevisionToken,
     pub cell_count: usize,
     pub extended_style_reads: usize,
+    /// True when the shared cache supplies prepared content without compilation.
+    pub content_cached: bool,
     pub reused_geometry: bool,
     pub strategy: RenderStrategy,
 }
@@ -102,6 +107,14 @@ struct Committed {
 struct Reuse {
     base: PreparedWorksheet,
     fingerprint: Option<SceneFingerprint>,
+    metrics_key: Option<TextMetricsKey>,
+}
+
+/// Select content independently from the last frame used for pixel planning.
+enum ContentSource<'a> {
+    Previous,
+    Cache(&'a mut WorksheetCache, TextMetricsKey),
+    Fresh,
 }
 
 /// Owns the current backend and the last successfully committed frame.
@@ -110,6 +123,7 @@ pub struct CanvasSession<B> {
     backend: B,
     committed: Option<Committed>,
     next_sequence: u64,
+    invalidated: bool,
 }
 
 impl<B: RenderBackend> CanvasSession<B> {
@@ -119,6 +133,7 @@ impl<B: RenderBackend> CanvasSession<B> {
             backend,
             committed: None,
             next_sequence: 1,
+            invalidated: false,
         }
     }
 
@@ -133,7 +148,7 @@ impl<B: RenderBackend> CanvasSession<B> {
         workbook: &UserModel<'_>,
         request: &RenderRequest,
     ) -> Result<RenderOutcome, RenderError<B::Error>> {
-        self.render_attempt(workbook, request, false)
+        self.render_attempt(workbook, request, ContentSource::Previous)
     }
 
     /// Bypass prepared-content and pixel reuse for an independent reference frame.
@@ -142,36 +157,75 @@ impl<B: RenderBackend> CanvasSession<B> {
         workbook: &UserModel<'_>,
         request: &RenderRequest,
     ) -> Result<RenderOutcome, RenderError<B::Error>> {
-        self.render_attempt(workbook, request, true)
+        self.render_attempt(workbook, request, ContentSource::Fresh)
+    }
+
+    /// Use shared pre-overlay content with the supplied metric identity.
+    ///
+    /// A sheet return can skip compilation, but pixel planning still compares
+    /// with this session's last committed frame. Update cache entries and use
+    /// order only after the backend commits. Invalidation bypasses cache hits
+    /// until a frame commits successfully.
+    pub fn render_cached(
+        &mut self,
+        cache: &mut WorksheetCache,
+        workbook: &UserModel<'_>,
+        request: &RenderRequest,
+        metrics_key: TextMetricsKey,
+    ) -> Result<RenderOutcome, RenderError<B::Error>> {
+        self.render_attempt(workbook, request, ContentSource::Cache(cache, metrics_key))
     }
 
     fn render_attempt(
         &mut self,
         workbook: &UserModel<'_>,
         request: &RenderRequest,
-        force: bool,
+        source: ContentSource<'_>,
     ) -> Result<RenderOutcome, RenderError<B::Error>> {
         let sequence = self.next_sequence;
         let next_sequence = sequence
             .checked_add(1)
             .ok_or(RenderError::SequenceExhausted)?;
+        let metrics_key = match &source {
+            ContentSource::Cache(_, key) => Some(*key),
+            ContentSource::Previous | ContentSource::Fresh => None,
+        };
+        let force = matches!(source, ContentSource::Fresh) || self.invalidated;
         let cached = self
             .committed
             .as_ref()
             .filter(|_| !force)
             .and_then(|committed| Some((committed, committed.reuse.as_ref()?)));
-        let compatible = cached.filter(|(committed, _)| {
+        let compatible = cached.filter(|(committed, reuse)| {
             committed.request.sheet == request.sheet
                 && committed.request.revision.workbook_id == request.revision.workbook_id
                 && committed.request.theme == request.theme
+                && reuse.metrics_key == metrics_key
         });
         let reuse = compatible.filter(|(committed, _)| {
             committed.request.revision == request.revision
                 && committed.request.viewport == request.viewport
         });
-        let base = match reuse {
-            Some((_, reuse)) => reuse.base.clone(),
-            None => self
+        // Shared content never carries another session's overlays or retained
+        // fingerprint. Keep the previous frame only for composition and paint.
+        let lookup = match &source {
+            ContentSource::Cache(cache, key) if !force => cache.lookup(request, *key),
+            ContentSource::Previous => match (reuse, compatible) {
+                (Some((_, reuse)), _) => CacheLookup::Content(&reuse.base),
+                (None, Some((_, reuse))) => CacheLookup::Geometry(&reuse.base),
+                (None, None) => CacheLookup::Miss,
+            },
+            ContentSource::Cache(_, _) | ContentSource::Fresh => CacheLookup::Miss,
+        };
+        let donor = match lookup {
+            CacheLookup::Content(base) | CacheLookup::Geometry(base) => base.geometry.as_ref(),
+            CacheLookup::Miss => None,
+        };
+        let content_reused = matches!(lookup, CacheLookup::Content(_));
+        let content_cached = content_reused && matches!(source, ContentSource::Cache(_, _));
+        let base = match lookup {
+            CacheLookup::Content(base) => base.clone(),
+            CacheLookup::Geometry(_) | CacheLookup::Miss => self
                 .compiler
                 .prepare_reusing_geometry(
                     workbook,
@@ -179,17 +233,16 @@ impl<B: RenderBackend> CanvasSession<B> {
                     request.viewport,
                     self.backend.metrics(),
                     &request.theme,
-                    compatible.and_then(|(_, reuse)| reuse.base.geometry.as_ref()),
+                    donor,
                 )
                 .map_err(RenderError::Preparation)?,
         };
-        let reads = if reuse.is_some() {
+        let reads = if content_reused {
             0
         } else {
             base.extended_style_reads
         };
-        let reused_geometry = compatible
-            .and_then(|(_, reuse)| reuse.base.geometry.as_ref())
+        let reused_geometry = donor
             .zip(base.geometry.as_ref())
             .is_some_and(|(a, b)| std::rc::Rc::ptr_eq(a, b));
         let unchanged =
@@ -264,9 +317,12 @@ impl<B: RenderBackend> CanvasSession<B> {
             revision: request.revision,
             cell_count: worksheet.cells.len(),
             extended_style_reads: reads,
+            content_cached,
             reused_geometry,
             strategy,
         };
+        // Publish cache truth only after the backend accepts the whole frame.
+        // A failed attempt also keeps the explicit invalidation pending.
         self.committed = Some(Committed {
             frame: PreparedWorksheetFrame {
                 sequence,
@@ -275,9 +331,17 @@ impl<B: RenderBackend> CanvasSession<B> {
                 worksheet,
             },
             request: request.clone(),
-            reuse: Some(Reuse { base, fingerprint }),
+            reuse: Some(Reuse {
+                base: base.clone(),
+                fingerprint,
+                metrics_key,
+            }),
         });
+        if let ContentSource::Cache(cache, key) = source {
+            cache.publish(request, key, base);
+        }
         self.next_sequence = next_sequence;
+        self.invalidated = false;
         Ok(outcome)
     }
 
@@ -285,6 +349,7 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// The frame stays published; the next render rebuilds it.
     pub fn invalidate(&mut self) {
         self.backend.invalidate_metrics();
+        self.invalidated = true;
         if let Some(committed) = &mut self.committed {
             committed.reuse = None;
         }

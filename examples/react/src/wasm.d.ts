@@ -18,6 +18,7 @@ declare module "*.js" {
     constructor(canvas: HTMLCanvasElement);
     addSheet(): void;
     getSheets(): SheetTab[];
+    invalidateFonts(): void;
     loadXlsx(bytes: Uint8Array, name: string): void;
     resize(width: number, height: number, dpr: number): void;
     scrollBy(rowDelta: number, columnDelta: number): void;
