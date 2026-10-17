@@ -165,3 +165,28 @@ fn overlays_metrics_and_merges_keep_cache_boundaries() {
     );
     compare(&s, &model, &request, 1.25);
 }
+
+#[path = "support/text_wrap.rs"]
+mod text_wrap;
+
+#[test]
+fn native_unicode_wrap_and_autofit_match_fresh_after_font_changes() {
+    use iron_canvas_core::scene::RenderBackend;
+    for scale in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_wrap::fixture();
+        let mut session = CanvasSession::new(NativeSceneBackend::new(scale).unwrap());
+        text_wrap::fit(&mut model, session.backend().metrics());
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        for step in 0..6 {
+            text_wrap::update(&mut model, step);
+            text_wrap::fit(&mut model, session.backend().metrics());
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+        }
+        session.invalidate();
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+    }
+}

@@ -18,7 +18,7 @@ struct MeasurelessMetrics;
 
 impl TextMetrics for MeasurelessMetrics {
     fn measure_text_width(&self, _text: &str, _font_css: &str) -> f64 {
-        0.0
+        f64::NAN
     }
 }
 

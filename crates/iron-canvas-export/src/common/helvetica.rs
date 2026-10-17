@@ -37,6 +37,20 @@ impl HelveticaFace {
         }
     }
 
+    /// AFM font bounds include accents and descenders outside Ascender/Descender.
+    /// Use these bounds so a fitted row contains the selected face's glyphs.
+    pub(crate) fn font_metrics(self, size: f64) -> iron_canvas_core::painter::FontMetrics {
+        let (top, bottom) = match self {
+            Self::Regular | Self::Oblique => (931.0, 225.0),
+            Self::Bold | Self::BoldOblique => (962.0, 228.0),
+        };
+        iron_canvas_core::painter::FontMetrics {
+            ascent: top / 1000.0 * size,
+            descent: bottom / 1000.0 * size,
+            line_gap: 0.0,
+        }
+    }
+
     pub(crate) fn advance_width(self, text: &str, size_px: f64) -> f64 {
         let widths = match self {
             Self::Regular | Self::Oblique => &REGULAR_WIDTHS,

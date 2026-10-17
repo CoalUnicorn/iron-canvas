@@ -10,7 +10,7 @@ iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core" }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cairo-rs = { version = "0.20.12", features = ["png"] }
-pango = "0.20.12"
+pango = { version = "0.20.12", features = ["v1_44"] }
 pangocairo = "0.20.10"
 
 [lints]

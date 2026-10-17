@@ -5,6 +5,7 @@ mod composition;
 mod glyphs;
 mod spill;
 mod text;
+pub(crate) use text::font_css;
 
 pub use cf::{CfDataBarPaint, CfDecorationPaint, CfIconPaint, CfRatingPaint};
 

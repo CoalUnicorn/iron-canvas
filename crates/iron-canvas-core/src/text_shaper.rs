@@ -1,4 +1,4 @@
-//! Cached line layout with the existing break policy.
+//! Cached Unicode line layout with complete-run measurements.
 //!
 //! A shaper borrows one backend's metrics for an operation. The cache can live
 //! longer, but its metric key changes whenever measurement results can change.
@@ -8,7 +8,9 @@ use std::{collections::VecDeque, rc::Rc};
 
 use crate::{
     painter::TextMetrics,
-    text_layout::{TextLayoutOptions, TextLine, layout_text_lines_into, position_text_lines},
+    text_layout::{
+        TextLayoutOptions, TextLine, TextLineMetrics, layout_text_lines_into, position_text_lines,
+    },
 };
 
 /// Host identity for a text metric environment and its font generation.
@@ -96,8 +98,8 @@ impl TextLayoutCache {
 
 /// Measure and cache lines with the current backend.
 ///
-/// This stage preserves the existing wrapping algorithm, including its summed
-/// piece widths. It does not claim shaping or kerning equivalence with paint.
+/// The backend measures complete candidate runs. Its font resolution and
+/// shaping limits apply to both cold and cached line layout.
 pub struct TextShaper<'a> {
     metrics: &'a dyn TextMetrics,
     cache: &'a mut TextLayoutCache,
@@ -220,7 +222,16 @@ impl<'a> TextShaper<'a> {
             }
         }
         out.truncate(lines.len());
-        position_text_lines(out, options)
+        position_text_lines(
+            out,
+            options,
+            TextLineMetrics::resolve(
+                self.metrics,
+                font_css,
+                options.font_size_px,
+                options.line_height_factor,
+            ),
+        )
     }
 }
 
@@ -269,8 +280,8 @@ mod tests {
     }
 
     #[test]
-    fn cold_and_warm_layout_match_the_existing_break_policy() {
-        for width in [0.0, 10.0] {
+    fn cold_and_warm_layout_match_uncached_unicode_layout() {
+        for width in [0.0, 10.0, f64::NAN] {
             let metrics = Metrics {
                 width,
                 calls: Cell::new(0),
@@ -414,6 +425,61 @@ mod tests {
     }
 
     #[test]
+    fn font_generation_changes_vertical_placement_and_remeasures_lines() {
+        struct FontEnvironment {
+            ascent: Cell<f64>,
+            calls: Cell<usize>,
+        }
+        impl TextMetrics for FontEnvironment {
+            fn measure_text_width(&self, _: &str, _: &str) -> f64 {
+                self.calls.set(self.calls.get() + 1);
+                10.0
+            }
+            fn font_metrics(&self, _: &str) -> Option<crate::painter::FontMetrics> {
+                Some(crate::painter::FontMetrics {
+                    ascent: self.ascent.get(),
+                    descent: 4.0,
+                    line_gap: 2.0,
+                })
+            }
+        }
+        let metrics = FontEnvironment {
+            ascent: Cell::new(12.0),
+            calls: Cell::new(0),
+        };
+        let mut cache = TextLayoutCache::default();
+        let mut out = Vec::new();
+        TextShaper::new(&metrics, KEY, &mut cache).layout_text_into(
+            "font",
+            "a\nb",
+            options(),
+            &mut out,
+        );
+        assert_eq!(out[0].center_y, 12.0);
+        assert_eq!(out[1].center_y, 30.0);
+        let calls = metrics.calls.get();
+        TextShaper::new(&metrics, KEY, &mut cache).layout_text_into(
+            "font",
+            "a\nb",
+            options(),
+            &mut out,
+        );
+        assert_eq!(metrics.calls.get(), calls);
+
+        metrics.ascent.set(20.0);
+        TextShaper::new(&metrics, TextMetricsKey::new(1, 1), &mut cache).layout_text_into(
+            "font",
+            "a\nb",
+            options(),
+            &mut out,
+        );
+        assert!(metrics.calls.get() > calls);
+        assert_eq!(out[0].center_y, 16.0);
+        assert_eq!(out[1].center_y, 42.0);
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[test]
     fn hits_refresh_use_order_and_eviction_preserves_results() {
         let metrics = Metrics {
             width: 10.0,
@@ -458,7 +524,13 @@ mod tests {
         let c = shaper.break_lines("font", "c", 50.0, true, 12.0);
         let large = "long".repeat(1024);
         let result = shaper.break_lines("font", &large, 50.0, true, 12.0);
-        assert_eq!(result[0].text, large);
+        assert_eq!(
+            result
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<String>(),
+            large
+        );
         assert!(Rc::ptr_eq(
             &c,
             &shaper.break_lines("font", "c", 50.0, true, 12.0)

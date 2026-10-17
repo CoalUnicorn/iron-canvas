@@ -15,7 +15,7 @@ use std::sync::LazyLock;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 
-use iron_canvas_core::painter::approx_text_width;
+use iron_canvas_core::painter::{FontMetrics, approx_text_width};
 
 //  Inter (SVG)
 
@@ -28,6 +28,17 @@ fn inter_face() -> &'static ttf_parser::Face<'static> {
         ttf_parser::Face::parse(INTER_TTF, 0).expect("bundled Inter TTF must parse")
     });
     &FACE
+}
+
+/// Vertical extents from the same bundled face used by SVG paint.
+pub fn inter_font_metrics(size_px: f64) -> FontMetrics {
+    let face = inter_face();
+    let scale = size_px / f64::from(face.units_per_em());
+    FontMetrics {
+        ascent: f64::from(face.ascender()) * scale,
+        descent: -f64::from(face.descender()) * scale,
+        line_gap: (f64::from(face.line_gap()) * scale).max(0.0),
+    }
 }
 
 /// Sum per-character advances for `text`.

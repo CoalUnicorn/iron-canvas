@@ -14,6 +14,7 @@ pub struct NativePainter {
     error: Cell<Option<cairo::Error>>,
     widths: RefCell<HashMap<String, HashMap<String, f64>>>,
     width_count: Cell<usize>,
+    font_metrics: RefCell<HashMap<String, FontMetrics>>,
 }
 impl NativePainter {
     pub fn new(surface: &ImageSurface) -> Result<Self, cairo::Error> {
@@ -22,6 +23,7 @@ impl NativePainter {
             error: Cell::new(None),
             widths: RefCell::default(),
             width_count: Cell::new(0),
+            font_metrics: RefCell::default(),
         })
     }
     pub(crate) fn context(&self) -> &Context {
@@ -30,6 +32,7 @@ impl NativePainter {
     pub(crate) fn clear_measure_cache(&self) {
         self.widths.borrow_mut().clear();
         self.width_count.set(0);
+        self.font_metrics.borrow_mut().clear();
     }
     pub fn status(&self) -> Result<(), cairo::Error> {
         self.error.get().map_or_else(|| self.context.status(), Err)
@@ -124,6 +127,35 @@ impl NativePainter {
     }
 }
 impl TextMetrics for NativePainter {
+    fn font_metrics(&self, font_css: &str) -> Option<FontMetrics> {
+        if let Some(metrics) = self.font_metrics.borrow().get(font_css) {
+            return Some(*metrics);
+        }
+        // Use the same description and context as Pango paint. The absolute
+        // font size keeps the result in logical pixels at every device scale.
+        let layout = self.layout("", font_css);
+        let metrics = layout
+            .context()
+            .metrics(layout.font_description().as_ref(), None);
+        let scale = f64::from(pango::SCALE);
+        let ascent = f64::from(metrics.ascent()) / scale;
+        let descent = f64::from(metrics.descent()) / scale;
+        let metrics = FontMetrics {
+            ascent,
+            descent,
+            line_gap: (f64::from(metrics.height()) / scale - ascent - descent).max(0.0),
+        };
+        if !metrics.is_valid() {
+            return None;
+        }
+        let mut cache = self.font_metrics.borrow_mut();
+        if cache.len() >= 256 {
+            cache.clear();
+        }
+        cache.insert(font_css.to_owned(), metrics);
+        Some(metrics)
+    }
+
     fn measure_text_width(&self, text: &str, font_css: &str) -> f64 {
         if let Some(width) = self
             .widths

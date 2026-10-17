@@ -246,7 +246,13 @@ fn numbers_logical_errors_wrap_and_other_alignments_stay_clipped() {
         model.set_user_input(0, 1, 2, TEXT).unwrap();
         style(&mut model, 1, 2, key, value);
         let frame = prepare(&model, 1, 348);
-        assert_eq!(text_paint(&frame, TEXT)[0].0, rect(&frame, 1, 2), "{value}");
+        if key == "alignment.wrap_text" {
+            for line in ["abcd", "efgh", "ijkl", "mnop", "qrst"] {
+                assert_eq!(text_paint(&frame, line)[0].0, rect(&frame, 1, 2));
+            }
+        } else {
+            assert_eq!(text_paint(&frame, TEXT)[0].0, rect(&frame, 1, 2), "{value}");
+        }
     }
 }
 

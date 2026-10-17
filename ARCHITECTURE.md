@@ -2,6 +2,7 @@
 <!-- working-tree-verified: P2 cache sections, 2026-10-17 -->
 <!-- working-tree-verified: P6 stage 0 text cache, 2026-10-17 -->
 <!-- working-tree-verified: P6 stage 1 text spill, 2026-10-17 -->
+<!-- working-tree-verified: P6 stage 2 Unicode wrap and font metrics, 2026-10-17 -->
 <!-- covers: iron-canvas/crates/ iron-canvas/Cargo.toml -->
 
 # iron-canvas architecture
@@ -105,14 +106,19 @@ depends on `iron-canvas` except the host.
 - `text_layout` — generic wrapping and placement: `layout_text_into`,
   `layout_text_lines_into`, `TextLayoutOptions`, `TextLine`,
   `TextVerticalAlign`, `CELL_PADDING`, `LINE_HEIGHT_FACTOR`, `TEXT_V_INSET_PX`.
-  Wrapping retains source whitespace and keeps non-breaking spaces in words.
+  Wrapping preserves spaces and uses Unicode line breaks. Long tokens break
+  between grapheme clusters. Nonbreaking glue and protected punctuation stay
+  together. The backend measures complete candidate runs.
+  `TextLineMetrics` resolves optional `painter::FontMetrics` or the size fallback.
+  Placement and auto-fit use the same font box, line gap, and vertical padding.
+  Cell paint uses an alphabetic baseline with valid font metrics.
   Text centers use fractional coordinates for odd rectangle dimensions.
 - `text_shaper::{TextShaper, TextLayoutCache, TextMetricsKey}` caches line text
   and widths before placement. The default limits are 500 entries and 1 MiB
   of entry data. The cache removes the least recently used entry first.
   Metric identity, font, source text, usable width, wrap, and fallback width
   determine validity. Placement and clipping apply after lookup.
-  The shaper keeps the existing break policy. It does not predict widths.
+  Font metrics apply after lookup. The shaper does not predict widths.
 - `theme::{CanvasTheme, ThemeVariables, FORMULA_REF_COLORS, FORMULA_REF_TINTS}`
   — grid paint defaults. The host derives `CanvasTheme` from CSS variables.
 

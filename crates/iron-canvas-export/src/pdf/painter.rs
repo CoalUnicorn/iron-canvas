@@ -19,8 +19,8 @@ use iron_canvas_core::geometry::path::{Path, PathCmd, PointF, arc_to_cubics, qua
 use iron_canvas_core::geometry::pixel_rect::PixelRect;
 use iron_canvas_core::geometry::prim::{Line, Span};
 use iron_canvas_core::painter::{
-    BlitPainter, GroupClass, LineCap, LineJoin, PaintColor, Painter, StrokeStyle, TextAlign,
-    TextBaseline, TextMetrics, parse_font_size_px,
+    BlitPainter, FontMetrics, GroupClass, LineCap, LineJoin, PaintColor, Painter, StrokeStyle,
+    TextAlign, TextBaseline, TextMetrics, parse_font_size_px,
 };
 
 use crate::common::color::parse_css_color;
@@ -247,6 +247,10 @@ fn join_code(join: LineJoin) -> u8 {
 }
 
 impl TextMetrics for PdfPainter {
+    fn font_metrics(&self, font_css: &str) -> Option<FontMetrics> {
+        Some(HelveticaFace::from_css(font_css).font_metrics(parse_font_size_px(font_css)))
+    }
+
     // Measurement and painting use the same face and encoded character codes.
     fn measure_text_width(&self, text: &str, font_css: &str) -> f64 {
         let size = parse_font_size_px(font_css);

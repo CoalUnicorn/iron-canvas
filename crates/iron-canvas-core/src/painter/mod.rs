@@ -140,8 +140,34 @@ pub fn parse_font_size_px(font_css: &str) -> f64 {
         .unwrap_or(DEFAULT_FONT_SIZE_PX)
 }
 
+/// Vertical font extents in logical pixels, relative to the alphabetic baseline.
+/// Ascent and descent are positive distances. The line gap is extra spacing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontMetrics {
+    pub ascent: f64,
+    pub descent: f64,
+    pub line_gap: f64,
+}
+
+impl FontMetrics {
+    pub fn is_valid(self) -> bool {
+        [self.ascent, self.descent, self.line_gap]
+            .into_iter()
+            .all(|value| value.is_finite() && value >= 0.0)
+            && self.ascent + self.descent > 0.0
+            && (self.ascent + self.descent + self.line_gap).is_finite()
+    }
+}
+
 pub trait TextMetrics {
+    /// Measure a complete run in logical pixels. Zero is a valid advance.
+    /// A negative or non-finite value selects the shared layout estimate.
     fn measure_text_width(&self, text: &str, font_css: &str) -> f64;
+
+    /// Return selected-font extents. `None` uses the shared size fallback.
+    fn font_metrics(&self, _font_css: &str) -> Option<FontMetrics> {
+        None
+    }
 }
 
 /// How a stroke ends an open subpath or an independent segment.

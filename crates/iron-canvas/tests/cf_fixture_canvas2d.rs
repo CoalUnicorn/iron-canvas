@@ -907,3 +907,65 @@ fn fixture_cf_edits_match_fresh_with_translucent_background() {
         }
     }
 }
+
+#[path = "support/text_wrap.rs"]
+mod text_wrap;
+
+#[wasm_bindgen_test]
+fn unicode_wrap_and_autofit_match_fresh_after_font_changes() {
+    use iron_canvas_core::{
+        painter::TextBaseline,
+        scene::{Primitive, RenderBackend},
+    };
+    for dpr in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_wrap::fixture();
+        let mut session = CanvasSession::new(
+            Canvas2dSceneBackend::new(
+                make_canvas(),
+                CanvasMetrics::new(CanvasSize { w: 500.0, h: 600.0 }, dpr).unwrap(),
+            )
+            .unwrap(),
+        );
+        text_wrap::fit(&mut model, session.backend().metrics());
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        // Check actual Canvas font extents, not only equality of two render paths.
+        let frame = iron_canvas_ironcalc::WorksheetCompiler::new()
+            .prepare(
+                &model,
+                0,
+                request.viewport,
+                session.backend().metrics(),
+                &request.theme,
+            )
+            .unwrap();
+        let mut count = 0;
+        for op in frame.scene.passes.iter().flat_map(|pass| pass.iter()) {
+            if let Primitive::Text {
+                y,
+                font_css,
+                baseline: TextBaseline::Alphabetic,
+                ..
+            } = op
+            {
+                let font = session.backend().metrics().font_metrics(font_css).unwrap();
+                assert!(font.is_valid());
+                assert!(frame.cells.iter().any(|cell| cell.coordinate.col == 1
+                    && *y - font.ascent >= f64::from(cell.bounds.top()) + 4.0 - 1e-8
+                    && *y + font.descent <= f64::from(cell.bounds.bottom()) - 4.0 + 1e-8));
+                count += 1;
+            }
+        }
+        assert!(count > 4);
+        for step in 0..6 {
+            text_wrap::update(&mut model, step);
+            text_wrap::fit(&mut model, session.backend().metrics());
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+        }
+        session.invalidate();
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+    }
+}

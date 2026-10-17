@@ -19,8 +19,8 @@ use iron_canvas_core::geometry::{
     prim::{Line, Span},
 };
 use iron_canvas_core::painter::{
-    BlitPainter, GroupClass, LineCap, LineJoin, PaintColor, Painter, StrokeStyle, TextAlign,
-    TextBaseline, TextMetrics, approx_text_width, parse_font_size_px,
+    BlitPainter, FontMetrics, GroupClass, LineCap, LineJoin, PaintColor, Painter, StrokeStyle,
+    TextAlign, TextBaseline, TextMetrics, approx_text_width, parse_font_size_px,
 };
 
 use crate::measure_cache::MeasureCache;
@@ -185,6 +185,7 @@ pub struct CanvasPainter {
     /// invalidation must NOT touch it; only `clear_measure_cache` (font
     /// load) empties it.
     measure_cache: RefCell<MeasureCache>,
+    font_metrics: RefCell<std::collections::HashMap<String, Option<FontMetrics>>>,
 }
 
 impl CanvasPainter {
@@ -202,6 +203,7 @@ impl CanvasPainter {
             dpr: Cell::new(1.0),
             interned_strings: RefCell::new(Vec::new()),
             measure_cache: RefCell::new(MeasureCache::default()),
+            font_metrics: RefCell::default(),
         }
     }
 
@@ -333,6 +335,7 @@ impl CanvasPainter {
     /// font arrives.
     pub fn clear_measure_cache(&self) {
         self.measure_cache.borrow_mut().clear();
+        self.font_metrics.borrow_mut().clear();
     }
 }
 
@@ -347,6 +350,34 @@ impl Drop for CanvasPainter {
 }
 
 impl TextMetrics for CanvasPainter {
+    fn font_metrics(&self, font_css: &str) -> Option<FontMetrics> {
+        if let Some(metrics) = self.font_metrics.borrow().get(font_css) {
+            return *metrics;
+        }
+        self.set_font_cached(PaintColor::Borrowed(font_css));
+        // Canvas reports extents relative to the current baseline. Measure at
+        // the alphabetic baseline, then restore the caller's context state.
+        let baseline = self.ctx.text_baseline();
+        self.ctx.set_text_baseline("alphabetic");
+        let metrics = self
+            .ctx
+            .measure_text("Mg")
+            .ok()
+            .map(|metrics| FontMetrics {
+                ascent: metrics.font_bounding_box_ascent(),
+                descent: metrics.font_bounding_box_descent(),
+                line_gap: 0.0,
+            })
+            .filter(|metrics| metrics.is_valid());
+        self.ctx.set_text_baseline(&baseline);
+        let mut cache = self.font_metrics.borrow_mut();
+        if cache.len() >= 256 {
+            cache.clear();
+        }
+        cache.insert(font_css.to_owned(), metrics);
+        metrics
+    }
+
     fn measure_text_width(&self, text: &str, font_css: &str) -> f64 {
         if let Some(w) = self.measure_cache.borrow().get(font_css, text) {
             return w;

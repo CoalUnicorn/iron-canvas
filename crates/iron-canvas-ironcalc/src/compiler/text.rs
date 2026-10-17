@@ -1,5 +1,5 @@
 //! Spreadsheet text policy. Generic layout stays in core.
-use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline};
+use iron_canvas_core::painter::{PaintColor, TextAlign};
 use iron_canvas_core::scene::SceneBuilder;
 use iron_canvas_core::text_shaper::TextShaper;
 use iron_canvas_core::{CanvasTheme, PixelRect, text_layout::*};
@@ -43,6 +43,7 @@ pub(super) fn compile_text(
         css,
         horizontal,
         size,
+        metrics,
         overflows,
     } = layout(shaper, style, kind, text, rect, lines);
     let font = &style.font;
@@ -75,11 +76,11 @@ pub(super) fn compile_text(
         out.fill_text(
             &line.text,
             x,
-            line.center_y,
+            line.center_y + metrics.baseline_offset,
             PaintColor::Borrowed(&css),
             PaintColor::Borrowed(color),
             horizontal,
-            TextBaseline::Middle,
+            metrics.baseline,
         );
         let x1 = line.center_x - line.width / 2.0;
         let x2 = line.center_x + line.width / 2.0;
@@ -103,6 +104,7 @@ pub(super) struct Layout {
     css: String,
     horizontal: TextAlign,
     size: f64,
+    metrics: TextLineMetrics,
     pub overflows: bool,
 }
 
@@ -135,14 +137,8 @@ pub(super) fn layout(
     };
     let font = &style.font;
     let size = f64::from(font.sz);
-    let family = font.name.trim();
-    let family = if family.is_empty() { "Calibri" } else { family };
-    let family = family.replace(['"', '\\', '\n', '\r'], "");
-    let css = format!(
-        "{}{}{size}px \"{family}\"",
-        if font.b { "bold " } else { "" },
-        if font.i { "italic " } else { "" }
-    );
+    let css = font_css(style);
+    let metrics = TextLineMetrics::resolve(shaper.metrics(), &css, size, LINE_HEIGHT_FACTOR);
     let overflows = shaper.layout_text_into(
         &css,
         text,
@@ -164,6 +160,21 @@ pub(super) fn layout(
         css,
         horizontal,
         size,
+        metrics,
         overflows,
     }
+}
+
+/// `ctx.font` string for a cell style, matching the text pass.
+pub(crate) fn font_css(style: &Style) -> String {
+    let font = &style.font;
+    let size = f64::from(font.sz);
+    let family = font.name.trim();
+    let family = if family.is_empty() { "Calibri" } else { family };
+    let family = family.replace(['"', '\\', '\n', '\r'], "");
+    format!(
+        "{}{}{size}px \"{family}\"",
+        if font.b { "bold " } else { "" },
+        if font.i { "italic " } else { "" }
+    )
 }

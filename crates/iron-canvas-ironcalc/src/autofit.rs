@@ -10,16 +10,16 @@
 //! Font CSS is built with the same rule as [`crate::compiler`]'s text pass,
 //! so measured widths match painted widths.
 
-use crate::compiler::CfDecorationPaint;
+use crate::compiler::{CfDecorationPaint, font_css};
 use iron_canvas_core::{
     PixelRect, Point,
     painter::{TextAlign, TextMetrics},
     text_layout::{
         CELL_PADDING, LINE_HEIGHT_FACTOR, TEXT_V_INSET_PX, TextLayoutOptions, TextLine,
-        TextVerticalAlign, layout_text_into,
+        TextLineMetrics, TextVerticalAlign, layout_text_into, layout_text_lines_into,
     },
 };
-use ironcalc_base::{UserModel, types::Style};
+use ironcalc_base::UserModel;
 
 /// Slack added to the measured extent so glyphs do not touch the cell border.
 pub const FIT_PADDING: f64 = 2.0 * CELL_PADDING;
@@ -78,20 +78,6 @@ fn capped_range(first: i32, last: i32) -> (i32, i32) {
     (first, last.min(cap_last))
 }
 
-/// `ctx.font` string for a cell style, matching the text pass.
-fn font_css(style: &Style) -> String {
-    let font = &style.font;
-    let size = f64::from(font.sz);
-    let family = font.name.trim();
-    let family = if family.is_empty() { "Calibri" } else { family };
-    let family = family.replace(['"', '\\', '\n', '\r'], "");
-    format!(
-        "{}{}{size}px \"{family}\"",
-        if font.b { "bold " } else { "" },
-        if font.i { "italic " } else { "" }
-    )
-}
-
 /// Widest formatted value across `col` over `[first_row, last_row]`, plus
 /// padding. `Ok(None)` when every scanned cell is empty.
 pub fn fit_width(
@@ -104,6 +90,8 @@ pub fn fit_width(
 ) -> Result<Option<f64>, AutoFitError> {
     let (first, last) = capped_range(first_row, last_row);
     let mut max = 0.0_f64;
+    let mut lines = Vec::new();
+    let mut scratch = String::new();
     for row in first..=last {
         let text = workbook
             .get_formatted_cell_value(sheet, row, col)
@@ -132,11 +120,18 @@ pub fn fit_width(
             0
         };
         let font = font_css(&extended.style);
-        let width = text
-            .split('\n')
-            .map(|line| metrics.measure_text_width(line, &font))
-            .fold(0.0_f64, f64::max)
-            + f64::from(reserved_left);
+        layout_text_lines_into(
+            metrics,
+            &font,
+            &text,
+            false,
+            0.0,
+            f64::from(extended.style.font.sz),
+            &mut lines,
+            &mut scratch,
+        );
+        let width =
+            lines.iter().map(|line| line.width).fold(0.0_f64, f64::max) + f64::from(reserved_left);
         if width > max {
             max = width;
         }
@@ -168,10 +163,10 @@ pub fn fit_height(
         if text.is_empty() {
             continue;
         }
-        let style = workbook
+        let extended = workbook
             .get_extended_cell_style(sheet, row, col)
-            .map_err(|_| AutoFitError::CellStyle)?
-            .style;
+            .map_err(|_| AutoFitError::CellStyle)?;
+        let style = &extended.style;
         let merged = merged_cells
             .iter()
             .find(|merged| merged.row == row && merged.column == col);
@@ -195,6 +190,22 @@ pub fn fit_height(
                 .checked_add(raw.round() as i32)
                 .ok_or(AutoFitError::ColumnExtent)?;
         }
+        // Match the current paint reservation. The host applies the returned
+        // height; a later fit uses that new height if the graphic size changes.
+        if extended.icon.is_some() || extended.rating.is_some() {
+            let height = workbook
+                .get_row_height(sheet, row)
+                .map_err(|_| AutoFitError::RowExtent)?;
+            if !height.is_finite() || height < 0.0 || height.round() > f64::from(i32::MAX) {
+                return Err(AutoFitError::RowExtent);
+            }
+            let rect = PixelRect {
+                top_left: Point::default(),
+                width,
+                height: height.round() as i32,
+            };
+            width -= CfDecorationPaint::resolve(&extended, workbook).reserved_left(rect);
+        }
         let width = width.max(1);
         let size = f64::from(style.font.sz);
         let bounds = PixelRect {
@@ -202,10 +213,11 @@ pub fn fit_height(
             width,
             height: UNMEASURED_HEIGHT,
         };
+        let css = font_css(style);
         lines.clear();
         layout_text_into(
             metrics,
-            &font_css(&style),
+            &css,
             &text,
             TextLayoutOptions {
                 bounds,
@@ -222,21 +234,13 @@ pub fn fit_height(
             &mut lines,
             &mut scratch,
         );
-        let height = line_block_height(lines.len(), size, size * LINE_HEIGHT_FACTOR);
+        let height = TextLineMetrics::resolve(metrics, &css, size, LINE_HEIGHT_FACTOR)
+            .block_height(lines.len(), TEXT_V_INSET_PX);
         if height > max_height {
             max_height = height;
         }
     }
     Ok((max_height > 0.0).then(|| max_height.max(MIN_EXTENT)))
-}
-
-/// Fitted pixel height of one cell's text block.
-fn line_block_height(line_count: usize, size_px: f64, line_height: f64) -> f64 {
-    if line_count == 0 {
-        return 0.0;
-    }
-    let gaps = (line_count - 1) as f64;
-    size_px + gaps * line_height + FIT_PADDING
 }
 
 #[cfg(test)]
@@ -255,7 +259,11 @@ mod tests {
 
     #[test]
     fn single_line_height_is_font_plus_padding() {
-        assert_eq!(line_block_height(1, 14.0, 28.0), 14.0 + FIT_PADDING);
+        assert_eq!(
+            TextLineMetrics::resolve(&FixedWidth, "14px test", 14.0, 2.0)
+                .block_height(1, TEXT_V_INSET_PX),
+            14.0 + FIT_PADDING
+        );
     }
 
     #[test]
@@ -334,6 +342,28 @@ mod tests {
             fit_width(&workbook, &FixedWidth, 0, 1, 1, 1).unwrap(),
             Some(expected)
         );
+        // Two characters fit after the same icon reservation used by paint.
+        workbook
+            .set_columns_width(0, 1, 1, f64::from(icon_space) + FIT_PADDING + 20.0)
+            .unwrap();
+        workbook
+            .update_range_style(
+                &Area {
+                    sheet: 0,
+                    row: 1,
+                    column: 1,
+                    width: 1,
+                    height: 1,
+                },
+                "alignment.wrap_text",
+                "true",
+            )
+            .unwrap();
+        let size = f64::from(extended.style.font.sz);
+        assert_eq!(
+            fit_height(&workbook, &FixedWidth, 0, 1, 1, 1).unwrap(),
+            Some(size + size * LINE_HEIGHT_FACTOR + 2.0 * TEXT_V_INSET_PX)
+        );
     }
 
     #[test]
@@ -378,11 +408,13 @@ mod tests {
 
         let height = fit_height(&workbook, &FixedWidth, 0, 1, 1, 3).unwrap();
         let style = workbook.get_extended_cell_style(0, 1, 1).unwrap().style;
-        let one_line_height = line_block_height(
-            1,
+        let one_line_height = TextLineMetrics::resolve(
+            &FixedWidth,
+            &font_css(&style),
             f64::from(style.font.sz),
-            f64::from(style.font.sz) * LINE_HEIGHT_FACTOR,
+            LINE_HEIGHT_FACTOR,
         )
+        .block_height(1, TEXT_V_INSET_PX)
         .max(MIN_EXTENT);
         assert!(unmerged_height > one_line_height);
         assert_eq!(height, Some(one_line_height));
