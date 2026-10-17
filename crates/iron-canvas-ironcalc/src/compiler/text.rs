@@ -1,6 +1,7 @@
 //! Spreadsheet text policy. Generic layout stays in core.
-use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline, TextMetrics};
+use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline};
 use iron_canvas_core::scene::SceneBuilder;
+use iron_canvas_core::text_shaper::TextShaper;
 use iron_canvas_core::{CanvasTheme, PixelRect, text_layout::*};
 use ironcalc_base::{
     UserModel,
@@ -17,11 +18,10 @@ pub(super) fn compile_text(
     text: &str,
     rect: PixelRect,
     reserved: i32,
-    metrics: &dyn TextMetrics,
+    shaper: &mut TextShaper<'_>,
     theme: &CanvasTheme,
     link: Option<&CellLinkView>,
     lines: &mut Vec<TextLine>,
-    scratch: &mut String,
 ) {
     if text.is_empty() || rect.width < 10 || rect.height < 10 {
         return;
@@ -79,8 +79,7 @@ pub(super) fn compile_text(
     } else {
         resolved.as_str()
     };
-    layout_text_into(
-        metrics,
+    shaper.layout_text_into(
         &css,
         text,
         TextLayoutOptions {
@@ -96,7 +95,6 @@ pub(super) fn compile_text(
             approx_char_width: size,
         },
         lines,
-        scratch,
     );
     // A cell clip supplies a proven paint bound for retained rendering.
     out.push_clip(rect);

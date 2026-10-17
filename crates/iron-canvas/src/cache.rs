@@ -2,30 +2,10 @@
 
 use std::collections::VecDeque;
 
+pub use iron_canvas_core::text_shaper::TextMetricsKey;
 use iron_canvas_ironcalc::PreparedWorksheet;
 
 use crate::RenderRequest;
-
-/// Host identity for a text metric environment and its font generation.
-///
-/// Equal keys promise equal text measurements and font resolution across all
-/// sessions that share a cache. Use separate profiles for different backends
-/// unless their measurements are equal. Advance the generation after a font
-/// change. Use checked counters; never wrap or saturate either value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct TextMetricsKey {
-    profile: u64,
-    generation: u64,
-}
-
-impl TextMetricsKey {
-    pub const fn new(profile: u64, generation: u64) -> Self {
-        Self {
-            profile,
-            generation,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CacheKey {

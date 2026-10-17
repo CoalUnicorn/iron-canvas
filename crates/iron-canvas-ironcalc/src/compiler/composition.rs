@@ -24,11 +24,11 @@ pub(super) fn prepare(
     workbook: &UserModel<'_>,
     sheet: u32,
     viewport: WorksheetViewport,
-    metrics: &dyn TextMetrics,
+    shaper: &mut TextShaper<'_>,
     theme: &CanvasTheme,
     previous: Option<&Rc<GridGeometry>>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-    let mut attempt = Attempt::new(workbook, sheet, metrics, theme)?;
+    let mut attempt = Attempt::new(workbook, sheet, shaper, theme)?;
     let first = viewport.first_cell;
     if !(1..=LAST_ROW).contains(&first.row)
         || !(1..=LAST_COLUMN).contains(&first.col)
@@ -94,7 +94,11 @@ pub(super) fn prepare(
         .max()
         .unwrap_or(first.row)
         .to_string();
-    let header_width = (metrics.measure_text_width(&label, HEADER_FONT_CSS).ceil() as i32)
+    let header_width = (attempt
+        .shaper
+        .metrics()
+        .measure_text_width(&label, HEADER_FONT_CSS)
+        .ceil() as i32)
         .saturating_add(HEADER_LABEL_PADDING)
         .max(MIN_HEADER_WIDTH)
         .min(viewport.width);

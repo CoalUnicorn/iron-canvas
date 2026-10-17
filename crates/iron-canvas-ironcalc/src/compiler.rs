@@ -12,6 +12,7 @@ use iron_canvas_core::{
     painter::{PaintColor, TextMetrics},
     scene::{GridScene, SceneBuilder},
     scene_geometry::GridGeometry,
+    text_shaper::{TextLayoutCache, TextMetricsKey, TextShaper},
 };
 use ironcalc_base::{
     UserModel,
@@ -110,7 +111,7 @@ impl WorksheetCompiler {
         metrics: &dyn TextMetrics,
         theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, metrics, theme, None)
+        self.prepare_reusing_geometry(workbook, sheet, viewport, metrics, theme, None)
     }
 
     /// Resample dimensions after a revision, but retain equal slot buffers.
@@ -124,7 +125,24 @@ impl WorksheetCompiler {
         theme: &CanvasTheme,
         geometry: Option<&Rc<GridGeometry>>,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, metrics, theme, geometry)
+        let mut cache = TextLayoutCache::default();
+        let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
+        self.prepare_with_shaper(workbook, sheet, viewport, &mut shaper, theme, geometry)
+    }
+
+    /// Prepare with caller-owned text storage and optional geometry reuse.
+    /// Bind the shaper to the same metrics that the backend uses to paint.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_shaper(
+        &self,
+        workbook: &UserModel<'_>,
+        sheet: u32,
+        viewport: WorksheetViewport,
+        shaper: &mut TextShaper<'_>,
+        theme: &CanvasTheme,
+        geometry: Option<&Rc<GridGeometry>>,
+    ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+        composition::prepare(workbook, sheet, viewport, shaper, theme, geometry)
     }
 
     /// Lower positioned cells into five shared paint buffers. Repeated
@@ -139,7 +157,9 @@ impl WorksheetCompiler {
         metrics: &dyn TextMetrics,
         theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        let mut attempt = Attempt::new(workbook, sheet, metrics, theme)?;
+        let mut cache = TextLayoutCache::default();
+        let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
+        let mut attempt = Attempt::new(workbook, sheet, &mut shaper, theme)?;
         if !valid_rect(clip) {
             return Err(attempt.error(
                 CellCoord { row: 1, col: 1 },
@@ -184,24 +204,23 @@ struct CellRecord {
     kind: CellType,
     value: String,
 }
-struct Attempt<'w, 'm> {
+struct Attempt<'w, 'm, 's> {
     workbook: &'w UserModel<'m>,
     sheet: u32,
-    metrics: &'w dyn TextMetrics,
+    shaper: &'w mut TextShaper<'s>,
     theme: &'w CanvasTheme,
     show_grid: bool,
     cached: HashMap<CellCoord, CellRecord>,
     reads: usize,
     links: Vec<CellLinkView>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
-    scratch: String,
     shades: cf::LightShades,
 }
-impl<'w, 'm> Attempt<'w, 'm> {
+impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
     fn new(
         workbook: &'w UserModel<'m>,
         sheet: u32,
-        metrics: &'w dyn TextMetrics,
+        shaper: &'w mut TextShaper<'s>,
         theme: &'w CanvasTheme,
     ) -> Result<Self, WorksheetCompileError> {
         let err = |operation, message| WorksheetCompileError {
@@ -221,14 +240,13 @@ impl<'w, 'm> Attempt<'w, 'm> {
         Ok(Self {
             workbook,
             sheet,
-            metrics,
+            shaper,
             theme,
             show_grid,
             cached: HashMap::new(),
             reads: 0,
             links,
             lines: Vec::new(),
-            scratch: String::new(),
             shades: cf::LightShades::default(),
         })
     }
@@ -342,11 +360,10 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 &record.value,
                 rect,
                 cf.reserved_left(rect),
-                self.metrics,
+                self.shaper,
                 self.theme,
                 link,
                 &mut self.lines,
-                &mut self.scratch,
             );
         }
         Ok(())

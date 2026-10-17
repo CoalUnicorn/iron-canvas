@@ -21,6 +21,7 @@ use std::fmt;
 
 use iron_canvas_core::CanvasTheme;
 pub use iron_canvas_core::scene::RenderBackend;
+use iron_canvas_core::text_shaper::{TextLayoutCache, TextShaper};
 use iron_canvas_ironcalc::{
     PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetViewport,
 };
@@ -124,6 +125,8 @@ pub struct CanvasSession<B> {
     committed: Option<Committed>,
     next_sequence: u64,
     invalidated: bool,
+    text_layouts: TextLayoutCache,
+    text_metrics_key: Option<TextMetricsKey>,
 }
 
 impl<B: RenderBackend> CanvasSession<B> {
@@ -134,6 +137,8 @@ impl<B: RenderBackend> CanvasSession<B> {
             committed: None,
             next_sequence: 1,
             invalidated: false,
+            text_layouts: TextLayoutCache::default(),
+            text_metrics_key: None,
         }
     }
 
@@ -191,6 +196,25 @@ impl<B: RenderBackend> CanvasSession<B> {
             ContentSource::Previous | ContentSource::Fresh => None,
         };
         let force = matches!(source, ContentSource::Fresh) || self.invalidated;
+        // Local metrics and explicit keys have separate identities. Track this
+        // per attempt: a failed frame can still populate measured text storage.
+        if force || self.text_metrics_key != metrics_key {
+            self.text_layouts.clear();
+        }
+        self.text_metrics_key = metrics_key;
+        // Fresh is the independent reference path. Disable layout retention,
+        // including repeated values within this preparation.
+        let mut fresh_layouts = TextLayoutCache::new(0, 0);
+        let layouts = if matches!(source, ContentSource::Fresh) {
+            &mut fresh_layouts
+        } else {
+            &mut self.text_layouts
+        };
+        let mut shaper = TextShaper::new(
+            self.backend.metrics(),
+            metrics_key.unwrap_or(TextMetricsKey::new(0, 0)),
+            layouts,
+        );
         let cached = self
             .committed
             .as_ref()
@@ -227,11 +251,11 @@ impl<B: RenderBackend> CanvasSession<B> {
             CacheLookup::Content(base) => base.clone(),
             CacheLookup::Geometry(_) | CacheLookup::Miss => self
                 .compiler
-                .prepare_reusing_geometry(
+                .prepare_with_shaper(
                     workbook,
                     request.sheet,
                     request.viewport,
-                    self.backend.metrics(),
+                    &mut shaper,
                     &request.theme,
                     donor,
                 )
@@ -349,6 +373,7 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// The frame stays published; the next render rebuilds it.
     pub fn invalidate(&mut self) {
         self.backend.invalidate_metrics();
+        self.text_layouts.clear();
         self.invalidated = true;
         if let Some(committed) = &mut self.committed {
             committed.reuse = None;

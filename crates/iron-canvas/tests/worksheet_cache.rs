@@ -20,12 +20,14 @@ const METRICS: TextMetricsKey = TextMetricsKey::new(1, 0);
 struct Backend {
     width: Cell<f64>,
     measurements: Cell<usize>,
+    fail_commit: Cell<bool>,
 }
 impl Backend {
     fn new(width: f64) -> Self {
         Self {
             width: Cell::new(width),
             measurements: Cell::new(0),
+            fail_commit: Cell::new(false),
         }
     }
 }
@@ -37,7 +39,7 @@ impl TextMetrics for Backend {
 }
 impl RenderBackend for Backend {
     type StagedFrame = ();
-    type Error = std::convert::Infallible;
+    type Error = &'static str;
     fn metrics(&self) -> &dyn TextMetrics {
         self
     }
@@ -54,6 +56,9 @@ impl RenderBackend for Backend {
         Ok(())
     }
     fn commit_frame(&mut self, _: ()) -> Result<(), Self::Error> {
+        if self.fail_commit.get() {
+            return Err("commit failed");
+        }
         Ok(())
     }
 }
@@ -112,6 +117,86 @@ fn assert_fresh(session: &CanvasSession<Backend>, model: &UserModel<'_>, request
         session.hit_test(iron_canvas_core::Point { x: 100, y: 100 }),
         fresh.hit_test(iron_canvas_core::Point { x: 100, y: 100 })
     );
+}
+
+#[test]
+fn text_layout_survives_revision_changes_and_fresh_bypasses_it() {
+    let (model, mut request) = fixture();
+    let mut session = CanvasSession::new(Backend::new(6.0));
+    session.render(&model, &request).unwrap();
+    let cold_calls = session.backend().measurements.get();
+    let scene = session.committed_frame().unwrap().worksheet.scene.clone();
+
+    // A changed revision forces worksheet preparation with identical text.
+    request.revision.revision += 1;
+    let outcome = session.render(&model, &request).unwrap();
+    assert!(outcome.extended_style_reads > 0);
+    let warm_calls = session.backend().measurements.get() - cold_calls;
+    assert_eq!(warm_calls, 1, "only the header width needs measurement");
+    assert!(cold_calls > warm_calls);
+    assert_eq!(session.committed_frame().unwrap().worksheet.scene, scene);
+
+    let before = session.backend().measurements.get();
+    session.render_fresh(&model, &request).unwrap();
+    let fresh_calls = session.backend().measurements.get() - before;
+    assert_eq!(fresh_calls, cold_calls);
+    assert_eq!(session.committed_frame().unwrap().worksheet.scene, scene);
+    eprintln!(
+        "text layout calls per frame: cold={cold_calls}, warm={warm_calls}, Fresh={fresh_calls}"
+    );
+}
+
+#[test]
+fn local_metrics_and_explicit_zero_key_have_separate_cache_scopes() {
+    let (model, mut request) = fixture();
+    let mut session = CanvasSession::new(Backend::new(3.0));
+    let mut cache = WorksheetCache::new(0);
+    session.render(&model, &request).unwrap();
+    session.backend().width.set(14.0);
+    session
+        .render_cached(&mut cache, &model, &request, TextMetricsKey::new(0, 0))
+        .unwrap();
+    assert_fresh(&session, &model, &request);
+    session.backend().width.set(7.0);
+    request.revision.revision += 1;
+    session.render(&model, &request).unwrap();
+    assert_fresh(&session, &model, &request);
+}
+
+#[test]
+fn backend_mutation_clears_local_text_layout() {
+    let (model, request) = fixture();
+    let mut session = CanvasSession::new(Backend::new(3.0));
+    session.render(&model, &request).unwrap();
+    session.backend_mut().width.set(14.0);
+    session.render(&model, &request).unwrap();
+    assert_fresh(&session, &model, &request);
+}
+
+#[test]
+fn failed_frame_cannot_leave_layout_from_a_different_metric_scope() {
+    let (model, mut request) = fixture();
+    let mut session = CanvasSession::new(Backend::new(3.0));
+    let mut cache = WorksheetCache::new(1);
+    let zero_key = TextMetricsKey::new(0, 0);
+    session
+        .render_cached(&mut cache, &model, &request, zero_key)
+        .unwrap();
+    let committed = session.committed_frame().unwrap().clone();
+
+    // A failed local render can fill the text cache without publishing a frame.
+    // Local metrics and an explicit zero key still identify different scopes.
+    session.backend().width.set(14.0);
+    session.backend().fail_commit.set(true);
+    assert!(session.render(&model, &request).is_err());
+    assert_eq!(session.committed_frame(), Some(&committed));
+    session.backend().width.set(3.0);
+    session.backend().fail_commit.set(false);
+    request.revision.revision += 1;
+    session
+        .render_cached(&mut cache, &model, &request, zero_key)
+        .unwrap();
+    assert_fresh(&session, &model, &request);
 }
 
 #[test]

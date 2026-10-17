@@ -300,6 +300,77 @@ fn assert_fresh(
 }
 
 #[wasm_bindgen_test]
+fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
+    use iron_canvas::{TextMetricsKey, WorksheetCache};
+    use ironcalc_base::expressions::types::Area;
+
+    let mut model = UserModel::new_empty("text cache", "en", "UTC", "en").unwrap();
+    let area = Area {
+        sheet: 0,
+        row: 1,
+        column: 1,
+        width: 3,
+        height: 8,
+    };
+    model
+        .update_range_style(&area, "alignment.wrap_text", "true")
+        .unwrap();
+    model.set_columns_width(0, 1, 3, 85.0).unwrap();
+    model.set_rows_height(0, 1, 8, 54.0).unwrap();
+    for row in 1..=8 {
+        for col in 1..=3 {
+            model
+                .set_user_input(0, row, col, "  one  two\nthree ")
+                .unwrap();
+        }
+    }
+    for dpr in [1.0, 1.25, 2.0] {
+        model.set_columns_width(0, 1, 3, 85.0).unwrap();
+        model.update_range_style(&area, "font.b", "false").unwrap();
+        let metrics = CanvasMetrics::new(CanvasSize { w: 400.0, h: 300.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut cache = WorksheetCache::new(1);
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 400,
+                height: 300,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let mut key = TextMetricsKey::new(1, 0);
+        session
+            .render_cached(&mut cache, &model, &request, key)
+            .unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        for step in 0..6 {
+            match step {
+                0 => {} // Equal text with a new revision exercises warm layout.
+                1 => request.viewport.first_cell.row = 2,
+                2 => model.set_columns_width(0, 1, 3, 65.0).unwrap(),
+                3 => model.update_range_style(&area, "font.b", "true").unwrap(),
+                4 => key = TextMetricsKey::new(1, 1),
+                _ => session.invalidate(),
+            }
+            request.revision.revision += 1;
+            let outcome = session
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap();
+            assert!(!outcome.content_cached);
+            assert!(outcome.extended_style_reads > 0);
+            assert_fresh(&session, &model, &request, dpr);
+        }
+    }
+}
+
+#[wasm_bindgen_test]
 fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
     use iron_canvas::{OverlayState, RenderStrategy, TextMetricsKey, WorksheetCache};
     use iron_canvas_core::scene_geometry::GridRange;

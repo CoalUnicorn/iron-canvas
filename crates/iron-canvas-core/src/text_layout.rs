@@ -86,6 +86,12 @@ pub fn layout_text_into(
         scratch,
     );
 
+    position_text_lines(out, options)
+}
+
+/// Apply placement after line breaking, including after a cache lookup.
+pub(crate) fn position_text_lines(out: &mut [TextLine], options: TextLayoutOptions) -> bool {
+    let usable_w = f64::from(options.bounds.width) - 2.0 * options.horizontal_padding;
     let line_height = options.font_size_px * options.line_height_factor;
     position_lines(
         out,

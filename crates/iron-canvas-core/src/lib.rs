@@ -10,6 +10,7 @@ pub mod scene;
 pub mod scene_geometry;
 pub mod shape;
 pub mod text_layout;
+pub mod text_shaper;
 pub mod theme;
 
 pub use geometry::{
