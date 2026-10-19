@@ -26,6 +26,7 @@ pub fn fixture() -> (UserModel<'static>, RenderRequest) {
         };
         for (key, value) in [
             ("alignment.wrap_text", "true"),
+            ("font.u", if index == 3 { "true" } else { "false" }),
             (
                 "alignment.vertical",
                 ["top", "center", "bottom", "top"][index],

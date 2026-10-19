@@ -118,6 +118,39 @@ fn left_right_and_center_keep_the_source_anchor_and_expand_only_the_clip() {
 }
 
 #[test]
+fn narrow_visible_columns_can_supply_spill_from_both_viewport_edges() {
+    for width in [1, 8, 9, 10] {
+        for (alignment, first) in [
+            ("left", 1),
+            ("center", 1),
+            ("right", 1),
+            ("left", 4),
+            ("right", 2),
+        ] {
+            let mut model = model();
+            model.set_columns_width(0, 3, 3, f64::from(width)).unwrap();
+            model.set_user_input(0, 1, 3, TEXT).unwrap();
+            style(&mut model, 1, 3, "alignment.horizontal", alignment);
+            // The final two cases put the source outside the viewport.
+            let viewport_width = if first == 2 { 98 } else { 348 };
+            let frame = prepare(&model, first, viewport_width);
+            let paint = text_paint(&frame, TEXT);
+            assert_eq!(paint.len(), 1, "width {width}, {alignment}, first {first}");
+            assert!(paint[0].0.width > width);
+            if first == 1 {
+                let source = rect(&frame, 1, 3);
+                let anchor = match alignment {
+                    "left" => f64::from(source.left()) + 4.0,
+                    "right" => f64::from(source.right()) - 4.0,
+                    _ => f64::from(source.left()) + f64::from(width) / 2.0,
+                };
+                assert_eq!(paint[0].1, anchor);
+            }
+        }
+    }
+}
+
+#[test]
 fn occupied_neighbors_include_formulas_with_empty_results_and_hidden_numbers() {
     for value in ["block", "=\"\"", " ", "42"] {
         let mut model = model();

@@ -54,7 +54,10 @@ fn compare(
 
 #[test]
 fn native_spill_matches_fresh_after_offscreen_source_and_blocker_edits() {
-    for scale in [1.0, 1.25, 2.0] {
+    for (scale, source_width) in [1.0, 1.25, 2.0]
+        .into_iter()
+        .flat_map(|scale| [1.0, 60.0].map(|width| (scale, width)))
+    {
         let (mut model, mut request) = fixture();
         model
             .range_clear_all(&Area {
@@ -66,6 +69,7 @@ fn native_spill_matches_fresh_after_offscreen_source_and_blocker_edits() {
             })
             .unwrap();
         model.set_columns_width(0, 1, 20, 60.0).unwrap();
+        model.set_columns_width(0, 1, 1, source_width).unwrap();
         request.viewport.first_cell.col = 2;
         model
             .set_user_input(0, 4, 1, "Offscreen text extends across empty cells")

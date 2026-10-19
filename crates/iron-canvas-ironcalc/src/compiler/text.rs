@@ -1,5 +1,5 @@
 //! Spreadsheet text policy. Generic layout stays in core.
-use iron_canvas_core::painter::{PaintColor, TextAlign};
+use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline};
 use iron_canvas_core::scene::SceneBuilder;
 use iron_canvas_core::text_shaper::TextShaper;
 use iron_canvas_core::{CanvasTheme, PixelRect, text_layout::*};
@@ -24,7 +24,9 @@ pub(super) fn compile_text(
     link: Option<&CellLinkView>,
     lines: &mut Vec<TextLine>,
 ) {
-    if text.is_empty() || rect.width < 10 || rect.height < 10 {
+    // A narrow source can still paint into a resolved spill clip. Keep the
+    // minimum width only when the text stays inside its source cell.
+    if text.is_empty() || (rect.width < 10 && spill_clip.is_none()) || rect.height < 10 {
         return;
     }
     let reserved = reserved.clamp(0, rect.width);
@@ -36,7 +38,7 @@ pub(super) fn compile_text(
         width: rect.width - reserved,
         height: rect.height,
     };
-    if f64::from(rect.width) <= 2.0 * CELL_PADDING {
+    if f64::from(rect.width) <= 2.0 * CELL_PADDING && spill_clip.is_none() {
         return;
     }
     let Layout {
@@ -85,13 +87,16 @@ pub(super) fn compile_text(
         let x1 = line.center_x - line.width / 2.0;
         let x2 = line.center_x + line.width / 2.0;
         if font.u || link.is_some() {
-            out.stroke_text_hline(
-                x1,
-                x2,
-                line.center_y + (size * 0.35).max(2.0),
-                PaintColor::Borrowed(color),
-                1.0,
-            );
+            // The measured font box does not share the old middle baseline.
+            // Place the underline halfway into the descent. The metric
+            // interface has no font-specific underline position.
+            let underline_y = if metrics.baseline == TextBaseline::Alphabetic {
+                let descent = metrics.height / 2.0 - metrics.baseline_offset;
+                line.center_y + metrics.baseline_offset + (descent / 2.0).max(1.0)
+            } else {
+                line.center_y + (size * 0.35).max(2.0)
+            };
+            out.stroke_text_hline(x1, x2, underline_y, PaintColor::Borrowed(color), 1.0);
         }
         if font.strike {
             out.stroke_text_hline(x1, x2, line.center_y, PaintColor::Borrowed(color), 1.0);

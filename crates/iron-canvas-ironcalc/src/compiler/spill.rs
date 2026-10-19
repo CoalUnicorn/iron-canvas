@@ -214,11 +214,7 @@ impl Attempt<'_, '_, '_> {
                 col: column.index,
             };
             let record = &self.cached[&coordinate];
-            if !eligible(record)
-                || merged(coordinate, merges)
-                || column.extent < 10
-                || row.extent < 10
-            {
+            if !eligible(record) || merged(coordinate, merges) || row.extent < 10 {
                 continue;
             }
             let rect = PixelRect {

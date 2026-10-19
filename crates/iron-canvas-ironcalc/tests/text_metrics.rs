@@ -159,3 +159,59 @@ fn pango_fitted_rows_contain_their_own_font_boxes() {
     let native = iron_canvas_native::NativeSceneBackend::new(1.25).unwrap();
     check_backend(native.metrics());
 }
+
+fn check_underline(metrics: &dyn TextMetrics) {
+    let mut model = model();
+    model.set_user_input(0, 1, 1, "Underline").unwrap();
+    model.set_columns_width(0, 1, 1, 300.0).unwrap();
+    model.update_range_style(&area(), "font.u", "true").unwrap();
+    model
+        .update_range_style(&area(), "font.size", "32")
+        .unwrap();
+    for (bold, italic) in [(false, false), (true, false), (false, true), (true, true)] {
+        model
+            .update_range_style(&area(), "font.b", &bold.to_string())
+            .unwrap();
+        model
+            .update_range_style(&area(), "font.i", &italic.to_string())
+            .unwrap();
+        let frame = WorksheetCompiler::new()
+            .prepare(&model, 0, viewport(), metrics, &CanvasTheme::light())
+            .unwrap();
+        let mut baseline = None;
+        let mut underline = None;
+        for op in frame.scene.passes.iter().flat_map(|pass| pass.iter()) {
+            match op {
+                Primitive::Text {
+                    text,
+                    y,
+                    baseline: TextBaseline::Alphabetic,
+                    ..
+                } if text == "Underline" => baseline = Some(*y),
+                Primitive::TextLine { y, .. } => underline = Some(*y),
+                _ => {}
+            }
+        }
+        let baseline = baseline.unwrap();
+        let underline = underline.unwrap();
+        assert!(
+            underline > baseline,
+            "underline {underline} crosses baseline {baseline}; bold {bold}, italic {italic}"
+        );
+    }
+}
+
+#[test]
+fn svg_and_pdf_underlines_stay_below_the_alphabetic_baseline() {
+    let svg = iron_canvas_export::SvgSceneBackend::new();
+    check_underline(svg.metrics());
+    let pdf = iron_canvas_export::PdfSceneBackend::new();
+    check_underline(pdf.metrics());
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pango_underlines_stay_below_the_alphabetic_baseline() {
+    let native = iron_canvas_native::NativeSceneBackend::new(1.25).unwrap();
+    check_underline(native.metrics());
+}

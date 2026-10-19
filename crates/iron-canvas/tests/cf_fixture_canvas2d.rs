@@ -304,9 +304,13 @@ fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
     use iron_canvas_core::scene_geometry::GridRange;
     use ironcalc_base::expressions::types::Area;
 
-    for dpr in [1.0, 1.25, 2.0] {
+    for (dpr, source_width) in [1.0, 1.25, 2.0]
+        .into_iter()
+        .flat_map(|dpr| [1.0, 60.0].map(|width| (dpr, width)))
+    {
         let mut model = UserModel::new_empty("spill pixels", "en", "UTC", "en").unwrap();
         model.set_columns_width(0, 1, 12, 60.0).unwrap();
+        model.set_columns_width(0, 1, 1, source_width).unwrap();
         model.set_rows_height(0, 1, 20, 32.0).unwrap();
         let left_text = "Offscreen left source extends into empty cells";
         let right_text = "Offscreen right source extends into empty cells";
@@ -940,6 +944,8 @@ fn unicode_wrap_and_autofit_match_fresh_after_font_changes() {
             )
             .unwrap();
         let mut count = 0;
+        let mut last_baseline = None;
+        let mut underlines = 0;
         for op in frame.scene.passes.iter().flat_map(|pass| pass.iter()) {
             if let Primitive::Text {
                 y,
@@ -954,9 +960,15 @@ fn unicode_wrap_and_autofit_match_fresh_after_font_changes() {
                     && *y - font.ascent >= f64::from(cell.bounds.top()) + 4.0 - 1e-8
                     && *y + font.descent <= f64::from(cell.bounds.bottom()) - 4.0 + 1e-8));
                 count += 1;
+                last_baseline = Some(*y);
+            } else if let Primitive::TextLine { y, .. } = op {
+                // This fixture has underlined cells and links, but no strike.
+                assert!(*y > last_baseline.unwrap());
+                underlines += 1;
             }
         }
         assert!(count > 4);
+        assert!(underlines > 0);
         for step in 0..6 {
             text_wrap::update(&mut model, step);
             text_wrap::fit(&mut model, session.backend().metrics());
