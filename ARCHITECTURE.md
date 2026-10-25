@@ -18,6 +18,8 @@ The crate keeps a strict split:
   (styles, conditional formatting, borders, links, merges, auto-fit).
 - **iron-canvas** owns the render session: request, reuse, frame publication,
   host queries, overlays, and the shared worksheet cache.
+- **iron-canvas-navigation** applies Basic navigation to a short mutable
+  `UserModel` borrow. It also stores the ordered command queue.
 - **iron-canvas-export** owns SVG/PDF backends plus workbook loading, range
   selection, and export orchestration; it delegates worksheet compilation to
   `iron-canvas-ironcalc`.
@@ -29,6 +31,9 @@ The crate keeps a strict split:
 ```mermaid
 flowchart TD
     Host["Host: RustyCalc playground / native app"] --> API["iron-canvas: CanvasSession"]
+    Host --> Navigation["iron-canvas-navigation: model commands"]
+    Navigation --> API
+    Navigation --> Engine
     API --> IC["iron-canvas-ironcalc: worksheet compiler"]
     API --> Core["iron-canvas-core: geometry + scene"]
     IC --> Engine["ironcalc_base"]
@@ -49,13 +54,14 @@ flowchart TD
 | `iron-canvas-core` | Coordinates, bounds, canvas metrics, axis sampling, pane geometry and fragments, hit/resize geometry, text layout, resolved paint primitives and scene execution, retained-pixel fingerprints and damage bands, grid theme defaults | `UserModel`, CF enums, workbook themes, formula references, browser or Cairo calls |
 | `iron-canvas-ironcalc` | Direct immutable IronCalc reads, worksheet preparation, style/CF/border/text lowering, merge and link semantics, the CF glyph catalogue, auto-fit measurement | Workbook writes, backends, host event loop |
 | `iron-canvas` | Shared `WorksheetCache`, `CanvasSession` state and invalidation, request/frame planning, prepare/stage/commit coordination, committed-frame queries and host intents, spreadsheet overlay composition | Formula evaluation, duplicate engine getters, backend drawing |
+| `iron-canvas-navigation` | Basic engine navigation, explicit anchor/focus application, and ordered commands | Browser focus, frame presentation, workbook lifetime |
 | `iron-canvas-canvas2d` | Browser `<canvas>` surfaces, the Canvas2D painter, text metrics and memo, the CSS-var theme bridge, the scene backend | IronCalc, workbook scheduling |
 | `iron-canvas-native` | Cairo/Pango metrics and raster primitives, staged image surfaces | Window ownership, workbook access |
 | `iron-canvas-export` | SVG and PDF painters and their scene backends, font resources, document assembly, XLSX loading, sheet/range selection, export orchestration | A separate worksheet renderer or CF resolver |
 
 Arrows mean compile-time dependencies. `iron-canvas` is generic over the
-backend contract and does not depend on any concrete backend crate. No crate
-depends on `iron-canvas` except the host.
+backend contract and does not depend on any concrete backend crate.
+The navigation crate depends on `iron-canvas` for command types.
 
 ## Core: generic grid and drawing
 

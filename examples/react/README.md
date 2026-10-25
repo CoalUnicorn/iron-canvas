@@ -50,6 +50,9 @@ Extended shortcuts, multi-area pointer selection, retained-set traversal,
 range-border dragging, and move/copy transfers remain disabled for P3b.
 
 The host queues up to 64 keys for the next animation frame.
+`iron-canvas-navigation` stores this queue and applies Basic commands through
+a short mutable borrow of the host's `UserModel`.
+The React adapter owns browser focus and frame presentation.
 Focus loss, composition entry, sheet change, and workbook replacement cancel
 pending keys. A failed frame leaves unstarted commands pending without a busy
 retry loop. A later key, resize, or font event can request another attempt.

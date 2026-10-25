@@ -230,7 +230,7 @@ impl Workbook {
         self.navigation.presented = self
             .session
             .interaction_frame()
-            .map(|stamp| (stamp, self.navigation.selection_revision));
+            .map(|stamp| (stamp, self.navigation.commands.selection_revision()));
         Ok(())
     }
     fn render_request(&self) -> Option<RenderRequest> {
