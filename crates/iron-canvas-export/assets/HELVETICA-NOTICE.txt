@@ -1,0 +1,79 @@
+Helvetica advance-width provenance
+=================================
+
+The WinAnsi advance tables in src/common/helvetica.rs are derived data.
+The conversion selects AFM glyph names through the Adobe Glyph List and
+indexes their WX values by WinAnsi byte. NBSP uses space, soft hyphen uses
+hyphen, and 0x7f uses bullet. Unassigned and control bytes have zero width.
+No font program is embedded. Kerning pairs and glyph bounds are not copied.
+All 256 advances were compared across the source faces: Helvetica-Oblique
+matches Helvetica, and Helvetica-BoldOblique matches Helvetica-Bold.
+
+Sources:
+https://github.com/matplotlib/matplotlib/tree/v3.10.7/lib/matplotlib/mpl-data/fonts/pdfcorefonts
+https://github.com/adobe-type-tools/agl-aglfn/blob/master/glyphlist.txt
+
+Source SHA-256 hashes:
+Helvetica.afm db772f2830fb6d000907791d8d26a12524d96943a9a739e520ee855c6b25c96f
+Helvetica-Bold.afm 8b697881c8ee617a177f6f2e2bbc88570b9fd2b9f0e89ecfc0f5507878f988fc
+Helvetica-Oblique.afm 8556038366f9da4aad6d5782ce68afdb96d6d7261da64652f8b5e519110dd91b
+Helvetica-BoldOblique.afm 526e4eeaa2b5d435cbb7cba3ff42285a473ce132aa1caddb39b48a52cc10aaf6
+readme.txt 311bfca694884d86006fb96de443b0f4359635921b95fc6c161bb94d013b7292
+glyphlist.txt a3b2f61ced9f3644cc0d4ecde5c59df34ca286c689d9484a43a710a81c466789
+
+AFM copyright notice:
+Copyright (c) 1985, 1987, 1989, 1990, 1997 Adobe Systems Incorporated.  All Rights Reserved.
+Helvetica is a trademark of Linotype-Hell AG and/or its subsidiaries.
+
+Original Adobe AFM readme (no AFM files are redistributed):
+
+Font Metrics for the 14 PDF Core Fonts
+======================================
+
+This directory contains font metrics for the 14 PDF Core Fonts,
+downloaded from Adobe. The title and this paragraph were added by
+Matplotlib developers. The download URL was
+<http://partners.adobe.com/public/developer/font/index.html>.
+
+This file and the 14 PostScript(R) AFM files it accompanies may be used, copied,
+and distributed for any purpose and without charge, with or without modification,
+provided that all copyright notices are retained; that the AFM files are not
+distributed without this file; that all modifications to this file or any of
+the AFM files are prominently noted in the modified file(s); and that this
+paragraph is not modified. Adobe Systems has no responsibility or obligation
+to support the use of the AFM files.
+
+Adobe Glyph List copyright and license:
+
+Copyright 2002-2019 Adobe (http://www.adobe.com/).
+
+Redistribution and use in source and binary forms, with or
+without modification, are permitted provided that the
+following conditions are met:
+
+Redistributions of source code must retain the above
+copyright notice, this list of conditions and the following
+disclaimer.
+
+Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following
+disclaimer in the documentation and/or other materials
+provided with the distribution.
+
+Neither the name of Adobe nor the names of its contributors
+may be used to endorse or promote products derived from this
+software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND
+CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES,
+INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
+OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.

@@ -75,6 +75,57 @@ fn compiler_reads_each_distinct_cell_once_without_changing_workbook_or_view() {
 }
 
 #[test]
+fn explicit_black_font_color_is_preserved_on_dark_theme() {
+    let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    workbook.set_user_input(0, 1, 1, "explicit black").unwrap();
+    workbook.set_user_input(0, 1, 2, "default color").unwrap();
+    workbook
+        .update_range_style(
+            &Area {
+                sheet: 0,
+                row: 1,
+                column: 1,
+                width: 1,
+                height: 1,
+            },
+            "font.color",
+            "#000000",
+        )
+        .unwrap();
+
+    let theme = CanvasTheme::dark();
+    let prepared = WorksheetCompiler::new()
+        .prepare_cells(
+            &workbook,
+            0,
+            rect(),
+            [
+                CellPlacement {
+                    coordinate: CellCoord { row: 1, col: 1 },
+                    bounds: rect(),
+                },
+                CellPlacement {
+                    coordinate: CellCoord { row: 1, col: 2 },
+                    bounds: rect(),
+                },
+            ],
+            &Metrics,
+            &theme,
+        )
+        .unwrap();
+    let text_colors: Vec<_> = prepared.scene.passes[4]
+        .iter()
+        .filter_map(|primitive| match primitive {
+            Primitive::Text { text, color, .. } => Some((text.as_str(), color.as_ref())),
+            _ => None,
+        })
+        .collect();
+
+    assert!(text_colors.contains(&("explicit black", "#000000")));
+    assert!(text_colors.contains(&("default color", theme.default_text_color.as_ref())));
+}
+
+#[test]
 fn invalid_sheet_is_rejected_even_without_cells() {
     let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
     assert!(
@@ -123,6 +174,67 @@ fn invalid_late_coordinate_returns_an_error_instead_of_partial_scene() {
         .prepare_cells(&workbook, 0, rect(), cells, &Metrics, &CanvasTheme::light())
         .unwrap_err();
     assert_eq!(error.cell.row, 0);
+}
+
+#[test]
+fn zero_width_placement_at_max_coordinate_is_ignored_safely() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    let prepared = WorksheetCompiler::new()
+        .prepare_cells(
+            &workbook,
+            0,
+            rect(),
+            [CellPlacement {
+                coordinate: CellCoord { row: 1, col: 1 },
+                bounds: PixelRect {
+                    top_left: Point { x: i32::MAX, y: 0 },
+                    width: 0,
+                    height: 30,
+                },
+            }],
+            &Metrics,
+            &CanvasTheme::light(),
+        )
+        .unwrap();
+
+    assert_eq!(prepared.cells.len(), 1);
+}
+
+#[test]
+fn one_pixel_placement_at_max_coordinate_is_ignored_safely() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    for bounds in [
+        PixelRect {
+            top_left: Point {
+                x: i32::MAX - 1,
+                y: 0,
+            },
+            width: 1,
+            height: 30,
+        },
+        PixelRect {
+            top_left: Point {
+                x: 0,
+                y: i32::MAX - 1,
+            },
+            width: 100,
+            height: 1,
+        },
+    ] {
+        WorksheetCompiler::new()
+            .prepare_cells(
+                &workbook,
+                0,
+                rect(),
+                [CellPlacement {
+                    coordinate: CellCoord { row: 1, col: 1 },
+                    bounds,
+                }],
+                &Metrics,
+                &CanvasTheme::light(),
+            )
+            .unwrap();
+    }
 }
 
 #[test]

@@ -58,8 +58,10 @@ pub struct TextLayoutOptions {
 /// Lay out text into reusable storage and report whether clipping is required.
 ///
 /// Newline-separated paragraphs are always retained. When wrapping is enabled,
-/// words are moved to the next line as needed; an individual word wider than
-/// the available width remains intact and is clipped by the caller.
+/// words are moved to the next line as needed while source whitespace is
+/// preserved. Non-breaking spaces remain attached to their words. An
+/// individual word wider than the available width remains intact and is clipped
+/// by the caller.
 ///
 /// Existing line strings are overwritten in place so callers can reuse their
 /// allocations across cells and frames. `scratch` is likewise reused while
@@ -137,14 +139,15 @@ fn position_lines(
 ) {
     let right = rect.right();
     let bottom = rect.bottom();
-    let center = rect.center();
+    let center_x = f64::from(rect.left()) + f64::from(rect.width) / 2.0;
+    let center_y = f64::from(rect.top()) + f64::from(rect.height) / 2.0;
     let line_count = lines.len() as f64;
     for (i, line) in lines.iter_mut().enumerate() {
         let i_f = i as f64;
         let tw = line.width;
         line.center_x = match h_align {
             TextAlign::End => f64::from(right) - horizontal_padding - tw / 2.0,
-            TextAlign::Center => f64::from(center.x),
+            TextAlign::Center => center_x,
             TextAlign::Start => f64::from(rect.left()) + horizontal_padding + tw / 2.0,
         };
         line.center_y = match v_align {
@@ -152,9 +155,7 @@ fn position_lines(
                 f64::from(bottom) - size_px / 2.0 - vertical_inset
                     + (i_f - line_count + 1.0) * line_height
             }
-            TextVerticalAlign::Center => {
-                f64::from(center.y) + (i_f + (1.0 - line_count) / 2.0) * line_height
-            }
+            TextVerticalAlign::Center => center_y + (i_f + (1.0 - line_count) / 2.0) * line_height,
             TextVerticalAlign::Top => {
                 f64::from(rect.top()) + size_px / 2.0 + vertical_inset + i_f * line_height
             }
@@ -175,6 +176,10 @@ fn lines_escape_clip(lines: &[TextLine], usable_w: f64, rect: PixelRect, line_he
             || line.center_y - half_line < top
             || line.center_y + half_line > bottom
     })
+}
+
+fn is_breakable_whitespace(ch: char) -> bool {
+    ch.is_whitespace() && !matches!(ch, '\u{00a0}' | '\u{2007}' | '\u{202f}')
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -209,27 +214,21 @@ fn layout_lines_into(
         return;
     }
 
-    let space_w = measure(" ");
     for raw_line in text.split('\n') {
         wrap_buf.clear();
         let mut current_w = 0.0;
-        for word in raw_line.split_whitespace() {
-            let word_w = measure(word);
-            let separator_w = if wrap_buf.is_empty() { 0.0 } else { space_w };
-            let tentative_w = current_w + separator_w + word_w;
-
-            if tentative_w > usable_w && !wrap_buf.is_empty() {
+        for piece in raw_line.split_inclusive(is_breakable_whitespace) {
+            let piece_w = measure(piece);
+            if !piece.chars().all(is_breakable_whitespace)
+                && current_w + piece_w > usable_w
+                && !wrap_buf.is_empty()
+            {
                 write_line(out, &mut idx, wrap_buf, current_w);
                 wrap_buf.clear();
-                wrap_buf.push_str(word);
-                current_w = word_w;
-            } else {
-                if !wrap_buf.is_empty() {
-                    wrap_buf.push(' ');
-                }
-                wrap_buf.push_str(word);
-                current_w = tentative_w;
+                current_w = 0.0;
             }
+            wrap_buf.push_str(piece);
+            current_w += piece_w;
         }
         write_line(out, &mut idx, wrap_buf, current_w);
     }
@@ -306,9 +305,49 @@ mod tests {
                 .iter()
                 .map(|line| line.text.as_str())
                 .collect::<Vec<_>>(),
-            ["one", "two", "three"]
+            ["one ", "two", "three"]
         );
         assert!(!clipped);
+    }
+
+    #[test]
+    fn wrapping_preserves_leading_repeated_and_trailing_whitespace() {
+        let mut lines = Vec::new();
+        layout_text_lines_into(
+            &FixedMetrics,
+            "12px sans-serif",
+            "  a  b  ",
+            true,
+            52.0,
+            12.0,
+            &mut lines,
+            &mut String::new(),
+        );
+
+        assert_eq!(
+            lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            ["  a  ", "b  "]
+        );
+    }
+
+    #[test]
+    fn wrapping_keeps_nonbreaking_spaces_within_words() {
+        let mut lines = Vec::new();
+        layout_text_lines_into(
+            &FixedMetrics,
+            "12px sans-serif",
+            "a\u{00a0}b",
+            true,
+            20.0,
+            12.0,
+            &mut lines,
+            &mut String::new(),
+        );
+
+        assert_eq!(lines[0].text, "a\u{00a0}b");
     }
 
     #[test]
@@ -330,8 +369,8 @@ mod tests {
     #[test]
     fn positions_centered_text_from_resolved_alignment() {
         let mut layout = options(TextVerticalAlign::Center);
-        layout.bounds.top_left = crate::geometry::prim::Point { x: 10, y: 20 };
-        layout.bounds.width = 100;
+        layout.bounds.width = 101;
+        layout.bounds.height = 61;
         layout.clip = layout.bounds;
         layout.horizontal = TextAlign::Center;
         let mut lines = Vec::new();
@@ -344,8 +383,8 @@ mod tests {
             &mut String::new(),
         );
 
-        assert_eq!(lines[0].center_x, 60.0);
-        assert_eq!(lines[0].center_y, 50.0);
+        assert_eq!(lines[0].center_x, 50.5);
+        assert_eq!(lines[0].center_y, 30.5);
     }
 
     #[test]

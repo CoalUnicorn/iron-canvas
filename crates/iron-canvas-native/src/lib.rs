@@ -24,7 +24,7 @@ impl NativeSceneBackend {
             committed: None,
         })
     }
-    /// The surface is read-only to consumers by convention. A host can paint
+    /// The surface is read only to consumers by convention. A host can paint
     /// it into its window or encode it with `write_to_png`.
     pub fn surface(&self) -> Option<&ImageSurface> {
         self.committed.as_ref()

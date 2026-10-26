@@ -25,7 +25,7 @@ use iron_canvas_core::painter::{
 
 use crate::common::color::parse_css_color;
 use crate::common::escape::pdf_string_escape;
-use crate::common::metrics;
+use crate::common::helvetica::HelveticaFace;
 use crate::pdf::doc::stream::ContentStream;
 
 /// Control-point offset that turns one cubic Bézier into a quarter circle:
@@ -247,13 +247,10 @@ fn join_code(join: LineJoin) -> u8 {
 }
 
 impl TextMetrics for PdfPainter {
-    // `fill_text` below always draws the base-14 standard Helvetica font
-    // (`/F1`), regardless of the cell's declared family — PDF has no
-    // embedded-font path, so `helvetica_advance_width` is the font that's
-    // actually painted, not an approximation of it.
+    // Measurement and painting use the same face and encoded character codes.
     fn measure_text_width(&self, text: &str, font_css: &str) -> f64 {
         let size = parse_font_size_px(font_css);
-        metrics::helvetica_advance_width(text, size)
+        HelveticaFace::from_css(font_css).advance_width(text, size)
     }
 }
 
@@ -454,11 +451,10 @@ impl Painter for PdfPainter {
     ) {
         let font_str = font_css.as_str();
         let size = parse_font_size_px(font_str);
+        let face = HelveticaFace::from_css(font_str);
+        let font_resource = face.resource_name();
 
-        // Real Helvetica width — same as measure_text_width, recomputed
-        // here to avoid a borrow round-trip. Must stay in sync: `Tm`
-        // below positions the run using this same estimate.
-        let text_width = metrics::helvetica_advance_width(text, size);
+        let text_width = face.advance_width(text, size);
 
         // Painter coords are Y-down. After the outer Y-flip CTM,
         // a counter-flipping text matrix (`1 0 0 -1 tx ty Tm`) restores
@@ -487,7 +483,7 @@ impl Painter for PdfPainter {
         buf.clear();
         let _ = write!(
             buf,
-            "BT\n/F1 {size:.3} Tf\n{r:.3} {g:.3} {b:.3} rg\n1 0 0 -1 {tx:.3} {ty:.3} Tm\n("
+            "BT\n/{font_resource} {size:.3} Tf\n{r:.3} {g:.3} {b:.3} rg\n1 0 0 -1 {tx:.3} {ty:.3} Tm\n("
         );
         pdf_string_escape(text, &mut buf);
         let _ = write!(buf, ") Tj\nET\n");
@@ -607,6 +603,40 @@ mod tests {
         );
         assert!(painter.shadings().borrow().is_empty());
         assert!(content(&painter).is_empty());
+    }
+
+    #[test]
+    fn fill_text_selects_matching_helvetica_style_face() {
+        let painter = PdfPainter::new(100, 50);
+        for font_css in [
+            "12px Calibri",
+            "bold 12px Calibri",
+            "italic 12px Calibri",
+            "bold italic 12px Calibri",
+        ] {
+            painter.fill_text(
+                "styled",
+                0.0,
+                12.0,
+                PaintColor::Static(font_css),
+                PaintColor::Static("#000"),
+                TextAlign::Start,
+                TextBaseline::Alphabetic,
+            );
+        }
+
+        let output = content(&painter);
+        for (font, size) in [
+            ("F1", "12.000"),
+            ("F2", "12.000"),
+            ("F3", "12.000"),
+            ("F4", "12.000"),
+        ] {
+            assert!(
+                output.contains(&format!("/{font} {size} Tf")),
+                "missing /{font}: {output}"
+            );
+        }
     }
 
     #[test]

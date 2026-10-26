@@ -188,7 +188,7 @@ impl CfDecorationPaint {
         }
         if let Some(icon) = &self.icon {
             paint_glyph(painter, icon.glyph.clone(), left, top, size, &icon.color);
-            left += size;
+            left = left.saturating_add(size);
         }
         if let Some(rating) = &self.rating {
             match &rating.style {
@@ -280,6 +280,9 @@ fn count_as_i32(count: u32) -> i32 {
 /// The icon/rating slot inside `rect`: `(left, top, size)` in pixels, or
 /// `None` when the cell is too small to hold one.
 fn icon_slot(rect: PixelRect) -> Option<(i32, i32, i32)> {
+    if rect.width <= 2 * CF_INSET || rect.height <= 2 * CF_INSET {
+        return None;
+    }
     let inner = rect.inset(CF_INSET, CF_INSET);
     if inner.width <= 0 || inner.height <= 0 {
         return None;
@@ -298,6 +301,9 @@ fn icon_slot(rect: PixelRect) -> Option<(i32, i32, i32)> {
 /// Paint a data bar: a solid or horizontal-gradient rect spanning the zero
 /// axis and the value endpoint, colored by the endpoint's side of the axis.
 fn paint_data_bar(painter: &mut SceneBuilder, rect: PixelRect, bar: &CfDataBarPaint) {
+    if rect.width <= 2 * CF_INSET || rect.height <= 2 * CF_INSET {
+        return;
+    }
     let inner = rect.inset(CF_INSET, CF_INSET);
     if inner.width <= 0 || inner.height <= 0 {
         return;
@@ -591,6 +597,36 @@ mod tests {
             icon: None,
             data_bar: None,
             rating: None,
+        }
+    }
+    #[test]
+    fn decorations_accept_tiny_placements_at_max_coordinates() {
+        let mut ext = extended();
+        ext.icon = Some(CfIcon {
+            icon: Icon::ArrowUp,
+            color: Color::Rgb("#112233".into()),
+            show_value: true,
+        });
+        ext.data_bar = Some(CfDataBar {
+            positive_color: Color::Rgb("#3366cc".into()),
+            negative_color: Color::Rgb("#ff0000".into()),
+            is_gradient: false,
+            value: 1.0,
+            axis_position: 0.0,
+            show_value: true,
+        });
+        let cf = CfDecorationPaint::resolve(&ext, &model());
+        for size in 0..=8 {
+            let rect = PixelRect {
+                top_left: Point {
+                    x: i32::MAX - size,
+                    y: i32::MAX - size,
+                },
+                width: size,
+                height: size,
+            };
+            cf.reserved_left(rect);
+            cf.paint(&mut SceneBuilder::default(), rect);
         }
     }
     #[test]

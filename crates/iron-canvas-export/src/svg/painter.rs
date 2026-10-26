@@ -136,16 +136,22 @@ fn open_rect(rect: PixelRect, out: &mut String) {
 /// Append `path`'s commands as an SVG `d` attribute value. The caller must
 /// have validated `path`. Shared by `fill_path` and `stroke_path`.
 fn write_path_d(path: &Path<'_>, out: &mut String) {
+    let mut current = None;
+    let mut subpath_start = None;
     for cmd in path.cmds() {
         match cmd {
             PathCmd::Move(p) => {
                 let _ = write!(out, "M{:.3} {:.3}", p.x, p.y);
+                current = Some(*p);
+                subpath_start = Some(*p);
             }
             PathCmd::Line(p) => {
                 let _ = write!(out, " L{:.3} {:.3}", p.x, p.y);
+                current = Some(*p);
             }
             PathCmd::Quad(c, e) => {
                 let _ = write!(out, " Q{:.3} {:.3} {:.3} {:.3}", c.x, c.y, e.x, e.y);
+                current = Some(*e);
             }
             PathCmd::Cubic(a, b, e) => {
                 let _ = write!(
@@ -153,10 +159,22 @@ fn write_path_d(path: &Path<'_>, out: &mut String) {
                     " C{:.3} {:.3} {:.3} {:.3} {:.3} {:.3}",
                     a.x, a.y, b.x, b.y, e.x, e.y
                 );
+                current = Some(*e);
             }
             PathCmd::Arc(spec) => {
                 if spec.sweep_angle == 0.0 {
                     continue;
+                }
+                let start = spec.start_point();
+                match current {
+                    None => {
+                        let _ = write!(out, "M{:.3} {:.3}", start.x, start.y);
+                        subpath_start = Some(start);
+                    }
+                    Some(point) if point != start => {
+                        let _ = write!(out, " L{:.3} {:.3}", start.x, start.y);
+                    }
+                    Some(_) => {}
                 }
                 // A full turn has start == end, which one `A` cannot express;
                 // split into at most half-turn segments.
@@ -170,8 +188,12 @@ fn write_path_d(path: &Path<'_>, out: &mut String) {
                         spec.radius, spec.radius, large, sweep_flag, end.x, end.y
                     );
                 });
+                current = Some(spec.end_point());
             }
-            PathCmd::Close => out.push('Z'),
+            PathCmd::Close => {
+                out.push('Z');
+                current = subpath_start;
+            }
         }
     }
 }
@@ -396,6 +418,7 @@ impl Painter for SvgPainter {
         baseline: TextBaseline,
     ) {
         let size = parse_font_size_px(font_css.as_str());
+        let (bold, italic) = crate::common::font::bold_italic(font_css.as_str());
         let anchor = match align {
             TextAlign::Start => "start",
             TextAlign::Center => "middle",
@@ -416,13 +439,20 @@ impl Painter for SvgPainter {
         let mut body = self.body.borrow_mut();
         let _ = write!(
             body,
-            "<text x=\"{:.3}\" y=\"{:.3}\" font-family=\"Inter\" font-size=\"{:.3}\" fill=\"",
+            "<text x=\"{:.3}\" y=\"{:.3}\" font-family=\"Inter\" font-size=\"{:.3}\"",
             x, y, size
         );
+        if bold {
+            body.push_str(" font-weight=\"bold\"");
+        }
+        if italic {
+            body.push_str(" font-style=\"italic\"");
+        }
+        body.push_str(" fill=\"");
         xml_escape(color.as_str(), &mut body);
         let _ = write!(
             body,
-            "\" text-anchor=\"{}\" dominant-baseline=\"{}\">",
+            "\" text-anchor=\"{}\" dominant-baseline=\"{}\" xml:space=\"preserve\">",
             anchor, dom_baseline
         );
         xml_escape(text, &mut body);
@@ -465,8 +495,9 @@ impl BlitPainter for SvgPainter {
 
 #[cfg(test)]
 mod tests {
-    use super::SvgPainter;
+    use super::{SvgPainter, write_path_d};
     use crate::common::metrics;
+    use iron_canvas_core::geometry::path::{ArcSpec, Path, PathCmd, PointF};
     use iron_canvas_core::geometry::pixel_rect::PixelRect;
     use iron_canvas_core::geometry::prim::Point;
     use iron_canvas_core::painter::{
@@ -500,6 +531,39 @@ mod tests {
         let svg = p.finish();
         assert!(svg.contains("<rect"));
         assert!(svg.contains("fill=\"#ff0000\""));
+    }
+
+    #[test]
+    fn arc_only_path_moves_to_the_arc_start_point() {
+        let cmds = [PathCmd::Arc(ArcSpec::new(
+            PointF::new(20.0, 20.0),
+            10.0,
+            0.0,
+            std::f64::consts::FRAC_PI_2,
+        ))];
+        let mut d = String::new();
+
+        write_path_d(&Path::new(&cmds), &mut d);
+
+        assert!(d.starts_with("M30.000 20.000 A10.000 10.000"));
+    }
+
+    #[test]
+    fn arc_after_unrelated_move_connects_to_its_start_point() {
+        let cmds = [
+            PathCmd::Move(PointF::new(2.0, 3.0)),
+            PathCmd::Arc(ArcSpec::new(
+                PointF::new(20.0, 20.0),
+                10.0,
+                0.0,
+                std::f64::consts::FRAC_PI_2,
+            )),
+        ];
+        let mut d = String::new();
+
+        write_path_d(&Path::new(&cmds), &mut d);
+
+        assert!(d.starts_with("M2.000 3.000 L30.000 20.000 A10.000 10.000"));
     }
 
     #[test]
@@ -616,6 +680,41 @@ mod tests {
         assert!(svg.contains("a&lt;b&amp;c&quot;d"));
         assert!(svg.contains("text-anchor=\"start\""));
         assert!(svg.contains("dominant-baseline=\"alphabetic\""));
+    }
+
+    #[test]
+    fn fill_text_emits_bold_and_italic_styles() {
+        let p = SvgPainter::new(10, 10);
+        p.fill_text(
+            "styled",
+            1.0,
+            2.0,
+            PaintColor::Static("bold italic 12px Calibri"),
+            PaintColor::Static("#000"),
+            TextAlign::Start,
+            TextBaseline::Alphabetic,
+        );
+
+        let svg = p.finish();
+        assert!(svg.contains("font-weight=\"bold\""));
+        assert!(svg.contains("font-style=\"italic\""));
+    }
+
+    #[test]
+    fn fill_text_preserves_repeated_and_leading_whitespace() {
+        let p = SvgPainter::new(10, 10);
+        p.fill_text(
+            "  A  B  ",
+            1.0,
+            2.0,
+            PaintColor::Static("12px Calibri"),
+            PaintColor::Static("#000"),
+            TextAlign::Center,
+            TextBaseline::Alphabetic,
+        );
+
+        let svg = p.finish();
+        assert!(svg.contains("xml:space=\"preserve\">  A  B  </text>"));
     }
 
     #[test]

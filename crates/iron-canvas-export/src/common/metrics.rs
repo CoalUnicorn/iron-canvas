@@ -5,12 +5,10 @@
 //! it disagrees badly with what's actually painted — that mismatch is what
 //! clips exported text (see `docs/reviews/2026-07-01-export-font-metrics-plan.md`).
 //!
-//! Both functions below measure the font each backend actually *draws*, not
-//! the cell's declared family: SVG always renders (and now always emits) the
-//! bundled Inter TTF; PDF always draws the base-14 Helvetica font regardless
-//! of the cell's style. Any character missing from a table falls back to
-//! `approx_text_width` for that one character only, so every other script
-//! keeps working exactly as before.
+//! SVG measures the bundled Inter Regular face. PDF uses the selected
+//! Helvetica face and the WinAnsi bytes written to the content stream.
+//! Unmapped SVG glyphs use the shared width estimate. Unsupported PDF
+//! characters use the advance of the emitted `?` replacement.
 
 use std::sync::LazyLock;
 
@@ -70,38 +68,11 @@ pub fn inter_base64() -> &'static str {
 
 //  Helvetica (PDF)
 
-/// Published Helvetica AFM advance widths (1000-unit em), printable ASCII
-/// `0x20..=0x7E` only — `HELVETICA_ASCII_WIDTHS[c as usize - 0x20]`. Standard
-/// PDF base-14 metrics: the font every `PdfPainter::fill_text` call actually
-/// draws (`/F1`), regardless of the cell's declared family. Scoped to ASCII
-/// (rather than full Latin-1) because that's the range with well-published,
-/// unambiguous reference values; anything outside it uses the flat fallback,
-/// same as an unmapped Inter glyph.
-#[rustfmt::skip]
-const HELVETICA_ASCII_WIDTHS: [u16; 95] = [
-    // 0x20-0x2F: space ! " # $ % & ' ( ) * + , - . /
-    278, 278, 355, 556, 556, 889, 667, 191, 333, 333, 389, 584, 278, 333, 278, 278,
-    // 0x30-0x3F: 0-9 : ; < = > ?
-    556, 556, 556, 556, 556, 556, 556, 556, 556, 556, 278, 278, 584, 584, 584, 556,
-    // 0x40-0x4F: @ A-O
-    1015, 667, 667, 722, 722, 667, 611, 778, 722, 278, 500, 667, 556, 833, 722, 778,
-    // 0x50-0x5F: P-Z [ \ ] ^ _
-    667, 778, 722, 667, 611, 722, 667, 944, 667, 667, 611, 278, 278, 278, 469, 556,
-    // 0x60-0x6F: ` a-o
-    333, 556, 556, 500, 556, 556, 278, 556, 556, 222, 222, 500, 222, 833, 556, 556,
-    // 0x70-0x7E: p-z { | } ~
-    556, 556, 333, 500, 278, 556, 500, 722, 500, 500, 500, 334, 260, 334, 584,
-];
-
-/// Sum of Helvetica advances for `text` at `size_px`. Codepoints outside
-/// printable ASCII fall back to the flat estimate for that character alone.
+/// Sum of regular Helvetica advances for the emitted WinAnsi text.
+/// Unsupported characters use the width of `?`, matching PDF output.
+/// The PDF painter selects style-specific advances through `HelveticaFace`.
 pub fn helvetica_advance_width(text: &str, size_px: f64) -> f64 {
-    sum_advances(text, size_px, |c| {
-        let idx = c as u32;
-        (0x20..=0x7E)
-            .contains(&idx)
-            .then(|| f64::from(HELVETICA_ASCII_WIDTHS[(idx - 0x20) as usize]) / 1000.0 * size_px)
-    })
+    super::helvetica::regular_advance_width(text, size_px)
 }
 
 #[cfg(test)]
@@ -147,9 +118,9 @@ mod tests {
     }
 
     #[test]
-    fn helvetica_non_ascii_falls_back_to_flat_estimate() {
+    fn helvetica_measures_the_encoded_euro_glyph() {
         let w = helvetica_advance_width("€", 13.0);
-        assert_eq!(w, approx_text_width(13.0, "€"));
+        assert!((w - 0.556 * 13.0).abs() < 1e-9);
     }
 
     #[test]

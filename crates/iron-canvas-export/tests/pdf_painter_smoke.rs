@@ -243,6 +243,84 @@ fn fill_text_align_end_shifts_x_by_full_width() {
 }
 
 #[test]
+fn selected_helvetica_face_controls_width_and_alignment() {
+    for (font, resource, width) in [
+        ("40px Helvetica", "F1", 35.52),
+        ("bold 40px Helvetica", "F2", 44.48),
+        ("italic 40px Helvetica", "F3", 35.52),
+        ("bold italic 40px Helvetica", "F4", 44.48),
+    ] {
+        let painter = PdfPainter::new(400, 100);
+        assert!(
+            (painter.measure_text_width("iiii", font) - width).abs() < 1e-9,
+            "{font}"
+        );
+        for (align, left) in [
+            (TextAlign::Start, 220.0),
+            (TextAlign::Center, 220.0 - width / 2.0),
+            (TextAlign::End, 220.0 - width),
+        ] {
+            let painter = PdfPainter::new(400, 100);
+            painter.fill_text(
+                "iiii",
+                220.0,
+                60.0,
+                PaintColor::Static(font),
+                PaintColor::Static("#000000"),
+                align,
+                TextBaseline::Alphabetic,
+            );
+            let output = snapshot(&painter);
+            assert!(output.contains(&format!("/{resource} 40.000 Tf")));
+            assert!(
+                output.contains(&format!("1 0 0 -1 {left:.3} 60.000 Tm")),
+                "{font}: {output}"
+            );
+        }
+    }
+}
+
+#[test]
+fn bold_text_wraps_at_its_actual_advance_width() {
+    use iron_canvas_core::text_layout::layout_text_lines_into;
+    let painter = PdfPainter::new(400, 100);
+    for (font, expected_lines) in [("40px Helvetica", 1), ("bold 40px Helvetica", 2)] {
+        let mut lines = Vec::new();
+        layout_text_lines_into(
+            &painter,
+            font,
+            "iiii iiii",
+            true,
+            90.0,
+            40.0,
+            &mut lines,
+            &mut String::new(),
+        );
+        assert_eq!(lines.len(), expected_lines, "{font}");
+    }
+}
+
+#[test]
+fn measurement_uses_the_encoded_win_ansi_glyph_and_replacement() {
+    let painter = PdfPainter::new(400, 100);
+    for (text, regular, bold) in [
+        ("é", 22.24, 22.24),
+        ("£", 22.24, 22.24),
+        ("€", 22.24, 22.24),
+        ("'", 7.64, 9.52),
+        ("’", 8.88, 11.12),
+        ("漢", 22.24, 24.44),
+    ] {
+        for (font, expected) in [("40px Helvetica", regular), ("bold 40px Helvetica", bold)] {
+            assert!(
+                (painter.measure_text_width(text, font) - expected).abs() < 1e-9,
+                "{font}: {text}"
+            );
+        }
+    }
+}
+
+#[test]
 fn fill_text_escapes_parens_and_backslash() {
     let p = PdfPainter::new(W, H);
     p.fill_text(
@@ -277,17 +355,15 @@ fn invalidate_cache_and_reset_text_defaults_are_no_ops() {
 #[test]
 fn measure_text_width_uses_real_helvetica_metrics_not_declared_family() {
     let p = PdfPainter::new(W, H);
-    // PDF always draws the base-14 standard Helvetica font (`/F1`)
-    // regardless of the cell's declared family, so measurement must use
-    // real Helvetica advances, not the flat 1.0-factor estimate — and
-    // "sans-serif"/"serif" here must not change the result, only size does.
+    // The declared family does not change the Helvetica advance tables.
+    // Font size and style select the actual measured glyph advances.
     assert_eq!(
         p.measure_text_width("hello", "16px sans-serif"),
         metrics::helvetica_advance_width("hello", 16.0),
     );
     assert_eq!(
         p.measure_text_width("hi", "bold 12px serif"),
-        metrics::helvetica_advance_width("hi", 12.0),
+        (611.0 + 278.0) / 1000.0 * 12.0,
     );
     // No `<n>px` token -> DEFAULT_FONT_SIZE_PX (12.0).
     assert_eq!(

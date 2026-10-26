@@ -74,7 +74,7 @@ pub(super) fn compile_text(
         &theme.error_text_color
     } else if let Some(color) = link_color.as_deref().filter(|color| !color.is_empty()) {
         color
-    } else if resolved.is_empty() || resolved.eq_ignore_ascii_case("#000000") {
+    } else if font.color.is_none() {
         &theme.default_text_color
     } else {
         resolved.as_str()

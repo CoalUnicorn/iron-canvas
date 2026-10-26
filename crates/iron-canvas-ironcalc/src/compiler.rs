@@ -1,4 +1,4 @@
-//! Read-only IronCalc worksheet compilation. No legacy model adapter is used.
+//! Read only IronCalc worksheet compilation. No legacy model adapter is used.
 mod borders;
 mod cf;
 mod composition;

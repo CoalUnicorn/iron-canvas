@@ -132,6 +132,7 @@ impl Error for WorkbookExportError {
 /// `sheet` accepts a case-insensitive worksheet name or a zero-based index.
 /// When omitted, the first worksheet is exported. The output extension chooses
 /// SVG or PDF; the workbook's frozen rows and columns remain visible.
+/// Formulas are evaluated after import. Export does not use cached XLSX results.
 ///
 /// Returns the zero-based index of the worksheet exported.
 pub fn export_xlsx(
@@ -144,12 +145,13 @@ pub fn export_xlsx(
     let input_path = input_path.as_ref();
     let output_path = output_path.as_ref();
     let format = output_format(output_path)?;
-    let workbook = load_from_xlsx(&input_path.to_string_lossy(), "en", "UTC", "en")
+    let mut workbook = load_from_xlsx(&input_path.to_string_lossy(), "en", "UTC", "en")
         .map(UserModel::from_model)
         .map_err(|error| WorkbookExportError::OpenWorkbook {
             path: input_path.to_owned(),
             message: error.to_string(),
         })?;
+    workbook.evaluate();
     let sheet = resolve_sheet(&workbook, sheet).map_err(WorkbookExportError::SheetSelection)?;
 
     match format {
@@ -489,6 +491,8 @@ fn parse_cell(input: &str) -> Result<CellCoord, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "svg")]
+    use ironcalc::export::save_to_xlsx;
 
     #[test]
     fn parses_single_cells_and_ranges_case_insensitively() {
@@ -526,5 +530,53 @@ mod tests {
             OutputFormat::Pdf
         );
         assert!(output_format(Path::new("out.png")).is_err());
+    }
+
+    #[cfg(feature = "svg")]
+    #[test]
+    fn xlsx_export_recalculates_stale_formula_results() {
+        let stem = format!("iron-canvas-formula-export-{}", std::process::id());
+        let input = std::env::temp_dir().join(format!("{stem}.xlsx"));
+        let output = std::env::temp_dir().join(format!("{stem}.svg"));
+        let _ = fs::remove_file(&input);
+        let _ = fs::remove_file(&output);
+
+        let mut source =
+            UserModel::new_empty("formula-export", "en", "UTC", "en").expect("create workbook");
+        source
+            .set_user_input(0, 1, 2, "1")
+            .expect("set initial formula input");
+        source
+            .set_user_input(0, 1, 1, "=B1*2")
+            .expect("set formula");
+        source.pause_evaluation();
+        source
+            .set_user_input(0, 1, 2, "3")
+            .expect("change formula input without evaluating");
+        assert_eq!(
+            source
+                .get_formatted_cell_value(0, 1, 1)
+                .expect("read stale result"),
+            "2"
+        );
+        save_to_xlsx(source.get_model(), &input.to_string_lossy()).expect("save stale cache");
+
+        export_xlsx(
+            &input,
+            &output,
+            None,
+            CellRange::new(CellCoord { row: 1, col: 1 }, CellCoord { row: 1, col: 1 })
+                .expect("valid range"),
+            &CanvasTheme::light(),
+        )
+        .expect("export workbook");
+        let svg = fs::read_to_string(&output).expect("read exported SVG");
+
+        let _ = fs::remove_file(&input);
+        let _ = fs::remove_file(&output);
+        assert!(
+            svg.contains(">6</text>"),
+            "recalculated formula result is missing"
+        );
     }
 }

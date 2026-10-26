@@ -48,6 +48,61 @@ fn pixels(canvas: &HtmlCanvasElement) -> Vec<u8> {
 }
 
 #[wasm_bindgen_test]
+fn commit_replaces_old_pixels_after_target_composite_state_changes() {
+    use iron_canvas_core::{
+        PixelRect, Point,
+        scene::{GridScene, Primitive, RenderBackend},
+    };
+    use std::rc::Rc;
+
+    for reset_size in [false, true] {
+        let canvas = make_canvas();
+        let mut backend = Canvas2dSceneBackend::new(
+            canvas.clone(),
+            CanvasMetrics::new(CanvasSize { w: 8.0, h: 8.0 }, 1.0).unwrap(),
+        )
+        .unwrap();
+        let clip = PixelRect {
+            top_left: Point::default(),
+            width: 8,
+            height: 8,
+        };
+        let scene = GridScene {
+            clip,
+            passes: vec![Rc::from([Primitive::RectFill {
+                rect: clip,
+                color: Rc::from("red"),
+            }])],
+        };
+        let staged = backend.stage_frame(&scene).unwrap();
+        backend.commit_frame(staged).unwrap();
+        if reset_size {
+            canvas.set_width(canvas.width());
+        }
+        let context = canvas
+            .get_context("2d")
+            .unwrap()
+            .unwrap()
+            .dyn_into::<web_sys::CanvasRenderingContext2d>()
+            .unwrap();
+        context
+            .set_global_composite_operation("source-over")
+            .unwrap();
+        context.set_fill_style_str("red");
+        context.fill_rect(0.0, 0.0, 8.0, 8.0);
+        assert!(pixels(&canvas).chunks_exact(4).all(|pixel| pixel[3] == 255));
+
+        let empty = GridScene {
+            clip,
+            passes: Vec::new(),
+        };
+        let staged = backend.stage_frame(&empty).unwrap();
+        backend.commit_frame(staged).unwrap();
+        assert!(pixels(&canvas).iter().all(|channel| *channel == 0));
+    }
+}
+
+#[wasm_bindgen_test]
 fn cf_fixture_session_paints_colored_primitives_and_preserves_pixels_on_failure() {
     let workbook = load_from_xlsx_bytes(FIXTURE, "cf_tests", "en", "UTC").unwrap();
     let workbook = UserModel::from_model(Model::from_workbook(workbook, "en").unwrap());

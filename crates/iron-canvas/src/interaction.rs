@@ -353,19 +353,20 @@ impl<B: RenderBackend> CanvasSession<B> {
             extend: action == PointerAction::ExtendSelection,
         })
     }
+    /// Build an intent for the exact header divider at `point`.
+    /// For a tolerance-based drag, retain the target from `resize_target`.
     pub fn resize_intent(&self, point: Point, pixels: i32) -> Option<HostIntent> {
         if pixels < 0 {
             return None;
         }
         let sheet = self.committed_frame()?.sheet;
-        match self.hit_test(point)? {
-            GridHit::RowHeader(row) => Some(HostIntent::ResizeRow { sheet, row, pixels }),
-            GridHit::ColumnHeader(column) => Some(HostIntent::ResizeColumn {
+        match self.resize_target(point, 0)? {
+            GridResize::Row(row) => Some(HostIntent::ResizeRow { sheet, row, pixels }),
+            GridResize::Column(column) => Some(HostIntent::ResizeColumn {
                 sheet,
                 column,
                 pixels,
             }),
-            _ => None,
         }
     }
 }
