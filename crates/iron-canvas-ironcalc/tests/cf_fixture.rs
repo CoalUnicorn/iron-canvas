@@ -297,9 +297,9 @@ fn cf_fixture_shared_scene_reaches_native_raster_at_two_scales() {
             let mut colorful = 0;
             surface
                 .with_data(|pixels| {
-                    for pixel in pixels.chunks_exact(4) {
+                    for &pixel in pixels.as_chunks::<4>().0 {
                         // Cairo ARGB32 uses native-endian premultiplied channels.
-                        let argb = u32::from_ne_bytes(pixel.try_into().unwrap());
+                        let argb = u32::from_ne_bytes(pixel);
                         let red = ((argb >> 16) & 255) as u8;
                         let green = ((argb >> 8) & 255) as u8;
                         if argb >> 24 > 0 && red.abs_diff(green) > 30 {
