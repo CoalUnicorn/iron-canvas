@@ -140,7 +140,9 @@ fn cf_fixture_session_paints_colored_primitives_and_preserves_pixels_on_failure(
             session.render(&workbook, &request).unwrap();
             let painted = pixels(&canvas);
             let colorful = painted
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .filter(|p| p[3] > 0 && p[0].abs_diff(p[1]) > 30)
                 .count();
             assert!(
