@@ -412,6 +412,50 @@ fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
     }
 }
 
+#[path = "support/text_spill.rs"]
+mod text_spill;
+
+#[wasm_bindgen_test]
+fn spill_paints_over_fills_and_keeps_borders_after_style_changes() {
+    for dpr in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_spill::fixture();
+        let metrics = CanvasMetrics::new(
+            CanvasSize {
+                w: f64::from(request.viewport.width),
+                h: f64::from(request.viewport.height),
+            },
+            dpr,
+        )
+        .unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        session.render(&model, &request).unwrap();
+        for color in ["#ffffff", "#00bfff", "#ffffff"] {
+            text_spill::format(&mut model, color);
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            let before = pixels(session.backend().canvas());
+            let cell = session.cell_rect(2, 2).unwrap();
+            let stride = session.backend().canvas().width() as usize * 4;
+            model.set_user_input(0, 2, 1, "").unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            assert_ne!(
+                text_spill::interior_pixels(&before, stride, cell, dpr),
+                text_spill::interior_pixels(&pixels(session.backend().canvas()), stride, cell, dpr),
+                "text must reach the formatted destination at scale {dpr}"
+            );
+            model.set_user_input(0, 2, 1, text_spill::TEXT).unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            assert_eq!(pixels(session.backend().canvas()), before);
+        }
+    }
+}
+
 #[wasm_bindgen_test]
 fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
     use iron_canvas::{TextMetricsKey, WorksheetCache};

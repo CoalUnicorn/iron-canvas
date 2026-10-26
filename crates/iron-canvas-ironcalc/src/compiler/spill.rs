@@ -2,7 +2,7 @@
 
 use super::*;
 use iron_canvas_core::scene_geometry::AxisCell;
-use ironcalc_base::types::{Border, Cell, HorizontalAlignment};
+use ironcalc_base::types::{Cell, HorizontalAlignment};
 
 /// Maximum logical column distance for a source or a neighbor search.
 const COLUMN_LIMIT: usize = 64;
@@ -51,7 +51,6 @@ fn eligible(record: &CellRecord) -> bool {
     matches!(record.kind, CellType::Text)
         && !record.value.is_empty()
         && !graphics(record)
-        && record.extended.style.border == Border::default()
         && record
             .extended
             .style
@@ -92,14 +91,10 @@ impl Attempt<'_, '_, '_> {
 
     fn blocker(&self, cell: CellCoord, merges: &[MergedCell]) -> bool {
         let record = &self.cached[&cell];
-        merged(cell, merges)
-            || record.occupied
-            || graphics(record)
-            || record.extended.style.border != Border::default()
-            || !self
-                .workbook
-                .resolve_color(&record.extended.style.fill.color)
-                .is_empty()
+        // Fills and borders paint before text. They do not occupy an empty
+        // cell. Resolved borders can also come from the row above or below;
+        // those shared edges cannot determine horizontal text spill.
+        merged(cell, merges) || record.occupied || graphics(record)
     }
 
     /// Find the nearest occupied cell outside one pane edge. Only an eligible

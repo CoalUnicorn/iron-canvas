@@ -98,6 +98,41 @@ fn native_spill_matches_fresh_after_offscreen_source_and_blocker_edits() {
         assert_eq!(pixels(&session), before);
     }
 }
+
+#[path = "support/text_spill.rs"]
+mod text_spill;
+
+#[test]
+fn native_spill_paints_over_fills_and_keeps_borders_after_style_changes() {
+    for scale in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_spill::fixture();
+        let mut session = CanvasSession::new(NativeSceneBackend::new(scale).unwrap());
+        session.render(&model, &request).unwrap();
+        for color in ["#ffffff", "#00bfff", "#ffffff"] {
+            text_spill::format(&mut model, color);
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+            let before = pixels(&session);
+            let cell = session.cell_rect(2, 2).unwrap();
+            let stride = session.backend().surface().unwrap().stride() as usize;
+            model.set_user_input(0, 2, 1, "").unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+            assert_ne!(
+                text_spill::interior_pixels(&before, stride, cell, scale),
+                text_spill::interior_pixels(&pixels(&session), stride, cell, scale),
+                "text must reach the formatted destination at scale {scale}"
+            );
+            model.set_user_input(0, 2, 1, text_spill::TEXT).unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+            assert_eq!(pixels(&session), before);
+        }
+    }
+}
 #[test]
 fn native_reuses_stable_frames_and_falls_back_for_partial_work() {
     for scale in [1.0, 1.25, 1.5] {

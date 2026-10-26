@@ -168,8 +168,10 @@ pub struct PreparedWorksheet {
   The existing compiler entry points use a temporary text cache.
 - Complete viewport preparation plans text spill before painting each row.
   Eligible unwrapped text keeps its source anchor and uses a wider clip.
-  Occupied cells, merges, hidden columns, pane boundaries, and formatting
-  blockers stop spill. Each direction has a 64-column limit. Offscreen source
+  Occupied cells, merges, hidden columns, pane boundaries, and conditional-formatting
+  graphics stop spill. Fills and explicit borders permit spill from and through
+  their cells. They paint before text, including borders shared with adjacent rows.
+  Each direction has a 64-column limit. Offscreen source
   searches use the same limit. Offscreen sources do not add hit-test cells.
   Crossed vertical grid lines are omitted. Horizontal and explicit borders stay.
   `prepare_cells` keeps cell clips because arbitrary placements do not establish

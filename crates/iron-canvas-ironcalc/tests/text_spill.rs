@@ -1,7 +1,7 @@
 //! Exact spill policy checks with deterministic text measurements.
 
 use iron_canvas_core::{
-    CanvasTheme, CellCoord, Line, PixelRect, painter::TextMetrics, scene::Primitive,
+    CanvasTheme, CellCoord, Line, PixelRect, Side, painter::TextMetrics, scene::Primitive,
 };
 use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetCompiler, WorksheetViewport};
 use ironcalc_base::{
@@ -40,6 +40,22 @@ fn style(model: &mut UserModel<'_>, row: i32, col: i32, key: &str, value: &str) 
             value,
         )
         .unwrap();
+}
+
+fn border(model: &mut UserModel<'_>, row: i32, col: i32, side: Side) {
+    let mut style = model.get_cell_style(0, row, col).unwrap();
+    let edge = match side {
+        Side::Left => &mut style.border.left,
+        Side::Top => &mut style.border.top,
+        Side::Right => &mut style.border.right,
+        Side::Bottom => &mut style.border.bottom,
+    };
+    *edge = Some(BorderItem {
+        style: BorderStyle::Thin,
+        color: Color::Rgb("#123456".into()),
+    });
+    model.set_selected_cell(row, col).unwrap();
+    model.on_paste_styles(&[vec![style]]).unwrap();
 }
 
 fn prepare(model: &UserModel<'_>, first: i32, width: i32) -> PreparedWorksheet {
@@ -181,13 +197,14 @@ fn center_spill_stops_independently_on_each_side() {
 }
 
 #[test]
-fn conditional_fill_on_an_empty_cell_blocks_spill() {
+fn conditional_fill_on_an_empty_cell_preserves_spill_and_background() {
     use ironcalc_base::{
         cf_types::CfRuleInput,
         types::{Dxf, Fill},
     };
     let mut model = model();
     model.set_user_input(0, 1, 1, TEXT).unwrap();
+    let expected = text_paint(&prepare(&model, 1, 348), TEXT);
     // Store a style-only empty cell so the engine evaluates this CF target.
     style(&mut model, 1, 3, "font.b", "true");
     model
@@ -216,23 +233,32 @@ fn conditional_fill_on_an_empty_cell_blocks_spill() {
             .is_none()
     );
     let frame = prepare(&model, 1, 348);
-    assert_eq!(
-        text_paint(&frame, TEXT)[0].0.right(),
-        rect(&frame, 1, 3).left()
-    );
+    assert_eq!(text_paint(&frame, TEXT), expected);
+    assert!(frame.scene.passes[0].iter().any(|op| matches!(
+        op, Primitive::RectFill { rect: bounds, color }
+            if *bounds == rect(&frame, 1, 3) && color.as_ref() == "#ff0000"
+    )));
 }
 
 #[test]
-fn offscreen_sources_stop_at_formatting_blockers_and_hidden_columns() {
-    for hidden in [false, true] {
+fn offscreen_sources_cross_formatted_empty_cells_but_stop_at_hidden_columns() {
+    for (source, alignment, first) in [(1, "left", 3), (7, "right", 3)] {
         let mut model = model();
-        model.set_user_input(0, 1, 1, TEXT).unwrap();
-        if hidden {
-            model.set_columns_hidden(0, 2, 2, true).unwrap();
-        } else {
-            style(&mut model, 1, 2, "fill.color", "#ffffff");
+        model.set_user_input(0, 1, source, TEXT).unwrap();
+        style(&mut model, 1, source, "alignment.horizontal", alignment);
+        let expected = text_paint(&prepare(&model, first, 198), TEXT);
+        assert_eq!(expected.len(), 1);
+        // Include the source, the path outside the view, and both pane edges.
+        for col in 1..=7 {
+            style(&mut model, 1, col, "fill.color", "#ffffff");
+            border(&mut model, 1, col, Side::Top);
         }
-        assert!(text_paint(&prepare(&model, 3, 198), TEXT).is_empty());
+        let frame = prepare(&model, first, 198);
+        assert_eq!(text_paint(&frame, TEXT), expected);
+        assert!(!frame.cells.iter().any(|cell| cell.coordinate.col == source));
+        let hidden = if source == 1 { 2 } else { 6 };
+        model.set_columns_hidden(0, hidden, hidden, true).unwrap();
+        assert!(text_paint(&prepare(&model, first, 198), TEXT).is_empty());
     }
 }
 
@@ -290,37 +316,78 @@ fn numbers_logical_errors_wrap_and_other_alignments_stay_clipped() {
 }
 
 #[test]
-fn fills_and_borders_block_but_font_only_styles_do_not() {
-    let mut model = model();
-    model.set_user_input(0, 1, 1, TEXT).unwrap();
-    style(&mut model, 1, 3, "font.b", "true");
-    let frame = prepare(&model, 1, 348);
-    assert!(text_paint(&frame, TEXT)[0].0.right() > rect(&frame, 1, 3).right());
-    style(&mut model, 1, 3, "fill.color", "#ffffff");
-    let frame = prepare(&model, 1, 348);
-    assert_eq!(
-        text_paint(&frame, TEXT)[0].0.right(),
-        rect(&frame, 1, 3).left()
-    );
+fn fills_and_font_only_styles_preserve_spill_and_backgrounds() {
+    for alignment in ["left", "center", "right"] {
+        for color in ["#ffffff", "#00bfff"] {
+            let mut model = model();
+            model.set_user_input(0, 2, 3, TEXT).unwrap();
+            style(&mut model, 2, 3, "alignment.horizontal", alignment);
+            let expected = text_paint(&prepare(&model, 1, 348), TEXT);
+            for col in 1..=6 {
+                style(&mut model, 2, col, "fill.color", color);
+                if col != 3 {
+                    style(&mut model, 2, col, "font.b", "true");
+                }
+            }
+            let frame = prepare(&model, 1, 348);
+            assert_eq!(text_paint(&frame, TEXT), expected, "{alignment}, {color}");
+            for col in 1..=6 {
+                assert!(frame.scene.passes[0].iter().any(|op| matches!(
+                    op, Primitive::RectFill { rect: bounds, color: fill }
+                        if *bounds == rect(&frame, 2, col) && fill.as_ref() == color
+                )));
+            }
+        }
+    }
+}
 
-    let mut border = model.get_cell_style(0, 1, 3).unwrap();
-    border.fill.color = Color::None;
-    border.border.top = Some(BorderItem {
-        style: BorderStyle::Thin,
-        color: Color::Rgb("#123456".into()),
-    });
-    model.set_selected_cell(1, 3).unwrap();
-    model.on_paste_styles(&[vec![border]]).unwrap();
-    let frame = prepare(&model, 1, 348);
-    assert_eq!(
-        text_paint(&frame, TEXT)[0].0.right(),
-        rect(&frame, 1, 3).left()
-    );
-    assert!(
-        frame.scene.passes[3]
-            .iter()
-            .any(|op| matches!(op, Primitive::Line { color, .. } if color.as_ref() == "#123456"))
-    );
+#[test]
+fn source_and_destination_borders_preserve_spill_and_explicit_edges() {
+    for alignment in ["left", "center", "right"] {
+        for col in [2, 3, 4] {
+            for side in [Side::Left, Side::Top, Side::Right, Side::Bottom] {
+                let mut model = model();
+                model.set_user_input(0, 2, 3, TEXT).unwrap();
+                style(&mut model, 2, 3, "alignment.horizontal", alignment);
+                let expected = text_paint(&prepare(&model, 1, 348), TEXT);
+                border(&mut model, 2, col, side);
+                let frame = prepare(&model, 1, 348);
+                assert_eq!(
+                    text_paint(&frame, TEXT),
+                    expected,
+                    "{alignment}, {col}, {side:?}"
+                );
+                assert!(frame.scene.passes[3].iter().any(|op| matches!(
+                    op, Primitive::Line { line, color, .. }
+                        if *line == side.line(rect(&frame, 2, col)) && color.as_ref() == "#123456"
+                )));
+            }
+        }
+    }
+}
+
+#[test]
+fn borders_from_adjacent_rows_preserve_source_and_destination_spill() {
+    for col in [1, 3] {
+        for (row, side) in [(1, Side::Bottom), (3, Side::Top)] {
+            let mut model = model();
+            model.set_user_input(0, 2, 1, TEXT).unwrap();
+            let expected = text_paint(&prepare(&model, 1, 348), TEXT);
+            border(&mut model, row, col, side);
+            // IronCalc resolves the shared edge onto the text row too.
+            let resolved = model
+                .get_extended_cell_style(0, 2, col)
+                .unwrap()
+                .style
+                .border;
+            assert!(if row == 1 {
+                resolved.top.is_some()
+            } else {
+                resolved.bottom.is_some()
+            });
+            assert_eq!(text_paint(&prepare(&model, 1, 348), TEXT), expected);
+        }
+    }
 }
 
 #[test]
