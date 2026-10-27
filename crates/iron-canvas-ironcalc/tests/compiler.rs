@@ -46,6 +46,133 @@ fn external(target: &str) -> ic::Link {
 }
 
 #[test]
+fn viewport_placements_keep_pane_order_and_full_bounds() {
+    let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    workbook.set_rows_height(0, 1, 10, 24.0).unwrap();
+    workbook.set_columns_width(0, 1, 10, 60.0).unwrap();
+    workbook.set_frozen_rows_count(0, 2).unwrap();
+    workbook.set_frozen_columns_count(0, 2).unwrap();
+    workbook.set_rows_hidden(0, 2, 2, true).unwrap();
+    workbook.set_columns_hidden(0, 2, 2, true).unwrap();
+    let viewport = WorksheetViewport {
+        first_cell: CellCoord { row: 5, col: 5 },
+        width: 180,
+        height: 82,
+    };
+    let prepared = WorksheetCompiler::new()
+        .prepare(&workbook, 0, viewport, &Metrics, &CanvasTheme::light())
+        .unwrap();
+
+    // The last row and column cross the viewport edge. Their placements
+    // retain full bounds so callers can position text before clipping.
+    let expected: Vec<_> = [
+        (1, 1, 48, 24),
+        (1, 5, 108, 24),
+        (1, 6, 168, 24),
+        (5, 1, 48, 48),
+        (6, 1, 48, 72),
+        (5, 5, 108, 48),
+        (5, 6, 168, 48),
+        (6, 5, 108, 72),
+        (6, 6, 168, 72),
+    ]
+    .into_iter()
+    .map(|(row, col, x, y)| CellPlacement {
+        coordinate: CellCoord { row, col },
+        bounds: PixelRect {
+            top_left: Point { x, y },
+            width: 60,
+            height: 24,
+        },
+    })
+    .collect();
+    assert_eq!(prepared.cell_count(), expected.len());
+    assert_eq!(prepared.cells().collect::<Vec<_>>(), expected);
+
+    let reused = WorksheetCompiler::new()
+        .prepare_reusing_geometry(
+            &workbook,
+            0,
+            viewport,
+            &Metrics,
+            &CanvasTheme::light(),
+            prepared.geometry.as_ref(),
+        )
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(
+        prepared.geometry.as_ref().unwrap(),
+        reused.geometry.as_ref().unwrap(),
+    ));
+    drop(prepared);
+    assert_eq!(reused.clone().cells().collect::<Vec<_>>(), expected);
+}
+
+#[test]
+fn explicit_placements_keep_input_order_rectangles_and_repeated_coordinates() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    let first = CellPlacement {
+        coordinate: CellCoord { row: 2, col: 1 },
+        bounds: rect(),
+    };
+    let second = CellPlacement {
+        coordinate: CellCoord { row: 1, col: 1 },
+        bounds: rect(),
+    };
+    let third = CellPlacement {
+        bounds: PixelRect {
+            top_left: Point { x: -20, y: 10 },
+            width: 140,
+            height: 40,
+        },
+        ..first
+    };
+    let placements = [first, second, third];
+    let prepared = WorksheetCompiler::new()
+        .prepare_cells(
+            &workbook,
+            0,
+            rect(),
+            placements,
+            &Metrics,
+            &CanvasTheme::light(),
+        )
+        .unwrap();
+    assert!(prepared.geometry.is_none());
+    assert_eq!(prepared.extended_style_reads, 2);
+    assert_eq!(prepared.cell_count(), placements.len());
+    let cloned = prepared.clone();
+    drop(prepared);
+    assert_eq!(cloned.cells().collect::<Vec<_>>(), placements);
+}
+
+#[test]
+fn empty_viewports_and_explicit_input_have_no_placements() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    for (width, height) in [(0, 0), (0, 100), (100, 0), (48, 100), (100, 24)] {
+        let prepared = WorksheetCompiler::new()
+            .prepare(
+                &workbook,
+                0,
+                WorksheetViewport {
+                    first_cell: CellCoord { row: 1, col: 1 },
+                    width,
+                    height,
+                },
+                &Metrics,
+                &CanvasTheme::light(),
+            )
+            .unwrap();
+        assert_eq!(prepared.cell_count(), 0);
+        assert_eq!(prepared.cells().next(), None);
+    }
+    let explicit = WorksheetCompiler::new()
+        .prepare_cells(&workbook, 0, rect(), [], &Metrics, &CanvasTheme::light())
+        .unwrap();
+    assert_eq!(explicit.cell_count(), 0);
+    assert_eq!(explicit.cells().next(), None);
+}
+
+#[test]
 fn compiler_reads_each_distinct_cell_once_without_changing_workbook_or_view() {
     let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
     workbook.set_user_input(0, 1, 1, "42").unwrap();
@@ -65,7 +192,7 @@ fn compiler_reads_each_distinct_cell_once_without_changing_workbook_or_view() {
         )
         .unwrap();
     assert_eq!(prepared.extended_style_reads, 1);
-    assert_eq!(prepared.cells.len(), 2);
+    assert_eq!(prepared.cell_count(), 2);
     assert_eq!(workbook.to_bytes(), before);
     assert!(
         prepared.scene.passes[4]
@@ -197,7 +324,7 @@ fn zero_width_placement_at_max_coordinate_is_ignored_safely() {
         )
         .unwrap();
 
-    assert_eq!(prepared.cells.len(), 1);
+    assert_eq!(prepared.cell_count(), 1);
 }
 
 #[test]

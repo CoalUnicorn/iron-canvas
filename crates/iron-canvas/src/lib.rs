@@ -339,7 +339,7 @@ impl<B: RenderBackend> CanvasSession<B> {
             sequence,
             sheet: request.sheet,
             revision: request.revision,
-            cell_count: worksheet.cells.len(),
+            cell_count: worksheet.cell_count(),
             extended_style_reads: reads,
             content_cached,
             reused_geometry,

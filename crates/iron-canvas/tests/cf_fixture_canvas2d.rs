@@ -1000,7 +1000,7 @@ fn unicode_wrap_and_autofit_match_fresh_after_font_changes() {
             {
                 let font = session.backend().metrics().font_metrics(font_css).unwrap();
                 assert!(font.is_valid());
-                assert!(frame.cells.iter().any(|cell| cell.coordinate.col == 1
+                assert!(frame.cells().any(|cell| cell.coordinate.col == 1
                     && *y - font.ascent >= f64::from(cell.bounds.top()) + 4.0 - 1e-8
                     && *y + font.descent <= f64::from(cell.bounds.bottom()) - 4.0 + 1e-8));
                 count += 1;

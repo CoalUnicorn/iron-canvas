@@ -53,16 +53,68 @@ pub struct FrozenAxes {
     pub cols: i32,
 }
 
+/// Worksheet content and query data from [`WorksheetCompiler`].
+/// Use [`Self::cell_count`] and [`Self::cells`] to inspect placements.
+/// Regular viewports derive placements from [`Self::geometry`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedWorksheet {
     pub scene: GridScene,
-    pub cells: Rc<[CellPlacement]>,
+    // Arbitrary rectangles cannot be recovered from grid axes. Regular
+    // viewports use geometry alone and do not allocate this slice.
+    explicit_cells: Option<Rc<[CellPlacement]>>,
     pub geometry: Option<Rc<GridGeometry>>,
     pub frozen: FrozenAxes,
     pub merges: Rc<[MergedCell]>,
     pub links: Rc<[CellLinkView]>,
     /// Actual calls to `get_extended_cell_style` in this preparation.
     pub extended_style_reads: usize,
+}
+
+impl PreparedWorksheet {
+    /// Return the number of placements, including repeated explicit coordinates.
+    /// Exclude additional cells read for text spill and merge anchors.
+    pub fn cell_count(&self) -> usize {
+        if let Some(cells) = &self.explicit_cells {
+            cells.len()
+        } else {
+            self.geometry
+                .iter()
+                .flat_map(|geometry| &geometry.panes)
+                .map(|pane| pane.rows.len() * pane.columns.len())
+                .sum()
+        }
+    }
+
+    /// Return placements by value without allocating a list.
+    ///
+    /// Regular viewports use pane order, then row order, then column order.
+    /// Bounds include the full cell, even where the pane clips it.
+    /// Explicit placements keep their input order and rectangles.
+    /// Exclude additional cells read for text spill and merge anchors.
+    pub fn cells(&self) -> impl Iterator<Item = CellPlacement> + '_ {
+        let explicit = self
+            .explicit_cells
+            .iter()
+            .flat_map(|cells| cells.iter())
+            .copied();
+        let regular = self
+            .geometry
+            .iter()
+            .filter(|_| self.explicit_cells.is_none())
+            .flat_map(|geometry| &geometry.panes)
+            .flat_map(|pane| {
+                pane.rows.iter().flat_map(move |row| {
+                    pane.columns.iter().map(move |col| CellPlacement {
+                        coordinate: CellCoord {
+                            row: row.index,
+                            col: col.index,
+                        },
+                        bounds: composition::cell_rect(row, col),
+                    })
+                })
+            });
+        explicit.chain(regular)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,7 +234,7 @@ impl WorksheetCompiler {
                 clip,
                 passes: passes.into_iter().map(SceneBuilder::finish).collect(),
             },
-            cells: placements.into(),
+            explicit_cells: Some(placements.into()),
             geometry: None,
             frozen: FrozenAxes::default(),
             merges: Rc::from([]),

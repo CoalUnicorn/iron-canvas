@@ -144,7 +144,6 @@ pub(super) fn prepare(
         })
     });
     passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
-    let mut cells = Vec::with_capacity(cell_count);
     for pane in &geometry.panes {
         for pass in &mut passes {
             pass.push_clip(pane.clip);
@@ -180,7 +179,6 @@ pub(super) fn prepare(
                     spill.clip(cell.coordinate),
                     spill.hides_grid(col.start),
                 )?;
-                cells.push(cell);
             }
             for source in &spill.sources {
                 if pane
@@ -351,7 +349,7 @@ pub(super) fn prepare(
     // Keep query payloads engine-native. All reads stop before staging begins.
     Ok(PreparedWorksheet {
         scene,
-        cells: cells.into(),
+        explicit_cells: None,
         geometry: Some(geometry),
         frozen: FrozenAxes {
             rows: frozen_rows,
@@ -362,7 +360,7 @@ pub(super) fn prepare(
         extended_style_reads: attempt.reads,
     })
 }
-fn cell_rect(row: &AxisCell, col: &AxisCell) -> PixelRect {
+pub(super) fn cell_rect(row: &AxisCell, col: &AxisCell) -> PixelRect {
     PixelRect {
         top_left: Point {
             x: col.start,

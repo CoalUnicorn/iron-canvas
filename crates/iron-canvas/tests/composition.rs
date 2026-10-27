@@ -59,8 +59,7 @@ fn frozen_panes_hidden_axes_headers_and_explicit_sheet_share_hit_geometry() {
     assert!(
         frame
             .worksheet
-            .cells
-            .iter()
+            .cells()
             .all(|p| p.coordinate.row != 2 && p.coordinate.col != 2)
     );
     assert_eq!(
@@ -121,7 +120,8 @@ fn offscreen_merge_anchor_is_read_once_and_link_intents_do_not_write() {
     req.overlays.active_cell = Some(coord(5, 5));
     session.render(&w, &req).unwrap();
     let worksheet = &session.committed_frame().unwrap().worksheet;
-    assert_eq!(worksheet.extended_style_reads, worksheet.cells.len() + 1);
+    assert_eq!(worksheet.extended_style_reads, worksheet.cell_count() + 1);
+    assert!(!worksheet.cells().any(|cell| cell.coordinate == coord(3, 3)));
     let fragments = session.visible_fragments(range(3, 3, 7, 7));
     assert_eq!(fragments.len(), 1);
     let point = fragments[0].rect.center();
@@ -155,7 +155,7 @@ fn merge_crossing_freeze_has_four_fragments_and_one_anchor_read() {
     session.render(&w, &request()).unwrap();
     assert_eq!(session.visible_fragments(range(1, 1, 7, 7)).len(), 4);
     let worksheet = &session.committed_frame().unwrap().worksheet;
-    assert_eq!(worksheet.extended_style_reads, worksheet.cells.len());
+    assert_eq!(worksheet.extended_style_reads, worksheet.cell_count());
     for fragment in session.visible_fragments(range(1, 1, 7, 7)) {
         assert_eq!(
             session
@@ -268,7 +268,7 @@ fn pdf_and_svg_stage_the_identical_prepared_scene_with_overlays() {
     let mut session = CanvasSession::new(SvgSceneBackend::new());
     session.render(&w, &request).unwrap();
     let worksheet = &session.committed_frame().unwrap().worksheet;
-    assert_eq!(worksheet.extended_style_reads, worksheet.cells.len());
+    assert_eq!(worksheet.extended_style_reads, worksheet.cell_count());
     assert!(
         worksheet
             .scene

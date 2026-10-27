@@ -139,7 +139,7 @@ fn cf_fixture_renders_through_svg_backend() {
             &CanvasTheme::light(),
         )
         .unwrap();
-    assert_eq!(prepared.extended_style_reads, prepared.cells.len());
+    assert_eq!(prepared.extended_style_reads, prepared.cell_count());
     assert!(
         prepared.scene.passes[1]
             .iter()

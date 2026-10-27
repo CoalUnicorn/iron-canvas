@@ -112,7 +112,8 @@ fn assert_fresh(session: &CanvasSession<Backend>, model: &UserModel<'_>, request
     let expected = &fresh.committed_frame().unwrap().worksheet;
     assert_eq!(actual.scene, expected.scene);
     assert_eq!(actual.geometry, expected.geometry);
-    assert_eq!(actual.cells, expected.cells);
+    assert_eq!(actual.cell_count(), expected.cell_count());
+    assert!(actual.cells().eq(expected.cells()));
     assert_eq!(
         session.hit_test(iron_canvas_core::Point { x: 100, y: 100 }),
         fresh.hit_test(iron_canvas_core::Point { x: 100, y: 100 })

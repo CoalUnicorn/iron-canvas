@@ -65,8 +65,7 @@ fn autofit_and_compiler_share_measured_baselines_for_all_vertical_alignments() {
             .unwrap();
         let top = f64::from(
             frame
-                .cells
-                .iter()
+                .cells()
                 .find(|cell| cell.coordinate == CellCoord { row: 1, col: 1 })
                 .unwrap()
                 .bounds
@@ -113,8 +112,7 @@ fn check_backend(metrics: &dyn TextMetrics) {
             .prepare(&model, 0, viewport(), metrics, &CanvasTheme::light())
             .unwrap();
         let cell = frame
-            .cells
-            .iter()
+            .cells()
             .find(|cell| cell.coordinate == CellCoord { row: 1, col: 1 })
             .unwrap()
             .bounds;
