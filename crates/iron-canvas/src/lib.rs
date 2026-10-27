@@ -347,6 +347,13 @@ impl<B: RenderBackend> CanvasSession<B> {
         };
         // Publish cache truth only after the backend accepts the whole frame.
         // A failed attempt also keeps the explicit invalidation pending.
+        // Clone only when an enabled shared cache needs another owner.
+        // Move the original into session reuse in every case.
+        if let ContentSource::Cache(cache, key) = source
+            && cache.capacity() > 0
+        {
+            cache.publish(request, key, base.clone());
+        }
         self.committed = Some(Committed {
             frame: PreparedWorksheetFrame {
                 sequence,
@@ -356,14 +363,11 @@ impl<B: RenderBackend> CanvasSession<B> {
             },
             request: request.clone(),
             reuse: Some(Reuse {
-                base: base.clone(),
+                base,
                 fingerprint,
                 metrics_key,
             }),
         });
-        if let ContentSource::Cache(cache, key) = source {
-            cache.publish(request, key, base);
-        }
         self.next_sequence = next_sequence;
         self.invalidated = false;
         Ok(outcome)
