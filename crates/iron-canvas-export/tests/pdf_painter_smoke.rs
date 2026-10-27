@@ -41,7 +41,43 @@ fn snapshot(p: &PdfPainter) -> String {
 }
 
 fn stream_bytes(p: &PdfPainter) -> Vec<u8> {
-    p.stream().borrow().bytes().to_vec()
+    p.stream().bytes().to_vec()
+}
+
+#[test]
+fn finish_preserves_content_dimensions_and_gradient_resources() {
+    let painter = PdfPainter::new(W, H);
+    painter.rect_fill_hgradient(
+        rect(0, 0, 20, 10),
+        PaintColor::Static("#ffffff"),
+        PaintColor::Static("#ff0000"),
+    );
+    {
+        let stream = painter.stream();
+        let shadings = painter.shadings();
+        assert!(!stream.is_empty());
+        assert_eq!(&*shadings, &[("#ffffff".into(), "#ff0000".into())]);
+    }
+    // Inspection releases both borrows before more output is added.
+    painter.rect_fill_hgradient(
+        rect(20, 0, 20, 10),
+        PaintColor::Static("#000000"),
+        PaintColor::Static("#0000ff"),
+    );
+    let content = snapshot(&painter);
+    let bytes = painter.finish();
+    let document = String::from_utf8_lossy(&bytes);
+
+    assert!(document.starts_with("%PDF-"));
+    assert!(document.trim_end().ends_with("%%EOF"));
+    assert!(document.contains("/MediaBox [0 0 100 50]"));
+    assert!(document.contains(&format!("1 0 0 -1 0 50 cm\n{content}")));
+    for index in 0..2 {
+        assert!(content.contains(&format!("/Sh{index} sh")));
+        assert!(document.contains(&format!("/Sh{index} << /ShadingType 2")));
+    }
+    assert!(document.contains("/C0 [1.000 1.000 1.000] /C1 [1.000 0.000 0.000]"));
+    assert!(document.contains("/C0 [0.000 0.000 0.000] /C1 [0.000 0.000 1.000]"));
 }
 
 // ---------------------------------------------------------------------------

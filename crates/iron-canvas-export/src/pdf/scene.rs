@@ -1,6 +1,5 @@
 //! PDF finalization from the same resolved scene used by interactive backends.
 use super::PdfPainter;
-use super::surface::PdfSurface;
 use iron_canvas_core::{
     painter::TextMetrics,
     scene::{GridScene, RenderBackend},
@@ -38,15 +37,7 @@ impl RenderBackend for PdfSceneBackend {
         let height = scene.clip.height.max(0) as u32;
         let painter = PdfPainter::new(width, height);
         scene.paint(&painter);
-        painter.assert_balanced();
-        // Assemble from the painter's own dimensions, so the page size can
-        // never disagree with the coords the ops were emitted at.
-        Ok(PdfSurface::build_document(
-            &painter.stream().borrow(),
-            &painter.shadings().borrow(),
-            painter.width,
-            painter.height,
-        ))
+        Ok(painter.finish())
     }
     fn commit_frame(&mut self, staged: Vec<u8>) -> Result<(), Infallible> {
         self.committed = Some(staged);
