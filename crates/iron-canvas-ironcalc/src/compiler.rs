@@ -70,7 +70,25 @@ pub struct PreparedWorksheet {
     pub extended_style_reads: usize,
 }
 
+/// Borrowed complete link and merge lists from a prepared viewport.
+/// Reuse only for the same workbook, sheet, and content revision.
+/// Keep the source lists unchanged after compilation.
+#[derive(Debug, Clone, Copy)]
+pub struct WorksheetMetadata<'a> {
+    links: &'a Rc<[CellLinkView]>,
+    merges: &'a Rc<[MergedCell]>,
+}
+
 impl PreparedWorksheet {
+    /// Borrow metadata for another viewport at the same content revision.
+    /// Explicit cell preparation has no complete merge list and returns `None`.
+    pub fn metadata(&self) -> Option<WorksheetMetadata<'_>> {
+        self.explicit_cells.is_none().then_some(WorksheetMetadata {
+            links: &self.links,
+            merges: &self.merges,
+        })
+    }
+
     /// Return the number of placements, including repeated explicit coordinates.
     /// Exclude additional cells read for text spill and merge anchors.
     pub fn cell_count(&self) -> usize {
@@ -196,7 +214,29 @@ impl WorksheetCompiler {
         theme: &CanvasTheme,
         geometry: Option<&Rc<GridGeometry>>,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, shaper, theme, geometry)
+        self.prepare_with_shaper_and_metadata(
+            workbook, sheet, viewport, shaper, theme, geometry, None,
+        )
+    }
+
+    /// Prepare with optional complete metadata from a previous viewport.
+    ///
+    /// Supply metadata only for the same workbook, sheet, and content revision.
+    /// Advance the revision after evaluation changes links or after merges change.
+    /// Pass `None` for an independent compilation or when the revision is unknown.
+    /// Geometry reuse remains independent of metadata reuse.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_shaper_and_metadata(
+        &self,
+        workbook: &UserModel<'_>,
+        sheet: u32,
+        viewport: WorksheetViewport,
+        shaper: &mut TextShaper<'_>,
+        theme: &CanvasTheme,
+        geometry: Option<&Rc<GridGeometry>>,
+        metadata: Option<WorksheetMetadata<'_>>,
+    ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+        composition::prepare(workbook, sheet, viewport, shaper, theme, geometry, metadata)
     }
 
     /// Lower positioned cells into five shared paint buffers. Repeated
@@ -214,7 +254,7 @@ impl WorksheetCompiler {
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
         let mut cache = TextLayoutCache::default();
         let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
-        let mut attempt = Attempt::new(workbook, sheet, &mut shaper, theme)?;
+        let mut attempt = Attempt::new(workbook, sheet, &mut shaper, theme, None)?;
         if !valid_rect(clip) {
             return Err(attempt.error(
                 CellCoord { row: 1, col: 1 },
@@ -238,7 +278,7 @@ impl WorksheetCompiler {
             geometry: None,
             frozen: FrozenAxes::default(),
             merges: Rc::from([]),
-            links: attempt.links.into(),
+            links: attempt.links,
             extended_style_reads: attempt.reads,
         })
     }
@@ -268,7 +308,7 @@ struct Attempt<'w, 'm, 's> {
     show_grid: bool,
     cached: HashMap<CellCoord, CellRecord>,
     reads: usize,
-    links: Vec<CellLinkView>,
+    links: Rc<[CellLinkView]>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
     shades: cf::LightShades,
 }
@@ -278,6 +318,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         sheet: u32,
         shaper: &'w mut TextShaper<'s>,
         theme: &'w CanvasTheme,
+        links: Option<&Rc<[CellLinkView]>>,
     ) -> Result<Self, WorksheetCompileError> {
         let err = |operation, message| WorksheetCompileError {
             sheet,
@@ -288,9 +329,13 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         let show_grid = workbook
             .get_show_grid_lines(sheet)
             .map_err(|e| err(CellReadOperation::Sheet, e))?;
-        let links = workbook
-            .get_links_list(sheet)
-            .map_err(|e| err(CellReadOperation::Links, e))?;
+        let links = match links {
+            Some(links) => Rc::clone(links),
+            None => workbook
+                .get_links_list(sheet)
+                .map_err(|e| err(CellReadOperation::Links, e))?
+                .into(),
+        };
         Ok(Self {
             workbook,
             sheet,

@@ -269,6 +269,24 @@ identity and clears old entries.
 content without compilation. Zero style reads alone do not prove a cache hit.
 An empty viewport can also report zero reads.
 
+Metadata means the complete sheet lists of links and merged ranges.
+The session can reuse these lists when it prepares a different viewport.
+Metadata reuse requires the same workbook identity, sheet, and content revision.
+It does not depend on viewport size, theme, or text metrics.
+The previous committed base or a shared cache entry supplies the lists.
+There is no separate metadata cache.
+Capacity zero, `clear`, pending invalidation, and `render_fresh` retain their cache bypass rules.
+The host advances the content revision after evaluation changes links or after merges change.
+Sheet insertion, deletion, and reordering also require a new content revision.
+Complete lists keep offscreen merge anchors and linked text spill available.
+The compiler still validates and scans merges during preparation.
+
+`PreparedWorksheet::metadata()` returns a borrowed `WorksheetMetadata` view.
+Explicit cell preparation returns `None` because it does not collect merges.
+`WorksheetCompiler::prepare_with_shaper_and_metadata` accepts this optional view.
+Direct callers check workbook identity, sheet, and revision before reuse.
+Existing compiler entry points collect fresh lists.
+
 GTK uses one cache with a fixed Pango metric profile. It prints cache hits and
 style reads for each draw. React sizes its cache from visible sheets. Sheet
 selection and scrolling keep the content revision. Sheet insertion advances

@@ -27,8 +27,15 @@ pub(super) fn prepare(
     shaper: &mut TextShaper<'_>,
     theme: &CanvasTheme,
     previous: Option<&Rc<GridGeometry>>,
+    metadata: Option<WorksheetMetadata<'_>>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-    let mut attempt = Attempt::new(workbook, sheet, shaper, theme)?;
+    let mut attempt = Attempt::new(
+        workbook,
+        sheet,
+        shaper,
+        theme,
+        metadata.map(|data| data.links),
+    )?;
     let first = viewport.first_cell;
     if !(1..=LAST_ROW).contains(&first.row)
         || !(1..=LAST_COLUMN).contains(&first.col)
@@ -48,10 +55,14 @@ pub(super) fn prepare(
     let frozen_cols = workbook
         .get_frozen_columns_count(sheet)
         .map_err(|e| err(CellReadOperation::Freeze, e))?;
-    let merges = workbook
-        .get_merged_cells(sheet)
-        .map_err(|e| err(CellReadOperation::Merges, e))?;
-    for merge in &merges {
+    let merges: Rc<[MergedCell]> = match metadata {
+        Some(data) => Rc::clone(data.merges),
+        None => workbook
+            .get_merged_cells(sheet)
+            .map_err(|e| err(CellReadOperation::Merges, e))?
+            .into(),
+    };
+    for merge in merges.iter() {
         if merge.row < 1
             || merge.column < 1
             || merge.width < 1
@@ -204,7 +215,7 @@ pub(super) fn prepare(
     };
     // Merges cover the completed ordinary-cell passes. Each pane uses the
     // same logical merge rectangle, translated by that pane's axis samples.
-    for merge in &merges {
+    for merge in merges.iter() {
         let range = merge_range(*merge);
         for fragment in geometry.fragments(range) {
             let pane = &geometry.panes[fragment.pane];
@@ -355,8 +366,8 @@ pub(super) fn prepare(
             rows: frozen_rows,
             cols: frozen_cols,
         },
-        merges: merges.into(),
-        links: attempt.links.into(),
+        merges,
+        links: attempt.links,
         extended_style_reads: attempt.reads,
     })
 }

@@ -102,6 +102,16 @@ impl WorksheetCache {
         }
     }
 
+    /// Metadata does not depend on viewport, theme, or text measurements.
+    /// Reuse the existing entry without changing its capacity or use order.
+    pub(crate) fn metadata(&self, request: &RenderRequest) -> Option<&PreparedWorksheet> {
+        let key = CacheKey::for_request(request);
+        self.entries
+            .iter()
+            .find(|entry| entry.key == key && entry.revision == request.revision.revision)
+            .map(|entry| &entry.base)
+    }
+
     pub(crate) fn publish(
         &mut self,
         request: &RenderRequest,

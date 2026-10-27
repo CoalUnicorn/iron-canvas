@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::rc::Rc;
 
 use iron_canvas::{
     CanvasSession, OverlayState, RenderBackend, RenderRequest, RenderStrategy, RevisionToken,
@@ -112,12 +113,310 @@ fn assert_fresh(session: &CanvasSession<Backend>, model: &UserModel<'_>, request
     let expected = &fresh.committed_frame().unwrap().worksheet;
     assert_eq!(actual.scene, expected.scene);
     assert_eq!(actual.geometry, expected.geometry);
+    assert_eq!(actual.links, expected.links);
+    assert_eq!(actual.merges, expected.merges);
     assert_eq!(actual.cell_count(), expected.cell_count());
     assert!(actual.cells().eq(expected.cells()));
     assert_eq!(
         session.hit_test(iron_canvas_core::Point { x: 100, y: 100 }),
         fresh.hit_test(iron_canvas_core::Point { x: 100, y: 100 })
     );
+}
+
+fn metadata_fixture() -> (UserModel<'static>, RenderRequest) {
+    let (mut model, request) = fixture();
+    model
+        .set_cell_link(
+            0,
+            100,
+            1,
+            ironcalc_base::types::Link::External {
+                target: "https://offscreen.example".into(),
+                tooltip: None,
+            },
+            None,
+        )
+        .unwrap();
+    model
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 100,
+            column: 3,
+            width: 2,
+            height: 1,
+        })
+        .unwrap();
+    (model, request)
+}
+
+#[test]
+fn metadata_does_not_cross_workbook_sheet_or_bypass_boundaries() {
+    for shared in [false, true] {
+        let (model, mut request) = metadata_fixture();
+        let mut session = CanvasSession::new(Backend::new(6.0));
+        let mut cache = WorksheetCache::new(2);
+        session
+            .render_cached(&mut cache, &model, &request, METRICS)
+            .unwrap();
+        for change in 0..6 {
+            let original = session.committed_frame().unwrap().worksheet.clone();
+            match change {
+                0 => request.revision.workbook_id += 1,
+                1 => request.sheet = 1,
+                2 => session.invalidate(),
+                3 => {} // Fresh below bypasses both cache sources.
+                4 => {
+                    cache.clear();
+                    request.viewport.first_cell.row += 1;
+                    if !shared {
+                        session.invalidate();
+                    }
+                }
+                _ => {
+                    cache.set_capacity(0);
+                    request.viewport.first_cell.row += 1;
+                    if !shared {
+                        session.invalidate();
+                    }
+                }
+            }
+            if change == 3 {
+                session.render_fresh(&model, &request).unwrap();
+            } else if shared {
+                session
+                    .render_cached(&mut cache, &model, &request, METRICS)
+                    .unwrap();
+            } else {
+                session.render(&model, &request).unwrap();
+            }
+            let current = &session.committed_frame().unwrap().worksheet;
+            assert!(!Rc::ptr_eq(&original.links, &current.links));
+            assert!(!Rc::ptr_eq(&original.merges, &current.merges));
+            assert_fresh(&session, &model, &request);
+        }
+    }
+}
+
+#[test]
+fn failed_metadata_candidate_preserves_committed_data_and_shared_entry() {
+    let (mut model, mut request) = metadata_fixture();
+    let mut session = CanvasSession::new(Backend::new(6.0));
+    let mut cache = WorksheetCache::new(1);
+    session
+        .render_cached(&mut cache, &model, &request, METRICS)
+        .unwrap();
+    let original = session.committed_frame().unwrap().clone();
+    let old_request = request.clone();
+    model
+        .set_cell_link(
+            0,
+            100,
+            1,
+            ironcalc_base::types::Link::External {
+                target: "https://changed.example".into(),
+                tooltip: None,
+            },
+            None,
+        )
+        .unwrap();
+    request.revision.revision += 1;
+    session.backend().fail_commit.set(true);
+    assert!(
+        session
+            .render_cached(&mut cache, &model, &request, METRICS)
+            .is_err()
+    );
+    assert_eq!(session.committed_frame(), Some(&original));
+
+    // Read the old entry with a model at its old revision. A failed candidate
+    // cannot replace metadata that another session still uses.
+    let (old_model, _) = metadata_fixture();
+    let mut reader = CanvasSession::new(Backend::new(6.0));
+    let mut scrolled = old_request;
+    scrolled.viewport.first_cell.row += 1;
+    reader
+        .render_cached(&mut cache, &old_model, &scrolled, METRICS)
+        .unwrap();
+    let read = &reader.committed_frame().unwrap().worksheet;
+    assert!(Rc::ptr_eq(&original.worksheet.links, &read.links));
+    assert!(Rc::ptr_eq(&original.worksheet.merges, &read.merges));
+    assert_fresh(&reader, &old_model, &scrolled);
+
+    // Keep invalidation pending through another failure, even when the shared
+    // entry has the requested revision.
+    session.invalidate();
+    assert!(
+        session
+            .render_cached(&mut cache, &old_model, &scrolled, METRICS)
+            .is_err()
+    );
+    session.backend().fail_commit.set(false);
+    session
+        .render_cached(&mut cache, &old_model, &scrolled, METRICS)
+        .unwrap();
+    let retry = &session.committed_frame().unwrap().worksheet;
+    assert!(!Rc::ptr_eq(&original.worksheet.links, &retry.links));
+    assert!(!Rc::ptr_eq(&original.worksheet.merges, &retry.merges));
+    assert_fresh(&session, &old_model, &scrolled);
+}
+
+#[test]
+fn local_metadata_survives_scroll_resize_and_theme_changes() {
+    let (model, mut request) = metadata_fixture();
+    let mut session = CanvasSession::new(Backend::new(6.0));
+    session.render(&model, &request).unwrap();
+    let original = session.committed_frame().unwrap().worksheet.clone();
+    for change in 0..3 {
+        match change {
+            0 => request.viewport.first_cell.row += 1,
+            1 => request.viewport.width += 30,
+            _ => request.theme = CanvasTheme::dark(),
+        }
+        assert!(
+            session
+                .render(&model, &request)
+                .unwrap()
+                .extended_style_reads
+                > 0
+        );
+        let current = &session.committed_frame().unwrap().worksheet;
+        assert!(Rc::ptr_eq(&original.links, &current.links));
+        assert!(Rc::ptr_eq(&original.merges, &current.merges));
+        assert_eq!(current.links.len(), 1);
+        assert_eq!(current.merges.len(), 1);
+        assert_fresh(&session, &model, &request);
+    }
+}
+
+#[test]
+fn shared_metadata_survives_session_viewport_theme_and_metric_changes() {
+    let (model, mut request) = metadata_fixture();
+    let mut cache = WorksheetCache::new(2);
+    let mut first = CanvasSession::new(Backend::new(6.0));
+    first
+        .render_cached(&mut cache, &model, &request, METRICS)
+        .unwrap();
+    let original = first.committed_frame().unwrap().worksheet.clone();
+    let mut second = CanvasSession::new(Backend::new(10.0));
+    request.viewport.first_cell.row += 1;
+    request.theme = CanvasTheme::dark();
+    let result = second
+        .render_cached(&mut cache, &model, &request, TextMetricsKey::new(2, 1))
+        .unwrap();
+    assert!(!result.content_cached);
+    assert!(!result.reused_geometry);
+    let current = &second.committed_frame().unwrap().worksheet;
+    assert!(Rc::ptr_eq(&original.links, &current.links));
+    assert!(Rc::ptr_eq(&original.merges, &current.merges));
+    assert_fresh(&second, &model, &request);
+}
+
+#[test]
+fn reused_metadata_keeps_offscreen_merge_anchors_and_linked_spill_sources() {
+    let (mut model, mut request) = metadata_fixture();
+    model.set_columns_width(0, 1, 20, 50.0).unwrap();
+    model.set_rows_height(0, 1, 20, 24.0).unwrap();
+    model.set_user_input(0, 3, 3, "merged anchor").unwrap();
+    model
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 3,
+            column: 3,
+            width: 5,
+            height: 5,
+        })
+        .unwrap();
+    model
+        .set_user_input(
+            0,
+            5,
+            1,
+            "=HYPERLINK(\"https://spill.example\",\"long linked text outside the viewport\")",
+        )
+        .unwrap();
+    model.evaluate();
+    let mut cache = WorksheetCache::new(1);
+    let mut session = CanvasSession::new(Backend::new(6.0));
+    session
+        .render_cached(&mut cache, &model, &request, METRICS)
+        .unwrap();
+    let previous = session.committed_frame().unwrap().worksheet.clone();
+    request.viewport.first_cell = CellCoord { row: 5, col: 2 };
+    session
+        .render_cached(&mut cache, &model, &request, METRICS)
+        .unwrap();
+    let current = &session.committed_frame().unwrap().worksheet;
+    assert!(Rc::ptr_eq(&previous.links, &current.links));
+    assert!(Rc::ptr_eq(&previous.merges, &current.merges));
+    for coordinate in [CellCoord { row: 3, col: 3 }, CellCoord { row: 5, col: 1 }] {
+        assert!(!current.cells().any(|cell| cell.coordinate == coordinate));
+    }
+    for label in ["merged anchor", "long linked text outside the viewport"] {
+        assert!(current.scene.passes.iter().flat_map(|pass| pass.iter()).any(|primitive| {
+            matches!(primitive, iron_canvas_core::scene::Primitive::Text { text, .. } if text == label)
+        }));
+    }
+    assert_fresh(&session, &model, &request);
+}
+
+#[test]
+fn metadata_revision_tracks_formula_link_targets_presence_and_merges() {
+    for shared in [false, true] {
+        let (mut model, mut request) = metadata_fixture();
+        model
+            .set_user_input(0, 100, 2, "https://first.example")
+            .unwrap();
+        model
+            .set_user_input(0, 3, 1, "=HYPERLINK(B100,\"label\")")
+            .unwrap();
+        model.evaluate();
+        let mut session = CanvasSession::new(Backend::new(6.0));
+        let mut cache = WorksheetCache::new(1);
+        for target in ["https://first.example", "https://second.example", "=1/0"] {
+            let previous = session.committed_frame().cloned();
+            model.set_user_input(0, 100, 2, target).unwrap();
+            model.evaluate();
+            let merge = Area {
+                sheet: 0,
+                row: 100,
+                column: 3,
+                width: 2,
+                height: 1,
+            };
+            if target == "https://second.example" {
+                model.unmerge_cells(&merge).unwrap();
+            }
+            request.revision.revision += 1;
+            if shared {
+                session
+                    .render_cached(&mut cache, &model, &request, METRICS)
+                    .unwrap();
+            } else {
+                session.render(&model, &request).unwrap();
+            }
+            let current = &session.committed_frame().unwrap().worksheet;
+            if let Some(previous) = previous {
+                assert!(!Rc::ptr_eq(&previous.worksheet.links, &current.links));
+                assert!(!Rc::ptr_eq(&previous.worksheet.merges, &current.merges));
+            }
+            let link = current
+                .links
+                .iter()
+                .find(|link| link.row == 3 && link.column == 1);
+            if target == "=1/0" {
+                assert!(link.is_none());
+            } else {
+                assert!(
+                    matches!(&link.unwrap().link, ironcalc_base::types::Link::External { target: actual, .. } if actual == target)
+                );
+            }
+            assert_eq!(
+                current.merges.len(),
+                usize::from(target == "https://first.example")
+            );
+            assert_fresh(&session, &model, &request);
+        }
+    }
 }
 
 #[test]

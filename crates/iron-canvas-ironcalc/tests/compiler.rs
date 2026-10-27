@@ -138,6 +138,7 @@ fn explicit_placements_keep_input_order_rectangles_and_repeated_coordinates() {
         )
         .unwrap();
     assert!(prepared.geometry.is_none());
+    assert!(prepared.metadata().is_none());
     assert_eq!(prepared.extended_style_reads, 2);
     assert_eq!(prepared.cell_count(), placements.len());
     let cloned = prepared.clone();

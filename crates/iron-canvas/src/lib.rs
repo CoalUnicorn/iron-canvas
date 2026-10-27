@@ -31,6 +31,8 @@ use ironcalc_base::UserModel;
 ///
 /// Replacing a workbook requires a new `workbook_id`, even if its revision
 /// starts at zero.
+/// Advance the revision after content or geometry changes, including evaluated
+/// link targets, link presence, merges, and sheet insertion, deletion, or order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RevisionToken {
     pub workbook_id: u64,
@@ -245,19 +247,38 @@ impl<B: RenderBackend> CanvasSession<B> {
             CacheLookup::Content(base) | CacheLookup::Geometry(base) => base.geometry.as_ref(),
             CacheLookup::Miss => None,
         };
+        // A viewport or metric change needs new content but can keep the full
+        // sheet metadata. Use only committed data with an exact revision match.
+        // Fresh, invalidation, and a disabled shared cache retain their bypass.
+        let metadata = if force {
+            None
+        } else {
+            match &source {
+                ContentSource::Previous => cached
+                    .filter(|(committed, _)| {
+                        committed.request.sheet == request.sheet
+                            && committed.request.revision == request.revision
+                    })
+                    .map(|(_, reuse)| &reuse.base),
+                ContentSource::Cache(cache, _) => cache.metadata(request),
+                ContentSource::Fresh => None,
+            }
+        }
+        .and_then(PreparedWorksheet::metadata);
         let content_reused = matches!(lookup, CacheLookup::Content(_));
         let content_cached = content_reused && matches!(source, ContentSource::Cache(_, _));
         let base = match lookup {
             CacheLookup::Content(base) => base.clone(),
             CacheLookup::Geometry(_) | CacheLookup::Miss => self
                 .compiler
-                .prepare_with_shaper(
+                .prepare_with_shaper_and_metadata(
                     workbook,
                     request.sheet,
                     request.viewport,
                     &mut shaper,
                     &request.theme,
                     donor,
+                    metadata,
                 )
                 .map_err(RenderError::Preparation)?,
         };
