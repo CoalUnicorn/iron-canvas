@@ -236,11 +236,9 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         let show_grid = workbook
             .get_show_grid_lines(sheet)
             .map_err(|e| err(CellReadOperation::Sheet, e))?;
-        let mut links = workbook
+        let links = workbook
             .get_links_list(sheet)
             .map_err(|e| err(CellReadOperation::Links, e))?;
-        // Sort once, so the per-cell link lookup can binary search.
-        links.sort_by_key(|link| (link.row, link.column));
         Ok(Self {
             workbook,
             sheet,
