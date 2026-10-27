@@ -300,6 +300,332 @@ fn assert_fresh(
         "retained Canvas2D must match forced Fresh byte for byte"
     );
 }
+
+#[wasm_bindgen_test]
+fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
+    use iron_canvas_core::scene_geometry::GridRange;
+    use ironcalc_base::expressions::types::Area;
+
+    for (dpr, source_width) in [1.0, 1.25, 2.0]
+        .into_iter()
+        .flat_map(|dpr| [1.0, 60.0].map(|width| (dpr, width)))
+    {
+        let mut model = UserModel::new_empty("spill pixels", "en", "UTC", "en").unwrap();
+        model.set_columns_width(0, 1, 12, 60.0).unwrap();
+        model.set_columns_width(0, 1, 1, source_width).unwrap();
+        model.set_rows_height(0, 1, 20, 32.0).unwrap();
+        let left_text = "Offscreen left source extends into empty cells";
+        let right_text = "Offscreen right source extends into empty cells";
+        for row in 2..=8 {
+            let (col, text, alignment) = match row % 3 {
+                0 => (8, right_text, "right"),
+                1 => (4, "Centered text extends on both sides", "center"),
+                _ => (1, left_text, "left"),
+            };
+            model.set_user_input(0, row, col, text).unwrap();
+            model
+                .update_range_style(
+                    &Area {
+                        sheet: 0,
+                        row,
+                        column: col,
+                        width: 1,
+                        height: 1,
+                    },
+                    "alignment.horizontal",
+                    alignment,
+                )
+                .unwrap();
+        }
+        let metrics = CanvasMetrics::new(CanvasSize { w: 348.0, h: 280.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 2 },
+                width: 348,
+                height: 280,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        let before = pixels(session.backend().canvas());
+        for step in 0..10 {
+            match step {
+                0 => model.set_user_input(0, 2, 1, "short").unwrap(),
+                1 => model.set_user_input(0, 2, 1, left_text).unwrap(),
+                2 => model.set_user_input(0, 2, 2, "=\"\"").unwrap(),
+                3 => model
+                    .range_clear_contents(&Area {
+                        sheet: 0,
+                        row: 2,
+                        column: 2,
+                        width: 1,
+                        height: 1,
+                    })
+                    .unwrap(),
+                4 => {
+                    request.overlays.selection = vec![GridRange {
+                        first: CellCoord { row: 2, col: 2 },
+                        last: CellCoord { row: 5, col: 5 },
+                    }];
+                    request.overlays.active_cell = Some(CellCoord { row: 2, col: 2 });
+                }
+                5 => {
+                    request.overlays = Default::default();
+                    request.viewport.first_cell.row = 2;
+                }
+                6 => model.set_columns_hidden(0, 3, 3, true).unwrap(),
+                7 => model.set_columns_hidden(0, 3, 3, false).unwrap(),
+                8 => {
+                    model.set_frozen_columns_count(0, 2).unwrap();
+                    model.set_frozen_rows_count(0, 2).unwrap();
+                    request.viewport.first_cell.col = 4;
+                }
+                _ => model
+                    .merge_cells(&Area {
+                        sheet: 0,
+                        row: 4,
+                        column: 4,
+                        width: 2,
+                        height: 1,
+                    })
+                    .unwrap(),
+            }
+            if step != 4 && step != 5 {
+                request.revision.revision += 1;
+            }
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            if step == 0 {
+                assert_ne!(pixels(session.backend().canvas()), before);
+            }
+            if step == 1 || step == 3 {
+                assert_eq!(pixels(session.backend().canvas()), before);
+            }
+        }
+    }
+}
+
+#[path = "support/text_spill.rs"]
+mod text_spill;
+
+#[wasm_bindgen_test]
+fn spill_paints_over_fills_and_keeps_borders_after_style_changes() {
+    for dpr in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_spill::fixture();
+        let metrics = CanvasMetrics::new(
+            CanvasSize {
+                w: f64::from(request.viewport.width),
+                h: f64::from(request.viewport.height),
+            },
+            dpr,
+        )
+        .unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        session.render(&model, &request).unwrap();
+        for color in ["#ffffff", "#00bfff", "#ffffff"] {
+            text_spill::format(&mut model, color);
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            let before = pixels(session.backend().canvas());
+            let cell = session.cell_rect(2, 2).unwrap();
+            let stride = session.backend().canvas().width() as usize * 4;
+            model.set_user_input(0, 2, 1, "").unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            assert_ne!(
+                text_spill::interior_pixels(&before, stride, cell, dpr),
+                text_spill::interior_pixels(&pixels(session.backend().canvas()), stride, cell, dpr),
+                "text must reach the formatted destination at scale {dpr}"
+            );
+            model.set_user_input(0, 2, 1, text_spill::TEXT).unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+            assert_eq!(pixels(session.backend().canvas()), before);
+        }
+    }
+}
+
+#[wasm_bindgen_test]
+fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
+    use iron_canvas::{TextMetricsKey, WorksheetCache};
+    use ironcalc_base::expressions::types::Area;
+
+    let mut model = UserModel::new_empty("text cache", "en", "UTC", "en").unwrap();
+    let area = Area {
+        sheet: 0,
+        row: 1,
+        column: 1,
+        width: 3,
+        height: 8,
+    };
+    model
+        .update_range_style(&area, "alignment.wrap_text", "true")
+        .unwrap();
+    model.set_columns_width(0, 1, 3, 85.0).unwrap();
+    model.set_rows_height(0, 1, 8, 54.0).unwrap();
+    for row in 1..=8 {
+        for col in 1..=3 {
+            model
+                .set_user_input(0, row, col, "  one  two\nthree ")
+                .unwrap();
+        }
+    }
+    for dpr in [1.0, 1.25, 2.0] {
+        model.set_columns_width(0, 1, 3, 85.0).unwrap();
+        model.update_range_style(&area, "font.b", "false").unwrap();
+        let metrics = CanvasMetrics::new(CanvasSize { w: 400.0, h: 300.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut cache = WorksheetCache::new(1);
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 400,
+                height: 300,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let mut key = TextMetricsKey::new(1, 0);
+        session
+            .render_cached(&mut cache, &model, &request, key)
+            .unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        for step in 0..6 {
+            match step {
+                0 => {} // Equal text with a new revision exercises warm layout.
+                1 => request.viewport.first_cell.row = 2,
+                2 => model.set_columns_width(0, 1, 3, 65.0).unwrap(),
+                3 => model.update_range_style(&area, "font.b", "true").unwrap(),
+                4 => key = TextMetricsKey::new(1, 1),
+                _ => session.invalidate(),
+            }
+            request.revision.revision += 1;
+            let outcome = session
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap();
+            assert!(!outcome.content_cached);
+            assert!(outcome.extended_style_reads > 0);
+            assert_fresh(&session, &model, &request, dpr);
+        }
+    }
+}
+
+#[wasm_bindgen_test]
+fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
+    use iron_canvas::{OverlayState, RenderStrategy, TextMetricsKey, WorksheetCache};
+    use iron_canvas_core::scene_geometry::GridRange;
+
+    let mut model = UserModel::new_empty("cached panes", "en", "UTC", "en").unwrap();
+    model.new_sheet().unwrap();
+    for sheet in 0..2 {
+        for row in 1..20 {
+            model
+                .set_user_input(sheet, row, 1, &format!("sheet {sheet} row {row}"))
+                .unwrap();
+        }
+    }
+    for dpr in [1.0, 1.25, 2.0] {
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut first =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut second =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        let mut cache = WorksheetCache::new(2);
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 640,
+                height: 400,
+            },
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let key = TextMetricsKey::new(1, 0);
+        for sheet in [0, 1, 0] {
+            request.sheet = sheet;
+            let outcome = first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap();
+            assert_eq!(outcome.strategy, RenderStrategy::Fresh);
+            if outcome.sequence == 3 {
+                assert!(outcome.content_cached);
+                assert_eq!(outcome.extended_style_reads, 0);
+            }
+            assert_fresh(&first, &model, &request, dpr);
+        }
+        request.overlays.selection = vec![GridRange {
+            first: CellCoord { row: 2, col: 1 },
+            last: CellCoord { row: 3, col: 2 },
+        }];
+        request.overlays.active_cell = Some(CellCoord { row: 2, col: 1 });
+        assert!(
+            second
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&second, &model, &request, dpr);
+        assert!(
+            first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&first, &model, &request, dpr);
+        request.overlays = OverlayState::default();
+        first
+            .render_cached(&mut cache, &model, &request, key)
+            .unwrap();
+        assert_fresh(&first, &model, &request, dpr);
+        request.viewport.first_cell.row = 2;
+        assert!(
+            !first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&first, &model, &request, dpr);
+        first.invalidate();
+        assert!(
+            !first
+                .render_cached(&mut cache, &model, &request, key)
+                .unwrap()
+                .content_cached
+        );
+        assert_fresh(&first, &model, &request, dpr);
+        let next = TextMetricsKey::new(1, 1);
+        let outcome = first
+            .render_cached(&mut cache, &model, &request, next)
+            .unwrap();
+        assert!(!outcome.content_cached);
+        assert_eq!(outcome.strategy, RenderStrategy::Fresh);
+        assert_fresh(&first, &model, &request, dpr);
+    }
+}
 #[wasm_bindgen_test]
 fn retained_damage_scroll_overlay_and_revert_match_fresh() {
     use iron_canvas::RenderStrategy;
@@ -629,5 +955,75 @@ fn fixture_cf_edits_match_fresh_with_translucent_background() {
             session.render(&model, &request).unwrap();
             assert_fresh(&session, &model, &request, 1.25);
         }
+    }
+}
+
+#[path = "support/text_wrap.rs"]
+mod text_wrap;
+
+#[wasm_bindgen_test]
+fn unicode_wrap_and_autofit_match_fresh_after_font_changes() {
+    use iron_canvas_core::{
+        painter::TextBaseline,
+        scene::{Primitive, RenderBackend},
+    };
+    for dpr in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_wrap::fixture();
+        let mut session = CanvasSession::new(
+            Canvas2dSceneBackend::new(
+                make_canvas(),
+                CanvasMetrics::new(CanvasSize { w: 500.0, h: 600.0 }, dpr).unwrap(),
+            )
+            .unwrap(),
+        );
+        text_wrap::fit(&mut model, session.backend().metrics());
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        // Check actual Canvas font extents, not only equality of two render paths.
+        let frame = iron_canvas_ironcalc::WorksheetCompiler::new()
+            .prepare(
+                &model,
+                0,
+                request.viewport,
+                session.backend().metrics(),
+                &request.theme,
+            )
+            .unwrap();
+        let mut count = 0;
+        let mut last_baseline = None;
+        let mut underlines = 0;
+        for op in frame.scene.passes.iter().flat_map(|pass| pass.iter()) {
+            if let Primitive::Text {
+                y,
+                font_css,
+                baseline: TextBaseline::Alphabetic,
+                ..
+            } = op
+            {
+                let font = session.backend().metrics().font_metrics(font_css).unwrap();
+                assert!(font.is_valid());
+                assert!(frame.cells.iter().any(|cell| cell.coordinate.col == 1
+                    && *y - font.ascent >= f64::from(cell.bounds.top()) + 4.0 - 1e-8
+                    && *y + font.descent <= f64::from(cell.bounds.bottom()) - 4.0 + 1e-8));
+                count += 1;
+                last_baseline = Some(*y);
+            } else if let Primitive::TextLine { y, .. } = op {
+                // This fixture has underlined cells and links, but no strike.
+                assert!(*y > last_baseline.unwrap());
+                underlines += 1;
+            }
+        }
+        assert!(count > 4);
+        assert!(underlines > 0);
+        for step in 0..6 {
+            text_wrap::update(&mut model, step);
+            text_wrap::fit(&mut model, session.backend().metrics());
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            assert_fresh(&session, &model, &request, dpr);
+        }
+        session.invalidate();
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
     }
 }

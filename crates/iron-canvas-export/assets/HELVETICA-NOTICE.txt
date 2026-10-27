@@ -5,7 +5,10 @@ The WinAnsi advance tables in src/common/helvetica.rs are derived data.
 The conversion selects AFM glyph names through the Adobe Glyph List and
 indexes their WX values by WinAnsi byte. NBSP uses space, soft hyphen uses
 hyphen, and 0x7f uses bullet. Unassigned and control bytes have zero width.
-No font program is embedded. Kerning pairs and glyph bounds are not copied.
+No font program is embedded. Kerning pairs and per-glyph bounds are not copied.
+Stage 2 also copies the vertical FontBBox limits for line metrics.
+Regular/Oblique use -225..931. Bold/BoldOblique use -228..962.
+These bounds include accents and descenders outside Ascender/Descender.
 All 256 advances were compared across the source faces: Helvetica-Oblique
 matches Helvetica, and Helvetica-BoldOblique matches Helvetica-Bold.
 

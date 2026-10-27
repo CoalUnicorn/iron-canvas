@@ -34,6 +34,7 @@ function App() {
     let cancelled = false;
     let observer: ResizeObserver | undefined;
     let onWindowResize: (() => void) | undefined;
+    let onFontsLoaded: (() => void) | undefined;
 
     const start = async () => {
       try {
@@ -60,6 +61,15 @@ function App() {
         observer.observe(canvas);
         onWindowResize = resizeCanvas;
         window.addEventListener("resize", resizeCanvas);
+        onFontsLoaded = () => {
+          try {
+            workbook.invalidateFonts();
+          } catch (fontError) {
+            setError(messageFromError(fontError));
+          }
+        };
+        document.fonts.addEventListener("loadingdone", onFontsLoaded);
+        document.fonts.addEventListener("loadingerror", onFontsLoaded);
         resizeCanvas();
         setReady(true);
       } catch (initializationError) {
@@ -72,6 +82,10 @@ function App() {
       cancelled = true;
       observer?.disconnect();
       if (onWindowResize) window.removeEventListener("resize", onWindowResize);
+      if (onFontsLoaded) {
+        document.fonts.removeEventListener("loadingdone", onFontsLoaded);
+        document.fonts.removeEventListener("loadingerror", onFontsLoaded);
+      }
       workbookRef.current = null;
     };
   }, []);

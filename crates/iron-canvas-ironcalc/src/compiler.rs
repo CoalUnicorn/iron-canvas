@@ -3,7 +3,9 @@ mod borders;
 mod cf;
 mod composition;
 mod glyphs;
+mod spill;
 mod text;
+pub(crate) use text::font_css;
 
 pub use cf::{CfDataBarPaint, CfDecorationPaint, CfIconPaint, CfRatingPaint};
 
@@ -12,6 +14,7 @@ use iron_canvas_core::{
     painter::{PaintColor, TextMetrics},
     scene::{GridScene, SceneBuilder},
     scene_geometry::GridGeometry,
+    text_shaper::{TextLayoutCache, TextMetricsKey, TextShaper},
 };
 use ironcalc_base::{
     UserModel,
@@ -110,7 +113,7 @@ impl WorksheetCompiler {
         metrics: &dyn TextMetrics,
         theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, metrics, theme, None)
+        self.prepare_reusing_geometry(workbook, sheet, viewport, metrics, theme, None)
     }
 
     /// Resample dimensions after a revision, but retain equal slot buffers.
@@ -124,11 +127,29 @@ impl WorksheetCompiler {
         theme: &CanvasTheme,
         geometry: Option<&Rc<GridGeometry>>,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, metrics, theme, geometry)
+        let mut cache = TextLayoutCache::default();
+        let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
+        self.prepare_with_shaper(workbook, sheet, viewport, &mut shaper, theme, geometry)
+    }
+
+    /// Prepare with caller-owned text storage and optional geometry reuse.
+    /// Bind the shaper to the same metrics that the backend uses to paint.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_shaper(
+        &self,
+        workbook: &UserModel<'_>,
+        sheet: u32,
+        viewport: WorksheetViewport,
+        shaper: &mut TextShaper<'_>,
+        theme: &CanvasTheme,
+        geometry: Option<&Rc<GridGeometry>>,
+    ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+        composition::prepare(workbook, sheet, viewport, shaper, theme, geometry)
     }
 
     /// Lower positioned cells into five shared paint buffers. Repeated
-    /// coordinates reuse one preparation-local engine record.
+    /// coordinates reuse one preparation-local engine record. Text stays
+    /// clipped because arbitrary placements do not establish adjacent geometry.
     #[allow(clippy::too_many_arguments)]
     pub fn prepare_cells(
         &self,
@@ -139,7 +160,9 @@ impl WorksheetCompiler {
         metrics: &dyn TextMetrics,
         theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        let mut attempt = Attempt::new(workbook, sheet, metrics, theme)?;
+        let mut cache = TextLayoutCache::default();
+        let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
+        let mut attempt = Attempt::new(workbook, sheet, &mut shaper, theme)?;
         if !valid_rect(clip) {
             return Err(attempt.error(
                 CellCoord { row: 1, col: 1 },
@@ -151,7 +174,7 @@ impl WorksheetCompiler {
         passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
         let mut placements = Vec::new();
         for placement in cells {
-            attempt.paint(placement, &mut passes, false)?;
+            attempt.paint(placement, &mut passes, false, None, false)?;
             placements.push(placement);
         }
         Ok(PreparedWorksheet {
@@ -183,25 +206,25 @@ struct CellRecord {
     extended: ExtendedStyle,
     kind: CellType,
     value: String,
+    occupied: bool,
 }
-struct Attempt<'w, 'm> {
+struct Attempt<'w, 'm, 's> {
     workbook: &'w UserModel<'m>,
     sheet: u32,
-    metrics: &'w dyn TextMetrics,
+    shaper: &'w mut TextShaper<'s>,
     theme: &'w CanvasTheme,
     show_grid: bool,
     cached: HashMap<CellCoord, CellRecord>,
     reads: usize,
     links: Vec<CellLinkView>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
-    scratch: String,
     shades: cf::LightShades,
 }
-impl<'w, 'm> Attempt<'w, 'm> {
+impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
     fn new(
         workbook: &'w UserModel<'m>,
         sheet: u32,
-        metrics: &'w dyn TextMetrics,
+        shaper: &'w mut TextShaper<'s>,
         theme: &'w CanvasTheme,
     ) -> Result<Self, WorksheetCompileError> {
         let err = |operation, message| WorksheetCompileError {
@@ -221,14 +244,13 @@ impl<'w, 'm> Attempt<'w, 'm> {
         Ok(Self {
             workbook,
             sheet,
-            metrics,
+            shaper,
             theme,
             show_grid,
             cached: HashMap::new(),
             reads: 0,
             links,
             lines: Vec::new(),
-            scratch: String::new(),
             shades: cf::LightShades::default(),
         })
     }
@@ -269,12 +291,16 @@ impl<'w, 'm> Attempt<'w, 'm> {
             .workbook
             .get_formatted_cell_value(self.sheet, cell.row, cell.col)
             .map_err(|e| self.error(cell, CellReadOperation::FormattedValue, e))?;
+        // Display text cannot identify empty cells: formulas and number formats
+        // can hide occupied values. Inspect the stored cell without changing it.
+        let occupied = self.occupied(cell)?;
         self.cached.insert(
             cell,
             CellRecord {
                 extended: style,
                 kind,
                 value: text,
+                occupied,
             },
         );
         Ok(())
@@ -284,6 +310,8 @@ impl<'w, 'm> Attempt<'w, 'm> {
         placement: CellPlacement,
         passes: &mut [SceneBuilder; 5],
         merged: bool,
+        spill_clip: Option<PixelRect>,
+        hide_left_grid: bool,
     ) -> Result<(), WorksheetCompileError> {
         if !valid_rect(placement.bounds) {
             return Err(self.error(
@@ -323,9 +351,25 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 &style.border,
                 rect,
                 self.show_grid && fill.is_empty(),
+                hide_left_grid,
                 self.theme,
             );
         }
+        self.paint_text(placement, &mut passes[4], spill_clip, &cf);
+        Ok(())
+    }
+
+    /// Emit text without cell backgrounds. Offscreen sources use this path
+    /// because their backgrounds and query rectangles are outside the pane.
+    fn paint_text(
+        &mut self,
+        placement: CellPlacement,
+        out: &mut SceneBuilder,
+        spill_clip: Option<PixelRect>,
+        cf: &cf::CfDecorationPaint,
+    ) {
+        let record = &self.cached[&placement.coordinate];
+        let rect = placement.bounds;
         if !cf.hides_value() {
             let link = self
                 .links
@@ -335,20 +379,19 @@ impl<'w, 'm> Attempt<'w, 'm> {
                 .ok()
                 .map(|index| &self.links[index]);
             text::compile_text(
-                &mut passes[4],
+                out,
                 self.workbook,
-                style,
+                &record.extended.style,
                 &record.kind,
                 &record.value,
                 rect,
                 cf.reserved_left(rect),
-                self.metrics,
+                spill_clip,
+                self.shaper,
                 self.theme,
                 link,
                 &mut self.lines,
-                &mut self.scratch,
             );
         }
-        Ok(())
     }
 }

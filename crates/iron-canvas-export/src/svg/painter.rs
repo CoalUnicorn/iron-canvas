@@ -15,8 +15,8 @@ use iron_canvas_core::geometry::path::{Path, PathCmd, arc_segments};
 use iron_canvas_core::geometry::pixel_rect::PixelRect;
 use iron_canvas_core::geometry::prim::{Line, Span};
 use iron_canvas_core::painter::{
-    BlitPainter, GroupClass, LineCap, LineJoin, PaintColor, Painter, StrokeStyle, TextAlign,
-    TextBaseline, TextMetrics, parse_font_size_px,
+    BlitPainter, FontMetrics, GroupClass, LineCap, LineJoin, PaintColor, Painter, StrokeStyle,
+    TextAlign, TextBaseline, TextMetrics, parse_font_size_px,
 };
 
 use crate::common::escape::xml_escape;
@@ -112,6 +112,10 @@ impl SvgPainter {
 }
 
 impl TextMetrics for SvgPainter {
+    fn font_metrics(&self, font_css: &str) -> Option<FontMetrics> {
+        Some(metrics::inter_font_metrics(parse_font_size_px(font_css)))
+    }
+
     // Export always renders (and now always emits) the bundled Inter font —
     // see `fill_text` — so wrap math must measure that same font, not the
     // cell's declared family. `metrics::inter_advance_width` is the real

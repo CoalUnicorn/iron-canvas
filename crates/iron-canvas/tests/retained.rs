@@ -51,6 +51,88 @@ fn compare(
     let differences = a.iter().zip(&b).filter(|(a, b)| a != b).count();
     assert_eq!(differences, 0, "retained pixels must match Fresh");
 }
+
+#[test]
+fn native_spill_matches_fresh_after_offscreen_source_and_blocker_edits() {
+    for (scale, source_width) in [1.0, 1.25, 2.0]
+        .into_iter()
+        .flat_map(|scale| [1.0, 60.0].map(|width| (scale, width)))
+    {
+        let (mut model, mut request) = fixture();
+        model
+            .range_clear_all(&Area {
+                sheet: 0,
+                row: 1,
+                column: 1,
+                width: 20,
+                height: 100,
+            })
+            .unwrap();
+        model.set_columns_width(0, 1, 20, 60.0).unwrap();
+        model.set_columns_width(0, 1, 1, source_width).unwrap();
+        request.viewport.first_cell.col = 2;
+        model
+            .set_user_input(0, 4, 1, "Offscreen text extends across empty cells")
+            .unwrap();
+        let mut session = CanvasSession::new(NativeSceneBackend::new(scale).unwrap());
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        let before = pixels(&session);
+        model.set_user_input(0, 4, 2, "=\"\"").unwrap();
+        request.revision.revision += 1;
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        assert_ne!(pixels(&session), before);
+        model
+            .range_clear_contents(&Area {
+                sheet: 0,
+                row: 4,
+                column: 2,
+                width: 1,
+                height: 1,
+            })
+            .unwrap();
+        request.revision.revision += 1;
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        assert_eq!(pixels(&session), before);
+    }
+}
+
+#[path = "support/text_spill.rs"]
+mod text_spill;
+
+#[test]
+fn native_spill_paints_over_fills_and_keeps_borders_after_style_changes() {
+    for scale in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_spill::fixture();
+        let mut session = CanvasSession::new(NativeSceneBackend::new(scale).unwrap());
+        session.render(&model, &request).unwrap();
+        for color in ["#ffffff", "#00bfff", "#ffffff"] {
+            text_spill::format(&mut model, color);
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+            let before = pixels(&session);
+            let cell = session.cell_rect(2, 2).unwrap();
+            let stride = session.backend().surface().unwrap().stride() as usize;
+            model.set_user_input(0, 2, 1, "").unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+            assert_ne!(
+                text_spill::interior_pixels(&before, stride, cell, scale),
+                text_spill::interior_pixels(&pixels(&session), stride, cell, scale),
+                "text must reach the formatted destination at scale {scale}"
+            );
+            model.set_user_input(0, 2, 1, text_spill::TEXT).unwrap();
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+            assert_eq!(pixels(&session), before);
+        }
+    }
+}
 #[test]
 fn native_reuses_stable_frames_and_falls_back_for_partial_work() {
     for scale in [1.0, 1.25, 1.5] {
@@ -121,4 +203,29 @@ fn overlays_metrics_and_merges_keep_cache_boundaries() {
         RenderStrategy::Fresh
     );
     compare(&s, &model, &request, 1.25);
+}
+
+#[path = "support/text_wrap.rs"]
+mod text_wrap;
+
+#[test]
+fn native_unicode_wrap_and_autofit_match_fresh_after_font_changes() {
+    use iron_canvas_core::scene::RenderBackend;
+    for scale in [1.0, 1.25, 2.0] {
+        let (mut model, mut request) = text_wrap::fixture();
+        let mut session = CanvasSession::new(NativeSceneBackend::new(scale).unwrap());
+        text_wrap::fit(&mut model, session.backend().metrics());
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+        for step in 0..6 {
+            text_wrap::update(&mut model, step);
+            text_wrap::fit(&mut model, session.backend().metrics());
+            request.revision.revision += 1;
+            session.render(&model, &request).unwrap();
+            compare(&session, &model, &request, scale);
+        }
+        session.invalidate();
+        session.render(&model, &request).unwrap();
+        compare(&session, &model, &request, scale);
+    }
 }

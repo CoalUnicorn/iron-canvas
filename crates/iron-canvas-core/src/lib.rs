@@ -10,6 +10,7 @@ pub mod scene;
 pub mod scene_geometry;
 pub mod shape;
 pub mod text_layout;
+pub mod text_shaper;
 pub mod theme;
 
 pub use geometry::{
@@ -18,7 +19,8 @@ pub use geometry::{
     prim::{Axis, Line, Point, Side, Span},
 };
 pub use text_layout::{
-    TextLayoutOptions, TextLine, TextVerticalAlign, layout_text_into, layout_text_lines_into,
+    TextLayoutOptions, TextLine, TextLineMetrics, TextVerticalAlign, layout_text_into,
+    layout_text_lines_into,
 };
 pub use theme::{CanvasTheme, ThemeVariables};
 

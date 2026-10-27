@@ -24,11 +24,11 @@ pub(super) fn prepare(
     workbook: &UserModel<'_>,
     sheet: u32,
     viewport: WorksheetViewport,
-    metrics: &dyn TextMetrics,
+    shaper: &mut TextShaper<'_>,
     theme: &CanvasTheme,
     previous: Option<&Rc<GridGeometry>>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-    let mut attempt = Attempt::new(workbook, sheet, metrics, theme)?;
+    let mut attempt = Attempt::new(workbook, sheet, shaper, theme)?;
     let first = viewport.first_cell;
     if !(1..=LAST_ROW).contains(&first.row)
         || !(1..=LAST_COLUMN).contains(&first.col)
@@ -94,7 +94,11 @@ pub(super) fn prepare(
         .max()
         .unwrap_or(first.row)
         .to_string();
-    let header_width = (metrics.measure_text_width(&label, HEADER_FONT_CSS).ceil() as i32)
+    let header_width = (attempt
+        .shaper
+        .metrics()
+        .measure_text_width(&label, HEADER_FONT_CSS)
+        .ceil() as i32)
         .saturating_add(HEADER_LABEL_PADDING)
         .max(MIN_HEADER_WIDTH)
         .min(viewport.width);
@@ -146,6 +150,21 @@ pub(super) fn prepare(
             pass.push_clip(pane.clip);
         }
         for row in pane.rows.iter() {
+            let limits = if pane
+                .columns
+                .first()
+                .is_some_and(|column| column.index <= frozen_cols)
+            {
+                (1, frozen_cols)
+            } else {
+                (frozen_cols + 1, LAST_COLUMN)
+            };
+            let spill =
+                attempt.plan_spill(row, &pane.columns, pane.clip, limits, &merges, |index| {
+                    dimensions
+                        .extent(Axis::Column, index)
+                        .map(|value| value as i32)
+                })?;
             for col in pane.columns.iter() {
                 let cell = CellPlacement {
                     coordinate: CellCoord {
@@ -154,8 +173,27 @@ pub(super) fn prepare(
                     },
                     bounds: cell_rect(row, col),
                 };
-                attempt.paint(cell, &mut passes, false)?;
+                attempt.paint(
+                    cell,
+                    &mut passes,
+                    false,
+                    spill.clip(cell.coordinate),
+                    spill.hides_grid(col.start),
+                )?;
                 cells.push(cell);
+            }
+            for source in &spill.sources {
+                if pane
+                    .columns
+                    .binary_search_by_key(&source.placement.coordinate.col, |column| column.index)
+                    .is_err()
+                {
+                    let cf = cf::CfDecorationPaint::resolve(
+                        &attempt.cached[&source.placement.coordinate].extended,
+                        workbook,
+                    );
+                    attempt.paint_text(source.placement, &mut passes[4], Some(source.clip), &cf);
+                }
             }
         }
         for pass in &mut passes {
@@ -196,6 +234,8 @@ pub(super) fn prepare(
                 },
                 &mut merged_passes,
                 true,
+                None,
+                false,
             )?;
             let show_merge_grid = attempt.show_grid
                 && workbook
@@ -240,6 +280,7 @@ pub(super) fn prepare(
                         workbook,
                         &border,
                         rect,
+                        false,
                         false,
                         theme,
                     );

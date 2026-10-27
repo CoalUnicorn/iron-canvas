@@ -8,7 +8,7 @@ use gtk4::{
 };
 
 #[cfg(target_os = "linux")]
-use iron_canvas::{CanvasSession, RenderRequest, RevisionToken};
+use iron_canvas::{CanvasSession, RenderRequest, RevisionToken, TextMetricsKey, WorksheetCache};
 
 #[cfg(target_os = "linux")]
 use iron_canvas_core::{CanvasTheme, CellCoord};
@@ -31,6 +31,7 @@ struct ViewerState {
     sheets: Vec<(u32, String)>,
     session: CanvasSession<NativeSceneBackend>,
     request: RenderRequest,
+    cache: WorksheetCache,
     /// Scroll position per sheet, so each tab keeps its own top-left cell.
     viewports: Vec<CellCoord>,
 }
@@ -38,19 +39,18 @@ struct ViewerState {
 #[cfg(target_os = "linux")]
 impl ViewerState {
     fn new(workbook: UserModel<'static>) -> Result<Self, gtk4::cairo::Error> {
-        let sheets = workbook
-            .get_worksheets_properties()
+        let properties = workbook.get_worksheets_properties();
+        let viewports = vec![CellCoord { row: 1, col: 1 }; properties.len()];
+        let sheets = properties
             .into_iter()
             .enumerate()
+            .filter(|(_, sheet)| sheet.state == "visible")
             .map(|(index, sheet)| (index as u32, sheet.name))
             .collect::<Vec<_>>();
         let first_sheet = sheets.first().map_or(0, |(index, _)| *index);
-        let viewports = sheets
-            .iter()
-            .map(|_| CellCoord { row: 1, col: 1 })
-            .collect::<Vec<_>>();
         Ok(Self {
             workbook,
+            cache: WorksheetCache::new(sheets.len()),
             sheets,
             session: CanvasSession::new(NativeSceneBackend::new(1.0)?),
             request: RenderRequest {
@@ -175,7 +175,12 @@ fn build_window(application: &Application, state: Rc<RefCell<ViewerState>>, work
     }
 
     let active = state.borrow().request.sheet;
-    notebook.set_current_page(Some(active));
+    notebook.set_current_page(
+        sheets
+            .iter()
+            .position(|(sheet, _)| *sheet == active)
+            .map(|page| page as u32),
+    );
 
     window.set_child(Some(&notebook));
     window.present();
@@ -209,11 +214,19 @@ fn draw_frame(
         workbook,
         session,
         request,
+        cache,
         ..
     } = state;
-    if let Err(error) = session.render(workbook, request) {
-        draw_message(context, &format!("Could not render worksheet: {error}"));
-        return;
+    // This cache serves one fixed Pango metric environment.
+    match session.render_cached(cache, workbook, request, TextMetricsKey::new(1, 0)) {
+        Ok(outcome) => eprintln!(
+            "sheet={} content_cached={} extended_style_reads={}",
+            outcome.sheet, outcome.content_cached, outcome.extended_style_reads,
+        ),
+        Err(error) => {
+            draw_message(context, &format!("Could not render worksheet: {error}"));
+            return;
+        }
     }
 
     if let Some(surface) = session.backend().surface() {
@@ -232,6 +245,48 @@ fn draw_message(context: &gtk4::cairo::Context, message: &str) {
     context.set_source_rgb(0.75, 0.0, 0.0);
     context.move_to(12.0, 24.0);
     let _ = context.show_text(message);
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tab_return_draws_cached_content_without_style_reads() {
+        let mut workbook = UserModel::new_empty("tabs", "en", "UTC", "en").unwrap();
+        workbook.new_sheet().unwrap();
+        workbook.new_sheet().unwrap();
+        workbook.hide_sheet(1).unwrap();
+        for sheet in [0, 2] {
+            workbook
+                .set_user_input(sheet, 1, 1, &format!("sheet {sheet}"))
+                .unwrap();
+        }
+        let mut state = ViewerState::new(workbook).unwrap();
+        assert_eq!(
+            state
+                .sheets
+                .iter()
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>(),
+            vec![0, 2]
+        );
+        assert_eq!(state.viewports.len(), 3);
+        let surface =
+            gtk4::cairo::ImageSurface::create(gtk4::cairo::Format::ARgb32, 900, 620).unwrap();
+        let context = gtk4::cairo::Context::new(&surface).unwrap();
+        for sheet in [0, 2, 0] {
+            draw_frame(&mut state, sheet, &context, 900, 620);
+            let frame = state.session.committed_frame().unwrap();
+            assert_eq!(frame.sheet, sheet);
+            if frame.sequence == 3 {
+                assert_eq!(frame.worksheet.extended_style_reads, 0);
+            } else {
+                assert!(frame.worksheet.extended_style_reads > 0);
+            }
+        }
+        assert_eq!(state.cache.len(), 2);
+    }
 }
 
 #[cfg(not(target_os = "linux"))]
