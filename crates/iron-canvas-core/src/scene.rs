@@ -1,7 +1,7 @@
 //! Owned, resolved drawing input. This module has no worksheet model or policy.
 //!
-//! Commands share one buffer per paint pass, rather than one allocation per
-//! cell. Paths and colors remain shared when a prepared scene is cloned.
+//! Each paint pass shares its command buffer. Each command owns its path and
+//! dash buffers. A scene clone shares complete passes and their contents.
 pub mod retained;
 
 use crate::geometry::path::{Path, PathCmd};
@@ -17,9 +17,12 @@ pub struct SceneStroke {
     pub cap: LineCap,
     pub join: LineJoin,
     pub miter_limit: f64,
-    pub dash: Rc<[f64]>,
+    /// Owned dash lengths. Cloning this style copies the slice.
+    pub dash: Box<[f64]>,
 }
 
+/// One drawing command. A clone copies path and dash buffers.
+/// Clone a complete scene to share its passes without these copies.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Primitive {
     RectFill {
@@ -32,11 +35,11 @@ pub enum Primitive {
         to: Rc<str>,
     },
     FillPath {
-        path: Rc<[PathCmd]>,
+        path: Box<[PathCmd]>,
         color: Rc<str>,
     },
     StrokePath {
-        path: Rc<[PathCmd]>,
+        path: Box<[PathCmd]>,
         color: Rc<str>,
         style: SceneStroke,
     },
@@ -231,21 +234,21 @@ impl SceneBuilder {
     pub fn fill_path(&mut self, path: &Path<'_>, color: PaintColor) {
         let color = self.intern(color.as_str());
         self.ops.push(Primitive::FillPath {
-            path: Rc::from(path.cmds()),
+            path: Box::from(path.cmds()),
             color,
         });
     }
     pub fn stroke_path(&mut self, path: &Path<'_>, color: PaintColor, style: &StrokeStyle<'_>) {
         let color = self.intern(color.as_str());
         self.ops.push(Primitive::StrokePath {
-            path: Rc::from(path.cmds()),
+            path: Box::from(path.cmds()),
             color,
             style: SceneStroke {
                 width: style.width,
                 cap: style.cap,
                 join: style.join,
                 miter_limit: style.miter_limit,
-                dash: Rc::from(style.dash),
+                dash: Box::from(style.dash),
             },
         });
     }
