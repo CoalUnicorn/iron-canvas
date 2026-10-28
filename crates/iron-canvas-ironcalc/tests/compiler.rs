@@ -1,8 +1,11 @@
 use iron_canvas_core::{
-    CanvasTheme, CellCoord, PixelRect, Point, painter::TextMetrics, scene::Primitive,
+    CanvasTheme, CellCoord, PixelRect, Point,
+    painter::TextMetrics,
+    scene::Primitive,
+    text_shaper::{TextLayoutCache, TextMetricsKey, TextShaper},
 };
 use iron_canvas_ironcalc::{
-    CellPlacement, PreparedWorksheet, WorksheetCompiler, WorksheetViewport,
+    CellPlacement, PreparedWorksheet, WorksheetCompiler, WorksheetReuse, WorksheetViewport,
 };
 use ironcalc_base::UserModel;
 use ironcalc_base::expressions::types::Area;
@@ -42,6 +45,75 @@ fn external(target: &str) -> ic::Link {
     ic::Link::External {
         target: target.to_string(),
         tooltip: None,
+    }
+}
+
+#[test]
+fn geometry_and_metadata_reuse_remain_independent() {
+    let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    workbook.set_user_input(0, 1, 1, "visible").unwrap();
+    // Keep metadata outside the viewport to check that reuse retains complete lists.
+    workbook
+        .set_cell_link(0, 100, 1, external("https://example.com"), None)
+        .unwrap();
+    workbook
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 100,
+            column: 3,
+            width: 2,
+            height: 1,
+        })
+        .unwrap();
+    let source = prepared(&workbook);
+    assert!(!source.links.is_empty());
+    assert!(!source.merges.is_empty());
+    let compiler = WorksheetCompiler::new();
+    let theme = CanvasTheme::light();
+
+    for reuse_geometry in [false, true] {
+        for reuse_metadata in [false, true] {
+            let mut reuse = WorksheetReuse::default();
+            if reuse_geometry {
+                reuse.geometry = source.geometry.as_ref();
+            }
+            if reuse_metadata {
+                reuse.metadata = source.metadata();
+            }
+            let mut cache = TextLayoutCache::default();
+            let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut cache);
+            let result = compiler
+                .prepare_with_shaper(
+                    &workbook,
+                    0,
+                    WorksheetViewport {
+                        first_cell: CellCoord { row: 1, col: 1 },
+                        width: 100,
+                        height: 30,
+                    },
+                    &mut shaper,
+                    &theme,
+                    reuse,
+                )
+                .unwrap();
+
+            assert_eq!(result, source);
+            assert_eq!(
+                std::rc::Rc::ptr_eq(
+                    result.geometry.as_ref().unwrap(),
+                    source.geometry.as_ref().unwrap(),
+                ),
+                reuse_geometry,
+            );
+            assert_eq!(
+                std::rc::Rc::ptr_eq(&result.links, &source.links),
+                reuse_metadata
+            );
+            assert_eq!(
+                std::rc::Rc::ptr_eq(&result.merges, &source.merges),
+                reuse_metadata
+            );
+        }
     }
 }
 

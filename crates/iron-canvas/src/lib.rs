@@ -23,7 +23,7 @@ use iron_canvas_core::CanvasTheme;
 pub use iron_canvas_core::scene::RenderBackend;
 use iron_canvas_core::text_shaper::{TextLayoutCache, TextShaper};
 use iron_canvas_ironcalc::{
-    PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetViewport,
+    PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetReuse, WorksheetViewport,
 };
 use ironcalc_base::UserModel;
 
@@ -271,14 +271,16 @@ impl<B: RenderBackend> CanvasSession<B> {
             CacheLookup::Content(base) => base.clone(),
             CacheLookup::Geometry(_) | CacheLookup::Miss => self
                 .compiler
-                .prepare_with_shaper_and_metadata(
+                .prepare_with_shaper(
                     workbook,
                     request.sheet,
                     request.viewport,
                     &mut shaper,
                     &request.theme,
-                    donor,
-                    metadata,
+                    WorksheetReuse {
+                        geometry: donor,
+                        metadata,
+                    },
                 )
                 .map_err(RenderError::Preparation)?,
         };

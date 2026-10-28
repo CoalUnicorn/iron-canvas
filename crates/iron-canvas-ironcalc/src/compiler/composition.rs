@@ -26,9 +26,12 @@ pub(super) fn prepare(
     viewport: WorksheetViewport,
     shaper: &mut TextShaper<'_>,
     theme: &CanvasTheme,
-    previous: Option<&Rc<GridGeometry>>,
-    metadata: Option<WorksheetMetadata<'_>>,
+    reuse: WorksheetReuse<'_>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+    let WorksheetReuse {
+        geometry: previous,
+        metadata,
+    } = reuse;
     let mut attempt = Attempt::new(
         workbook,
         sheet,

@@ -79,6 +79,18 @@ pub struct WorksheetMetadata<'a> {
     merges: &'a Rc<[MergedCell]>,
 }
 
+/// Optional inputs from an earlier compilation. The default reuses neither input.
+/// Geometry and metadata have separate validity rules.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WorksheetReuse<'a> {
+    /// Resample dimensions and reuse this geometry only when it is equal.
+    pub geometry: Option<&'a Rc<GridGeometry>>,
+    /// Supply complete lists for the same workbook, sheet, and content revision.
+    /// Advance the revision after evaluation changes links or after merges change.
+    /// Use `None` when the revision is unknown.
+    pub metadata: Option<WorksheetMetadata<'a>>,
+}
+
 impl PreparedWorksheet {
     /// Borrow metadata for another viewport at the same content revision.
     /// Explicit cell preparation has no complete merge list and returns `None`.
@@ -187,7 +199,6 @@ impl WorksheetCompiler {
     }
 
     /// Resample dimensions after a revision, but retain equal slot buffers.
-    #[allow(clippy::too_many_arguments)]
     pub fn prepare_reusing_geometry(
         &self,
         workbook: &UserModel<'_>,
@@ -199,12 +210,23 @@ impl WorksheetCompiler {
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
         let mut cache = TextLayoutCache::default();
         let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
-        self.prepare_with_shaper(workbook, sheet, viewport, &mut shaper, theme, geometry)
+        self.prepare_with_shaper(
+            workbook,
+            sheet,
+            viewport,
+            &mut shaper,
+            theme,
+            WorksheetReuse {
+                geometry,
+                ..WorksheetReuse::default()
+            },
+        )
     }
 
-    /// Prepare with caller-owned text storage and optional geometry reuse.
+    /// Prepare with caller-owned text storage and optional geometry and metadata reuse.
     /// Bind the shaper to the same metrics that the backend uses to paint.
-    #[allow(clippy::too_many_arguments)]
+    /// Use [`WorksheetReuse::default`] for an independent compilation.
+    /// Check the validity rules on [`WorksheetReuse`] before supplying prior data.
     pub fn prepare_with_shaper(
         &self,
         workbook: &UserModel<'_>,
@@ -212,31 +234,9 @@ impl WorksheetCompiler {
         viewport: WorksheetViewport,
         shaper: &mut TextShaper<'_>,
         theme: &CanvasTheme,
-        geometry: Option<&Rc<GridGeometry>>,
+        reuse: WorksheetReuse<'_>,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        self.prepare_with_shaper_and_metadata(
-            workbook, sheet, viewport, shaper, theme, geometry, None,
-        )
-    }
-
-    /// Prepare with optional complete metadata from a previous viewport.
-    ///
-    /// Supply metadata only for the same workbook, sheet, and content revision.
-    /// Advance the revision after evaluation changes links or after merges change.
-    /// Pass `None` for an independent compilation or when the revision is unknown.
-    /// Geometry reuse remains independent of metadata reuse.
-    #[allow(clippy::too_many_arguments)]
-    pub fn prepare_with_shaper_and_metadata(
-        &self,
-        workbook: &UserModel<'_>,
-        sheet: u32,
-        viewport: WorksheetViewport,
-        shaper: &mut TextShaper<'_>,
-        theme: &CanvasTheme,
-        geometry: Option<&Rc<GridGeometry>>,
-        metadata: Option<WorksheetMetadata<'_>>,
-    ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, shaper, theme, geometry, metadata)
+        composition::prepare(workbook, sheet, viewport, shaper, theme, reuse)
     }
 
     /// Lower positioned cells into five shared paint buffers. Repeated

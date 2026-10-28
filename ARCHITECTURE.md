@@ -165,7 +165,8 @@ pub struct PreparedWorksheet {
   `GridGeometry` when `bounds`, `origin`, and bands are equal, so a revision
   change need not rebuild equal geometry.
 - `prepare_with_shaper` accepts a shaper with caller-owned text storage.
-  The existing compiler entry points use a temporary text cache.
+  `WorksheetReuse` supplies optional geometry and metadata independently.
+  `prepare` and `prepare_reusing_geometry` use a temporary text cache.
 - Complete viewport preparation plans text spill before painting each row.
   Eligible unwrapped text keeps its source anchor and uses a wider clip.
   Occupied cells, merges, hidden columns, pane boundaries, and conditional-formatting
@@ -283,9 +284,10 @@ The compiler still validates and scans merges during preparation.
 
 `PreparedWorksheet::metadata()` returns a borrowed `WorksheetMetadata` view.
 Explicit cell preparation returns `None` because it does not collect merges.
-`WorksheetCompiler::prepare_with_shaper_and_metadata` accepts this optional view.
+`WorksheetCompiler::prepare_with_shaper` accepts `WorksheetReuse { geometry, metadata }`.
+Each field defaults to `None`. Geometry and metadata have separate validity rules.
 Direct callers check workbook identity, sheet, and revision before reuse.
-Existing compiler entry points collect fresh lists.
+`prepare` and `prepare_reusing_geometry` collect fresh lists.
 
 GTK uses one cache with a fixed Pango metric profile. It prints cache hits and
 style reads for each draw. React sizes its cache from visible sheets. Sheet
