@@ -479,14 +479,14 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             text::compile_text(
                 out,
                 self.context,
-                &record.extended.style,
-                &record.kind,
-                &record.value,
-                rect,
-                cf.reserved_left(rect),
-                spill_clip,
+                text::CellTextPaint {
+                    record,
+                    bounds: rect,
+                    reserved_left: cf.reserved_left(rect),
+                    spill_clip,
+                    has_link: link.is_some(),
+                },
                 self.shaper,
-                link,
                 &mut self.lines,
             );
         }
