@@ -1,6 +1,7 @@
 use super::*;
 use iron_canvas_core::{
     Axis, Point, Side,
+    geometry::path::PointF,
     painter::{TextAlign, TextBaseline},
     scene::Primitive,
     scene_geometry::{AxisCell, AxisError, GridGeometry, GridPane, GridRange, sample_bands},
@@ -539,8 +540,7 @@ fn headers(out: &mut SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme)
                 out.push_clip(rect);
                 out.fill_text(
                     &label,
-                    f64::from(rect.center().x),
-                    f64::from(rect.center().y),
+                    PointF::new(f64::from(rect.center().x), f64::from(rect.center().y)),
                     font,
                     PaintColor::Borrowed(&theme.header_text_color),
                     TextAlign::Center,

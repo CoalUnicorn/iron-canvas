@@ -14,7 +14,7 @@ use std::borrow::Cow;
 use serde::{Deserialize, Serialize};
 
 use crate::Span;
-use crate::geometry::path::Path;
+use crate::geometry::path::{Path, PointF};
 use crate::geometry::pixel_rect::PixelRect;
 use crate::geometry::prim::Line;
 
@@ -275,8 +275,7 @@ pub trait Painter: TextMetrics {
     fn fill_text(
         &self,
         text: &str,
-        x: f64,
-        y: f64,
+        position: PointF,
         font_css: PaintColor,
         color: PaintColor,
         align: TextAlign,

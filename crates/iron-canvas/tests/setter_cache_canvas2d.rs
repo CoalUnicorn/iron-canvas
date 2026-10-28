@@ -82,8 +82,7 @@ fn paint_state(painter: &CanvasPainter, color: &str, font: &str) {
     painter.rect_stroke(rect(), PaintColor::Borrowed(color), 1.0);
     painter.fill_text(
         "",
-        0.0,
-        0.0,
+        iron_canvas_core::geometry::path::PointF::new(0.0, 0.0),
         PaintColor::Borrowed(font),
         PaintColor::Borrowed(color),
         TextAlign::Start,

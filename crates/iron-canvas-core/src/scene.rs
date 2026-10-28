@@ -4,7 +4,7 @@
 //! dash buffers. A scene clone shares complete passes and their contents.
 pub mod retained;
 
-use crate::geometry::path::{Path, PathCmd};
+use crate::geometry::path::{Path, PathCmd, PointF};
 use crate::painter::{
     LineCap, LineJoin, PaintColor, Painter, StrokeStyle, TextAlign, TextBaseline,
 };
@@ -185,8 +185,7 @@ impl Primitive {
                 baseline,
             } => painter.fill_text(
                 text,
-                *x,
-                *y,
+                PointF::new(*x, *y),
                 PaintColor::Borrowed(font_css),
                 PaintColor::Borrowed(color),
                 *align,
@@ -285,8 +284,7 @@ impl SceneBuilder {
     pub fn fill_text(
         &mut self,
         text: &str,
-        x: f64,
-        y: f64,
+        position: PointF,
         font_css: PaintColor,
         color: PaintColor,
         align: TextAlign,
@@ -296,8 +294,8 @@ impl SceneBuilder {
         let color = self.intern(color.as_str());
         self.ops.push(Primitive::Text {
             text: text.to_owned(),
-            x,
-            y,
+            x: position.x,
+            y: position.y,
             font_css,
             color,
             align,

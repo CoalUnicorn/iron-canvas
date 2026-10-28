@@ -3,7 +3,7 @@ use super::{CellRecord, WorksheetContext};
 use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline};
 use iron_canvas_core::scene::SceneBuilder;
 use iron_canvas_core::text_shaper::TextShaper;
-use iron_canvas_core::{PixelRect, text_layout::*};
+use iron_canvas_core::{PixelRect, geometry::path::PointF, text_layout::*};
 use ironcalc_base::types::{CellType, HorizontalAlignment as H, Style, VerticalAlignment as V};
 
 pub(super) struct CellTextPaint<'a> {
@@ -87,8 +87,7 @@ pub(super) fn compile_text(
         };
         out.fill_text(
             &line.text,
-            x,
-            line.center_y + metrics.baseline_offset,
+            PointF::new(x, line.center_y + metrics.baseline_offset),
             PaintColor::Borrowed(&css),
             PaintColor::Borrowed(color),
             horizontal,

@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use std::mem;
 
 use iron_canvas_core::geometry::constants::DASHED_RECT_PATTERN;
-use iron_canvas_core::geometry::path::{Path, PathCmd, arc_segments};
+use iron_canvas_core::geometry::path::{Path, PathCmd, PointF, arc_segments};
 use iron_canvas_core::geometry::pixel_rect::PixelRect;
 use iron_canvas_core::geometry::prim::{Line, Span};
 use iron_canvas_core::painter::{
@@ -414,8 +414,7 @@ impl Painter for SvgPainter {
     fn fill_text(
         &self,
         text: &str,
-        x: f64,
-        y: f64,
+        position: PointF,
         font_css: PaintColor,
         color: PaintColor,
         align: TextAlign,
@@ -444,7 +443,7 @@ impl Painter for SvgPainter {
         let _ = write!(
             body,
             "<text x=\"{:.3}\" y=\"{:.3}\" font-family=\"Inter\" font-size=\"{:.3}\"",
-            x, y, size
+            position.x, position.y, size
         );
         if bold {
             body.push_str(" font-weight=\"bold\"");
@@ -673,8 +672,7 @@ mod tests {
         let p = SvgPainter::new(10, 10);
         p.fill_text(
             "a<b&c\"d",
-            1.0,
-            2.0,
+            PointF::new(1.0, 2.0),
             PaintColor::Static("12px sans-serif"),
             PaintColor::Static("#000"),
             TextAlign::Start,
@@ -691,8 +689,7 @@ mod tests {
         let p = SvgPainter::new(10, 10);
         p.fill_text(
             "styled",
-            1.0,
-            2.0,
+            PointF::new(1.0, 2.0),
             PaintColor::Static("bold italic 12px Calibri"),
             PaintColor::Static("#000"),
             TextAlign::Start,
@@ -709,8 +706,7 @@ mod tests {
         let p = SvgPainter::new(10, 10);
         p.fill_text(
             "  A  B  ",
-            1.0,
-            2.0,
+            PointF::new(1.0, 2.0),
             PaintColor::Static("12px Calibri"),
             PaintColor::Static("#000"),
             TextAlign::Center,
@@ -755,8 +751,7 @@ mod tests {
         let with_text = SvgPainter::new(10, 10);
         with_text.fill_text(
             "hi",
-            0.0,
-            0.0,
+            PointF::new(0.0, 0.0),
             PaintColor::Static("12px Aptos Narrow"),
             PaintColor::Static("#000"),
             TextAlign::Start,

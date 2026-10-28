@@ -13,7 +13,7 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, js_sys};
 
 use iron_canvas_core::geometry::{
     constants::{DASHED_RECT_PATTERN, STANDARD_BORDER_WIDTH},
-    path::{Path, PathCmd},
+    path::{Path, PathCmd, PointF},
     pixel_rect::PixelRect,
     prim::{Line, Span},
 };
@@ -535,8 +535,7 @@ impl Painter for CanvasPainter {
     fn fill_text(
         &self,
         text: &str,
-        x: f64,
-        y: f64,
+        position: PointF,
         font_css: PaintColor,
         color: PaintColor,
         align: TextAlign,
@@ -555,7 +554,7 @@ impl Painter for CanvasPainter {
             TextBaseline::Bottom => "bottom",
             TextBaseline::Alphabetic => "alphabetic",
         });
-        let _ = self.ctx.fill_text(text, x, y);
+        let _ = self.ctx.fill_text(text, position.x, position.y);
     }
 
     fn invalidate_cache(&self) {
