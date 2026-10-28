@@ -385,8 +385,7 @@ fn paint_merge_borders(
                 attempt.context,
                 &border,
                 rect,
-                false,
-                false,
+                borders::GridEdges::default(),
             );
             if show_merge_grid {
                 for (edge, side, item) in [

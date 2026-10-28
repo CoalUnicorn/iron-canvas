@@ -449,8 +449,10 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 self.context,
                 &style.border,
                 rect,
-                self.show_grid && fill.is_empty(),
-                hide_left_grid,
+                borders::GridEdges {
+                    top: self.show_grid && fill.is_empty(),
+                    left: self.show_grid && fill.is_empty() && !hide_left_grid,
+                },
             );
         }
         self.paint_text(placement, &mut passes[4], spill_clip, &cf);
