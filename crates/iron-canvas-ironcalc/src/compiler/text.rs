@@ -1,10 +1,10 @@
 //! Spreadsheet text policy. Generic layout stays in core.
+use super::WorksheetContext;
 use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline};
 use iron_canvas_core::scene::SceneBuilder;
 use iron_canvas_core::text_shaper::TextShaper;
-use iron_canvas_core::{CanvasTheme, PixelRect, text_layout::*};
+use iron_canvas_core::{PixelRect, text_layout::*};
 use ironcalc_base::{
-    UserModel,
     links::CellLinkView,
     types::{CellType, HorizontalAlignment as H, Style, VerticalAlignment as V},
 };
@@ -12,7 +12,7 @@ use ironcalc_base::{
 #[allow(clippy::too_many_arguments)]
 pub(super) fn compile_text(
     out: &mut SceneBuilder,
-    workbook: &UserModel<'_>,
+    context: WorksheetContext<'_, '_>,
     style: &Style,
     kind: &CellType,
     text: &str,
@@ -20,10 +20,12 @@ pub(super) fn compile_text(
     reserved: i32,
     spill_clip: Option<PixelRect>,
     shaper: &mut TextShaper<'_>,
-    theme: &CanvasTheme,
     link: Option<&CellLinkView>,
     lines: &mut Vec<TextLine>,
 ) {
+    let WorksheetContext {
+        workbook, theme, ..
+    } = context;
     // A narrow source can still paint into a resolved spill clip. Keep the
     // minimum width only when the text stays inside its source cell.
     if text.is_empty() || (rect.width < 10 && spill_clip.is_none()) || rect.height < 10 {

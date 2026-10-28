@@ -21,24 +21,21 @@ const HEADER_LABEL_PADDING: i32 = 16;
 const MIN_HEADER_WIDTH: i32 = 48;
 
 pub(super) fn prepare(
-    workbook: &UserModel<'_>,
-    sheet: u32,
+    context: WorksheetContext<'_, '_>,
     viewport: WorksheetViewport,
     shaper: &mut TextShaper<'_>,
-    theme: &CanvasTheme,
     reuse: WorksheetReuse<'_>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+    let WorksheetContext {
+        workbook,
+        sheet,
+        theme,
+    } = context;
     let WorksheetReuse {
         geometry: previous,
         metadata,
     } = reuse;
-    let mut attempt = Attempt::new(
-        workbook,
-        sheet,
-        shaper,
-        theme,
-        metadata.map(|data| data.links),
-    )?;
+    let mut attempt = Attempt::new(context, shaper, metadata.map(|data| data.links))?;
     let (frozen, merges) = read_structure(&attempt, viewport, metadata)?;
     let mut dimensions = Dimensions {
         workbook,
@@ -78,8 +75,8 @@ fn read_structure(
     viewport: WorksheetViewport,
     metadata: Option<WorksheetMetadata<'_>>,
 ) -> Result<(FrozenAxes, Rc<[MergedCell]>), WorksheetCompileError> {
-    let workbook = attempt.workbook;
-    let sheet = attempt.sheet;
+    let workbook = attempt.context.workbook;
+    let sheet = attempt.context.sheet;
     let first = viewport.first_cell;
     if !(1..=LAST_ROW).contains(&first.row)
         || !(1..=LAST_COLUMN).contains(&first.col)
@@ -153,7 +150,7 @@ fn prepare_geometry(
         viewport.height - header_height,
         |i| dimensions.extent(Axis::Row, i),
     )
-    .map_err(|e| axis_error(attempt.sheet, first, Axis::Row, e))?;
+    .map_err(|e| axis_error(attempt.context.sheet, first, Axis::Row, e))?;
     let label = rows
         .iter()
         .flat_map(|b| b.cells.iter())
@@ -177,7 +174,7 @@ fn prepare_geometry(
         viewport.width - header_width,
         |i| dimensions.extent(Axis::Column, i),
     )
-    .map_err(|e| axis_error(attempt.sheet, first, Axis::Column, e))?;
+    .map_err(|e| axis_error(attempt.context.sheet, first, Axis::Column, e))?;
     let clip = PixelRect {
         top_left: Point { x: 0, y: 0 },
         width: viewport.width,
@@ -222,7 +219,7 @@ fn paint_cells(
     });
     passes[0].rect_fill(
         geometry.bounds,
-        PaintColor::Borrowed(&attempt.theme.cell_bg),
+        PaintColor::Borrowed(&attempt.context.theme.cell_bg),
     );
     for pane in &geometry.panes {
         for pass in &mut passes {
@@ -268,7 +265,7 @@ fn paint_cells(
                 {
                     let cf = cf::CfDecorationPaint::resolve(
                         &attempt.cached[&source.placement.coordinate].extended,
-                        attempt.workbook,
+                        attempt.context.workbook,
                     );
                     attempt.paint_text(source.placement, &mut passes[4], Some(source.clip), &cf);
                 }
@@ -326,6 +323,7 @@ fn paint_merges(
             )?;
             let show_merge_grid = attempt.show_grid
                 && attempt
+                    .context
                     .workbook
                     .resolve_color(&attempt.cached[&range.first].extended.style.fill.color)
                     .is_empty();
@@ -384,12 +382,11 @@ fn paint_merge_borders(
             borders::compile_borders(
                 &mut border_side[0],
                 &mut grid_side[2],
-                attempt.workbook,
+                attempt.context,
                 &border,
                 rect,
                 false,
                 false,
-                attempt.theme,
             );
             if show_merge_grid {
                 for (edge, side, item) in [
@@ -401,7 +398,7 @@ fn paint_merge_borders(
                     if edge && item.is_none() {
                         passes[2].stroke_line(
                             side.line(rect),
-                            PaintColor::Borrowed(&attempt.theme.grid_color),
+                            PaintColor::Borrowed(&attempt.context.theme.grid_color),
                             1.0,
                         );
                     }

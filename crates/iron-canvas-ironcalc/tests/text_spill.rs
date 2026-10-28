@@ -3,7 +3,9 @@
 use iron_canvas_core::{
     CanvasTheme, CellCoord, Line, PixelRect, Side, painter::TextMetrics, scene::Primitive,
 };
-use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetCompiler, WorksheetViewport};
+use iron_canvas_ironcalc::{
+    PreparedWorksheet, WorksheetCompiler, WorksheetContext, WorksheetViewport,
+};
 use ironcalc_base::{
     UserModel,
     expressions::types::Area,
@@ -61,15 +63,17 @@ fn border(model: &mut UserModel<'_>, row: i32, col: i32, side: Side) {
 fn prepare(model: &UserModel<'_>, first: i32, width: i32) -> PreparedWorksheet {
     WorksheetCompiler::new()
         .prepare(
-            model,
-            0,
+            WorksheetContext {
+                workbook: model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             WorksheetViewport {
                 first_cell: CellCoord { row: 1, col: first },
                 width,
                 height: 120,
             },
             &Metrics,
-            &CanvasTheme::light(),
         )
         .unwrap()
 }
@@ -539,7 +543,15 @@ fn svg_and_pdf_emit_the_spill_clip_selected_with_their_own_metrics() {
 
     let mut svg = SvgSceneBackend::new();
     let frame = WorksheetCompiler::new()
-        .prepare(&model, 0, viewport, svg.metrics(), &CanvasTheme::light())
+        .prepare(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            svg.metrics(),
+        )
         .unwrap();
     let clip = text_paint(&frame, TEXT)[0].0;
     assert!(clip.width > rect(&frame, 1, 1).width);
@@ -554,7 +566,15 @@ fn svg_and_pdf_emit_the_spill_clip_selected_with_their_own_metrics() {
 
     let mut pdf = PdfSceneBackend::new();
     let frame = WorksheetCompiler::new()
-        .prepare(&model, 0, viewport, pdf.metrics(), &CanvasTheme::light())
+        .prepare(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            pdf.metrics(),
+        )
         .unwrap();
     let clip = text_paint(&frame, TEXT)[0].0;
     assert!(clip.width > rect(&frame, 1, 1).width);

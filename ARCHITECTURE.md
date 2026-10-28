@@ -146,8 +146,12 @@ frame intact.
 
 ## IronCalc compiler
 
-`WorksheetCompiler::prepare(workbook, sheet, viewport, metrics, theme)` reads a
-borrowed `UserModel` and returns an owned `PreparedWorksheet`:
+`WorksheetCompiler::prepare(context, viewport, metrics)` returns an owned `PreparedWorksheet`.
+`WorksheetContext { workbook, sheet, theme }` borrows the workbook and theme.
+Each compiler entry point takes this context by value.
+Copying the context copies its references and sheet index.
+`Attempt` holds the context only during compilation.
+The prepared result retains no workbook or theme borrow:
 
 ```rust,ignore
 pub struct PreparedWorksheet {

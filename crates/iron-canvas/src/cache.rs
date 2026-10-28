@@ -149,7 +149,7 @@ mod tests {
         scene::{GridScene, RenderBackend},
     };
     use iron_canvas_export::SvgSceneBackend;
-    use iron_canvas_ironcalc::{WorksheetCompiler, WorksheetViewport};
+    use iron_canvas_ironcalc::{WorksheetCompiler, WorksheetContext, WorksheetViewport};
     use ironcalc_base::UserModel;
     use std::cell::Cell;
 
@@ -175,11 +175,13 @@ mod tests {
     fn base() -> PreparedWorksheet {
         WorksheetCompiler::new()
             .prepare(
-                &UserModel::new_empty("cache", "en", "UTC", "en").unwrap(),
-                0,
+                WorksheetContext {
+                    workbook: &UserModel::new_empty("cache", "en", "UTC", "en").unwrap(),
+                    sheet: 0,
+                    theme: &CanvasTheme::light(),
+                },
                 request(0).viewport,
                 SvgSceneBackend::new().metrics(),
-                &CanvasTheme::light(),
             )
             .unwrap()
     }

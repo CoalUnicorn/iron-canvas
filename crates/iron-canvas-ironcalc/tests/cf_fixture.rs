@@ -8,7 +8,7 @@ use iron_canvas_core::scene::{Primitive, RenderBackend};
 use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect, Point};
 use iron_canvas_export::SvgSceneBackend;
 use iron_canvas_ironcalc::{
-    CellPlacement, CfDecorationPaint, WorksheetCompiler, WorksheetViewport,
+    CellPlacement, CfDecorationPaint, WorksheetCompiler, WorksheetContext, WorksheetViewport,
 };
 use ironcalc::import::{load_from_xlsx, load_from_xlsx_bytes};
 use ironcalc_base::cf_types::{CfRuleInput, Cfvo, Icon};
@@ -128,15 +128,17 @@ fn cf_fixture_renders_through_svg_backend() {
     let mut backend = SvgSceneBackend::new();
     let prepared = WorksheetCompiler::new()
         .prepare(
-            &model,
-            0,
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             WorksheetViewport {
                 first_cell: CellCoord { row: 1, col: 1 },
                 width: 1100,
                 height: 700,
             },
             backend.metrics(),
-            &CanvasTheme::light(),
         )
         .unwrap();
     assert_eq!(prepared.extended_style_reads, prepared.cell_count());
@@ -158,15 +160,17 @@ fn compiler_suppresses_hidden_values_but_keeps_icon_primitives() {
     let backend = SvgSceneBackend::new();
     let prepared = WorksheetCompiler::new()
         .prepare(
-            &model,
-            0,
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             WorksheetViewport {
                 first_cell: CellCoord { row: 17, col: 2 },
                 width: 58,
                 height: 34,
             },
             backend.metrics(),
-            &CanvasTheme::light(),
         )
         .unwrap();
     assert_eq!(prepared.extended_style_reads, 1);
@@ -229,8 +233,11 @@ fn a_compiled_gradient_bar_uses_the_resolved_shade() {
     let backend = SvgSceneBackend::new();
     let prepared = WorksheetCompiler::new()
         .prepare_cells(
-            &model,
-            0,
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             PixelRect {
                 top_left: Point { x: 0, y: 0 },
                 width: 100,
@@ -241,7 +248,6 @@ fn a_compiled_gradient_bar_uses_the_resolved_shade() {
                 bounds: *bounds,
             }),
             backend.metrics(),
-            &CanvasTheme::light(),
         )
         .expect("cell preparation");
 
@@ -278,15 +284,17 @@ fn cf_fixture_shared_scene_reaches_native_raster_at_two_scales() {
     for sheet in [0, 1] {
         let prepared = WorksheetCompiler::new()
             .prepare(
-                &workbook,
-                sheet,
+                WorksheetContext {
+                    workbook: &workbook,
+                    sheet,
+                    theme: &CanvasTheme::light(),
+                },
                 WorksheetViewport {
                     first_cell: CellCoord { row: 1, col: 1 },
                     width: 1100,
                     height: 700,
                 },
                 svg.metrics(),
-                &CanvasTheme::light(),
             )
             .unwrap();
         for scale in [1.0, 1.25] {

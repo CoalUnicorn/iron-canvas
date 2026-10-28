@@ -980,11 +980,13 @@ fn unicode_wrap_and_autofit_match_fresh_after_font_changes() {
         // Check actual Canvas font extents, not only equality of two render paths.
         let frame = iron_canvas_ironcalc::WorksheetCompiler::new()
             .prepare(
-                &model,
-                0,
+                iron_canvas_ironcalc::WorksheetContext {
+                    workbook: &model,
+                    sheet: 0,
+                    theme: &request.theme,
+                },
                 request.viewport,
                 session.backend().metrics(),
-                &request.theme,
             )
             .unwrap();
         let mut count = 0;

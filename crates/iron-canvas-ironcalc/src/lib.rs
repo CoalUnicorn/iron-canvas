@@ -11,5 +11,5 @@ pub mod compiler;
 pub use compiler::{
     CellPlacement, CellReadOperation, CfDataBarPaint, CfDecorationPaint, CfIconPaint,
     CfRatingPaint, FrozenAxes, PreparedWorksheet, WorksheetCompileError, WorksheetCompiler,
-    WorksheetMetadata, WorksheetReuse, WorksheetViewport,
+    WorksheetContext, WorksheetMetadata, WorksheetReuse, WorksheetViewport,
 };

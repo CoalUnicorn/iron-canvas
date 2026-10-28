@@ -71,10 +71,11 @@ fn eligible(record: &CellRecord) -> bool {
 impl Attempt<'_, '_, '_> {
     fn occupied_kind(&self, cell: CellCoord) -> Result<Option<CellType>, WorksheetCompileError> {
         let sheet = self
+            .context
             .workbook
             .get_model()
             .workbook
-            .worksheet(self.sheet)
+            .worksheet(self.context.sheet)
             .map_err(|e| self.error(cell, CellReadOperation::Sheet, e))?;
         Ok(sheet.cell(cell.row, cell.col).and_then(|value| {
             if matches!(value.as_ref(), Cell::EmptyCell { .. }) {
