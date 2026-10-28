@@ -1,9 +1,7 @@
 //! Border lowering. Dash styles keep the baseline's solid-stroke policy.
-use iron_canvas_core::{CanvasTheme, PixelRect, Side, painter::PaintColor, scene::SceneBuilder};
-use ironcalc_base::{
-    UserModel,
-    types::{Border, BorderStyle as B},
-};
+use super::WorksheetContext;
+use iron_canvas_core::{PixelRect, Side, painter::PaintColor, scene::SceneBuilder};
+use ironcalc_base::types::{Border, BorderStyle as B};
 
 /// How one border edge is stroked. Dash styles keep the solid baseline, so
 /// only the width and the double-line treatment reach `Painter` primitives.
@@ -44,17 +42,18 @@ impl Rule {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn compile_borders(
     out: &mut SceneBuilder,
     grid: &mut SceneBuilder,
-    workbook: &UserModel<'_>,
+    context: WorksheetContext<'_, '_>,
     border: &Border,
     rect: PixelRect,
     show_grid: bool,
     hide_left_grid: bool,
-    theme: &CanvasTheme,
 ) {
+    let WorksheetContext {
+        workbook, theme, ..
+    } = context;
     for (side, item) in [
         (Side::Left, &border.left),
         (Side::Top, &border.top),
@@ -97,7 +96,8 @@ pub(super) fn compile_borders(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iron_canvas_core::{Point, scene::Primitive};
+    use iron_canvas_core::{CanvasTheme, Point, scene::Primitive};
+    use ironcalc_base::UserModel;
     use ironcalc_base::types::{BorderItem, Color};
     #[test]
     fn explicit_double_border_uses_two_strokes_and_suppresses_the_grid_edge() {
@@ -114,7 +114,11 @@ mod tests {
         compile_borders(
             &mut explicit,
             &mut grid,
-            &workbook,
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             &border,
             PixelRect {
                 top_left: Point { x: 10, y: 10 },
@@ -123,7 +127,6 @@ mod tests {
             },
             true,
             false,
-            &CanvasTheme::light(),
         );
         let grid = grid.finish();
         assert_eq!(grid.len(), 1);

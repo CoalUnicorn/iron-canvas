@@ -1,6 +1,6 @@
 //! PDF backend for `Painter`.
 //!
-//! Emits PDF content-stream ops into a shared `ContentStream` buffer.
+//! Emits PDF content-stream ops into an owned `ContentStream` buffer.
 //! No setter cache (PDF has no `ctx.*` state to dedupe against), no
 //! per-paint clear (PDF is declarative — the page-open `cm` plus the
 //! emitted ops are the entire output). The Y-flip CTM that maps the
@@ -9,10 +9,9 @@
 //! itself never needs to think about it: `re` is emitted with the same
 //! `x y w h` we received from `PixelRect`.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::fmt;
 use std::io::Write as _;
-use std::rc::Rc;
 
 use iron_canvas_core::geometry::constants::DASHED_RECT_PATTERN;
 use iron_canvas_core::geometry::path::{Path, PathCmd, PointF, arc_to_cubics, quad_to_cubic};
@@ -27,22 +26,23 @@ use crate::common::color::parse_css_color;
 use crate::common::escape::pdf_string_escape;
 use crate::common::helvetica::HelveticaFace;
 use crate::pdf::doc::stream::ContentStream;
+use crate::pdf::surface::PdfSurface;
 
 /// Control-point offset that turns one cubic Bézier into a quarter circle:
 /// `4/3 * (sqrt(2) - 1)`.
 const CIRCLE_KAPPA: f64 = 0.552_284_749_8;
 
 pub struct PdfPainter {
-    body: Rc<RefCell<ContentStream>>,
-    pub(super) width: u32,
-    pub(super) height: u32,
+    body: RefCell<ContentStream>,
+    width: u32,
+    height: u32,
     clip_depth: Cell<u32>,
     group_depth: Cell<u32>,
     /// Distinct horizontal-gradient endpoint color pairs, in first-use order.
     /// The content stream references `/Sh{index}`; the surface inlines the
-    /// matching axial shading dictionaries into the `/Resources` object. `Rc`
-    /// so the document assembler can hold the registry alongside the stream.
-    shadings: Rc<RefCell<Vec<(String, String)>>>,
+    /// matching axial shading dictionaries into the `/Resources` object.
+    /// Keep the registry with the stream so their indices stay consistent.
+    shadings: RefCell<Vec<(String, String)>>,
     /// Reused formatting buffer behind [`Self::emit`]. A full-sheet export
     /// emits tens of thousands of ops, so formatting each one into this
     /// buffer — cleared and flushed once per op — keeps a per-op `format!`
@@ -55,28 +55,21 @@ impl PdfPainter {
     /// Construct a painter that owns its own content stream. This is what
     /// the PDF scene backend uses to paint one staged frame.
     pub fn new(width: u32, height: u32) -> Self {
-        Self::with_stream(Rc::new(RefCell::new(ContentStream::new())), width, height)
-    }
-
-    /// Construct a painter sharing an externally-owned stream, so several
-    /// painters can concatenate their ops into one document in dispatch order.
-    pub fn with_stream(body: Rc<RefCell<ContentStream>>, width: u32, height: u32) -> Self {
         Self {
-            body,
+            body: RefCell::new(ContentStream::new()),
             width,
             height,
             clip_depth: Cell::new(0),
             group_depth: Cell::new(0),
-            shadings: Rc::new(RefCell::new(Vec::new())),
+            shadings: RefCell::new(Vec::new()),
             scratch: RefCell::new(Vec::new()),
         }
     }
 
-    /// Shared registry of the gradient color pairs the content stream has
-    /// referenced. The scene backend hands it to `PdfSurface::build_document`
-    /// so the `/Resources` object can inline the matching shadings.
-    pub fn shadings(&self) -> Rc<RefCell<Vec<(String, String)>>> {
-        Rc::clone(&self.shadings)
+    /// Borrow the gradient color pairs referenced by the content stream.
+    /// Release this borrow before drawing another gradient.
+    pub fn shadings(&self) -> Ref<'_, [(String, String)]> {
+        Ref::map(self.shadings.borrow(), Vec::as_slice)
     }
 
     /// Index of the shading for `(from, to)`, registering it on first use.
@@ -90,18 +83,30 @@ impl PdfPainter {
         shadings.len() - 1
     }
 
-    /// Hand back the shared stream. `PdfSurface::build_document` takes it,
-    /// wraps it in the page-open CTM, and inlines the bytes as the
-    /// `/Contents` object. Public so callers and smoke tests can inspect
-    /// what each `Painter` method emits.
-    pub fn stream(&self) -> Rc<RefCell<ContentStream>> {
-        Rc::clone(&self.body)
+    /// Borrow the emitted content stream for inspection.
+    /// Release this borrow before drawing again.
+    pub fn stream(&self) -> Ref<'_, ContentStream> {
+        self.body.borrow()
+    }
+
+    /// Consume the painter and return a complete single-page PDF.
+    /// Balance every clip and group before this call.
+    pub fn finish(self) -> Vec<u8> {
+        self.assert_balanced();
+        // Assemble the stream and registry with the painter's own dimensions.
+        // No independent owner can change them during finalization.
+        PdfSurface::build_document(
+            &self.body.into_inner(),
+            &self.shadings.into_inner(),
+            self.width,
+            self.height,
+        )
     }
 
     /// Both `clip_depth` and `group_depth` must reach zero before
     /// `finish` runs — every `push_clip` / `begin_group` must have a
     /// matching pop. Mirrors `SvgPainter`'s balance assertion.
-    pub(crate) fn assert_balanced(&self) {
+    fn assert_balanced(&self) {
         debug_assert_eq!(
             self.clip_depth.get(),
             0,
@@ -123,7 +128,7 @@ impl PdfPainter {
     }
 
     /// Format one content-stream op into the reused scratch buffer and hand
-    /// the bytes to the shared stream in a single write.
+    /// the bytes to the owned stream in a single write.
     ///
     /// Takes `fmt::Arguments` rather than an owned `String`, so the call site
     /// is one `format_args!` with no intermediate allocation. Formatting
@@ -542,8 +547,7 @@ mod tests {
     use iron_canvas_core::geometry::prim::Point;
 
     fn content(painter: &PdfPainter) -> String {
-        String::from_utf8(painter.stream().borrow().bytes().to_vec())
-            .expect("content stream is UTF-8")
+        String::from_utf8(painter.stream().bytes().to_vec()).expect("content stream is UTF-8")
     }
 
     fn rect() -> PixelRect {
@@ -571,7 +575,7 @@ mod tests {
         assert!(content.contains("/Sh0 sh"), "{content}");
         let shadings = painter.shadings();
         assert_eq!(
-            shadings.borrow().as_slice(),
+            &*shadings,
             &[("#ffffff".to_string(), "#3366cc".to_string())]
         );
     }
@@ -589,7 +593,7 @@ mod tests {
             PaintColor::Static("#ffffff"),
             PaintColor::Static("#3366cc"),
         );
-        assert_eq!(painter.shadings().borrow().len(), 1);
+        assert_eq!(painter.shadings().len(), 1);
         assert_eq!(content(&painter).matches("/Sh0 sh").count(), 2);
     }
 
@@ -605,7 +609,7 @@ mod tests {
             PaintColor::Static("#ffffff"),
             PaintColor::Static("#000000"),
         );
-        assert!(painter.shadings().borrow().is_empty());
+        assert!(painter.shadings().is_empty());
         assert!(content(&painter).is_empty());
     }
 

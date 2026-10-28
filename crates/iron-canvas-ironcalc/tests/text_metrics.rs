@@ -4,7 +4,9 @@ use iron_canvas_core::{
     painter::{FontMetrics, TextBaseline, TextMetrics},
     scene::{Primitive, RenderBackend},
 };
-use iron_canvas_ironcalc::{WorksheetCompiler, WorksheetViewport, autofit::fit_height};
+use iron_canvas_ironcalc::{
+    WorksheetCompiler, WorksheetContext, WorksheetViewport, autofit::fit_height,
+};
 use ironcalc_base::{UserModel, expressions::types::Area};
 
 struct Metrics;
@@ -61,12 +63,19 @@ fn autofit_and_compiler_share_measured_baselines_for_all_vertical_alignments() {
             .update_range_style(&area(), "alignment.vertical", align)
             .unwrap();
         let frame = WorksheetCompiler::new()
-            .prepare(&model, 0, viewport(), &Metrics, &CanvasTheme::light())
+            .prepare(
+                WorksheetContext {
+                    workbook: &model,
+                    sheet: 0,
+                    theme: &CanvasTheme::light(),
+                },
+                viewport(),
+                &Metrics,
+            )
             .unwrap();
         let top = f64::from(
             frame
-                .cells
-                .iter()
+                .cells()
                 .find(|cell| cell.coordinate == CellCoord { row: 1, col: 1 })
                 .unwrap()
                 .bounds
@@ -110,11 +119,18 @@ fn check_backend(metrics: &dyn TextMetrics) {
         let height = fit_height(&model, metrics, 0, 1, 1, 1).unwrap().unwrap();
         model.set_rows_height(0, 1, 1, height.ceil()).unwrap();
         let frame = WorksheetCompiler::new()
-            .prepare(&model, 0, viewport(), metrics, &CanvasTheme::light())
+            .prepare(
+                WorksheetContext {
+                    workbook: &model,
+                    sheet: 0,
+                    theme: &CanvasTheme::light(),
+                },
+                viewport(),
+                metrics,
+            )
             .unwrap();
         let cell = frame
-            .cells
-            .iter()
+            .cells()
             .find(|cell| cell.coordinate == CellCoord { row: 1, col: 1 })
             .unwrap()
             .bounds;
@@ -176,7 +192,15 @@ fn check_underline(metrics: &dyn TextMetrics) {
             .update_range_style(&area(), "font.i", &italic.to_string())
             .unwrap();
         let frame = WorksheetCompiler::new()
-            .prepare(&model, 0, viewport(), metrics, &CanvasTheme::light())
+            .prepare(
+                WorksheetContext {
+                    workbook: &model,
+                    sheet: 0,
+                    theme: &CanvasTheme::light(),
+                },
+                viewport(),
+                metrics,
+            )
             .unwrap();
         let mut baseline = None;
         let mut underline = None;

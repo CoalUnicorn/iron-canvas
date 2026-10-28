@@ -1,12 +1,11 @@
 //! Canvas 2D backend for `Painter`.
 //!
 //! Owns the `CanvasRenderingContext2d` plus the per-frame state cache
-//! (`Cell<CachedColor>` for fill/stroke/font, `Cell<f64>` for line_width).
+//! (`RefCell<CachedString>` for fill/stroke/font, `Cell<f64>` for line_width).
 //! The cache is a Canvas2D-only optimization — it lives here, not in the
 //! trait, because the SVG/PDF backends do not need it.
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use wasm_bindgen::prelude::*;
@@ -90,35 +89,48 @@ fn join_str(join: LineJoin) -> &'static str {
     }
 }
 
-/// Cached color/font value. `Static` is the zero-alloc fast path: when the
-/// renderer pushed a `&'static str` (theme color, `HEADER_FONT`), we keep the
-/// reference and ptr-eq it on the next call. `Owned` carries a custom color —
-/// or a font CSS string — that originated as a non-static `&str`, deduped to a
-/// painter-lifetime `Rc<str>` (see `intern_string`) so a recurring value is
-/// `Rc::clone`, not a fresh allocation. `Empty` is the initial / post-clip
-/// state — always misses so the next paint re-binds the ctx.
-#[derive(Default, Clone)]
-pub(crate) enum CachedColor {
-    #[default]
-    Empty,
-    Static(&'static str),
-    Owned(Rc<str>),
+/// One cached color or font. Static values need no allocation.
+/// Borrowed values use one buffer because no caller shares the stored value.
+/// Keep its capacity through invalidation and static values to reuse it later.
+#[derive(Default)]
+struct CachedString {
+    static_value: Option<&'static str>,
+    buffer: String,
+    valid: bool,
 }
 
-impl CachedColor {
+impl CachedString {
     /// True when the next paint can skip the `ctx.set_*` round-trip.
     ///
     /// `Static-Static` compares the string address and length. Both must match
     /// because static slices can share an address. Content equality across the
     /// other variants keeps us correct when a `Borrowed` color happens to
     /// equal a previously cached `Static`, or vice-versa.
-    pub fn matches(&self, other: PaintColor) -> bool {
-        match (self, other) {
-            (CachedColor::Empty, _) => false,
-            (CachedColor::Static(a), PaintColor::Static(b)) => std::ptr::eq(*a, b),
-            (CachedColor::Static(a), PaintColor::Borrowed(b)) => *a == b,
-            (CachedColor::Owned(a), other) => &**a == other.as_str(),
+    fn matches(&self, other: PaintColor) -> bool {
+        if !self.valid {
+            return false;
         }
+        match (self.static_value, other) {
+            (Some(a), PaintColor::Static(b)) => std::ptr::eq(a, b),
+            (Some(a), PaintColor::Borrowed(b)) => a == b,
+            (None, other) => self.buffer == other.as_str(),
+        }
+    }
+
+    fn store(&mut self, value: PaintColor) {
+        self.static_value = match value {
+            PaintColor::Static(value) => Some(value),
+            PaintColor::Borrowed(value) => {
+                self.buffer.clear();
+                self.buffer.push_str(value);
+                None
+            }
+        };
+        self.valid = true;
+    }
+
+    fn invalidate(&mut self) {
+        self.valid = false;
     }
 }
 
@@ -130,21 +142,19 @@ impl CachedColor {
 /// cache is a Canvas2D-specific optimization.
 #[derive(Default)]
 pub(crate) struct SetterCache {
-    pub(crate) last_fill: Cell<CachedColor>,
-    pub(crate) last_stroke: Cell<CachedColor>,
-    pub(crate) last_font: Cell<CachedColor>,
+    last_fill: RefCell<CachedString>,
+    last_stroke: RefCell<CachedString>,
+    last_font: RefCell<CachedString>,
     pub(crate) last_line_width: Cell<f64>,
 }
 
 impl SetterCache {
-    /// Clear all four sticky binds. Called from the trait-level
-    /// `invalidate_cache`, from `pop_clip` (ctx.restore wipes ctx state),
-    /// and — via `RendererCore::invalidate_paint_cache` — from the paint
-    /// strategy arms that change ctx fillStyle/strokeStyle/font/lineWidth.
+    /// Clear all four cached bindings after a context state change.
+    /// Retain string capacity so restoration does not cause new allocations.
     pub(crate) fn invalidate(&self) {
-        self.last_fill.set(CachedColor::Empty);
-        self.last_stroke.set(CachedColor::Empty);
-        self.last_font.set(CachedColor::Empty);
+        self.last_fill.borrow_mut().invalidate();
+        self.last_stroke.borrow_mut().invalidate();
+        self.last_font.borrow_mut().invalidate();
         self.last_line_width.set(0.0);
     }
 }
@@ -170,14 +180,6 @@ pub struct CanvasPainter {
     /// reads from the DPR-scaled backing store) is sized in backing-store
     /// pixels — dest coords go through the active transform unchanged.
     pub(crate) dpr: Cell<f64>,
-    /// Painter-lifetime dedup of the non-static (`Borrowed`) strings the
-    /// setter caches key on: custom fill/stroke colors *and* the font CSS
-    /// strings `measure_text_width` binds through `set_font_cached`. Distinct
-    /// from `SetterCache`: `invalidate` resets the sticky binds, but an
-    /// interned string outlives invalidation — it is still a valid key. Not
-    /// cleared. Entries accumulate for each distinct color and font string
-    /// seen during the painter's lifetime, including across model changes.
-    interned_strings: RefCell<Vec<Rc<str>>>,
     /// Memo of `ctx.measure_text` widths keyed `(font_css, text)`.
     /// Interior mutability because `TextMetrics::measure_text_width` takes
     /// `&self`. `get` and `insert` are separate short borrows — never held
@@ -201,7 +203,6 @@ impl CanvasPainter {
             dash_empty: js_sys::Array::new(),
             clip_depth: Cell::new(0),
             dpr: Cell::new(1.0),
-            interned_strings: RefCell::new(Vec::new()),
             measure_cache: RefCell::new(MeasureCache::default()),
             font_metrics: RefCell::default(),
         }
@@ -217,33 +218,27 @@ impl CanvasPainter {
     }
 
     pub(crate) fn set_fill_cached(&self, color: PaintColor) {
-        let prev = self.setter_cache.last_fill.take();
-        if prev.matches(color) {
-            self.setter_cache.last_fill.set(prev);
+        if self.setter_cache.last_fill.borrow().matches(color) {
             return;
         }
         self.ctx.set_fill_style_str(color.as_str());
-        self.setter_cache.last_fill.set(self.cache_color(color));
+        self.setter_cache.last_fill.borrow_mut().store(color);
     }
 
     fn set_stroke_cached(&self, color: PaintColor) {
-        let prev = self.setter_cache.last_stroke.take();
-        if prev.matches(color) {
-            self.setter_cache.last_stroke.set(prev);
+        if self.setter_cache.last_stroke.borrow().matches(color) {
             return;
         }
         self.ctx.set_stroke_style_str(color.as_str());
-        self.setter_cache.last_stroke.set(self.cache_color(color));
+        self.setter_cache.last_stroke.borrow_mut().store(color);
     }
 
     pub(crate) fn set_font_cached(&self, font: PaintColor) {
-        let prev = self.setter_cache.last_font.take();
-        if prev.matches(font) {
-            self.setter_cache.last_font.set(prev);
+        if self.setter_cache.last_font.borrow().matches(font) {
             return;
         }
         self.ctx.set_font(font.as_str());
-        self.setter_cache.last_font.set(self.cache_color(font));
+        self.setter_cache.last_font.borrow_mut().store(font);
     }
 
     pub(crate) fn set_line_width_cached(&self, width: f64) {
@@ -301,32 +296,6 @@ impl CanvasPainter {
             arr.set(i as u32, JsValue::from_f64(*v));
         }
         arr
-    }
-
-    /// Map a call-site `PaintColor` to its `CachedColor`. `Static` stays
-    /// zero-alloc; `Borrowed` is deduped through `interned_strings`, so a
-    /// recurring color reuses its `Rc<str>` instead of reallocating. The font
-    /// cache routes here too (`set_font_cached`), which is why the strings a
-    /// `PaintColor` can carry are not only colors.
-    fn cache_color(&self, color: PaintColor<'_>) -> CachedColor {
-        match color {
-            PaintColor::Static(s) => CachedColor::Static(s),
-            PaintColor::Borrowed(s) => CachedColor::Owned(self.intern_string(s)),
-        }
-    }
-
-    /// Dedup a non-static (`Borrowed`) string — a custom color, or one of the
-    /// font CSS strings `measure_text_width` passes to `set_font_cached` — to
-    /// a painter-lifetime `Rc<str>`, so a value seen before is an `Rc::clone`
-    /// rather than a fresh allocation. Entries remain until the painter drops.
-    fn intern_string(&self, s: &str) -> Rc<str> {
-        let mut interned = self.interned_strings.borrow_mut();
-        if let Some(rc) = interned.iter().find(|rc| &***rc == s) {
-            return Rc::clone(rc);
-        }
-        let rc: Rc<str> = Rc::from(s);
-        interned.push(Rc::clone(&rc));
-        rc
     }
 
     /// Drop all memoized text widths. Called via the facades'
@@ -437,7 +406,7 @@ impl Painter for CanvasPainter {
         self.ctx.set_fill_style_canvas_gradient(&gradient);
         // The ctx fill style is now a gradient object, not the cached color
         // string: drop the sticky fill so the next `set_fill_cached` re-binds.
-        self.setter_cache.last_fill.set(CachedColor::Empty);
+        self.setter_cache.last_fill.borrow_mut().invalidate();
         self.ctx.fill_rect(x, y, w, h);
     }
 
@@ -689,8 +658,57 @@ mod tests {
         let short: &'static str = &full[..4];
         assert_eq!(full.as_ptr(), short.as_ptr());
 
-        assert!(!CachedColor::Static(full).matches(PaintColor::Static(short)));
-        assert!(!CachedColor::Static(short).matches(PaintColor::Static(full)));
-        assert!(CachedColor::Static(full).matches(PaintColor::Static(full)));
+        let mut cached = CachedString::default();
+        cached.store(PaintColor::Static(full));
+        assert!(!cached.matches(PaintColor::Static(short)));
+        assert!(cached.matches(PaintColor::Static(full)));
+        cached.store(PaintColor::Static(short));
+        assert!(!cached.matches(PaintColor::Static(full)));
+        assert_eq!(cached.buffer.capacity(), 0);
+    }
+
+    #[test]
+    fn cached_string_owns_borrowed_values_and_matches_static_values() {
+        let mut cached = CachedString::default();
+        assert!(!cached.matches(PaintColor::Borrowed("")));
+        cached.store(PaintColor::Static("#123456"));
+        assert!(cached.matches(PaintColor::Borrowed("#123456")));
+
+        let mut input = String::from("#abcdef");
+        cached.store(PaintColor::Borrowed(&input));
+        input.clear();
+        assert!(cached.matches(PaintColor::Static("#abcdef")));
+        assert!(!cached.matches(PaintColor::Borrowed(&input)));
+
+        cached.store(PaintColor::Borrowed(""));
+        assert!(cached.matches(PaintColor::Borrowed("")));
+        assert!(!cached.matches(PaintColor::Static("#abcdef")));
+    }
+
+    #[test]
+    fn invalidation_keeps_buffers_for_all_three_setters() {
+        let cache = SetterCache::default();
+        let value = "20px sans-serif";
+        for slot in [&cache.last_fill, &cache.last_stroke, &cache.last_font] {
+            slot.borrow_mut().store(PaintColor::Borrowed(value));
+        }
+        cache.last_line_width.set(3.0);
+        cache.invalidate();
+        assert_eq!(cache.last_line_width.get(), 0.0);
+
+        for slot in [&cache.last_fill, &cache.last_stroke, &cache.last_font] {
+            let mut cached = slot.borrow_mut();
+            assert!(!cached.matches(PaintColor::Borrowed(value)));
+            let capacity = cached.buffer.capacity();
+            let allocation = cached.buffer.as_ptr();
+            cached.store(PaintColor::Static("red"));
+            cached.invalidate();
+            for value in ["#123456", "#123", "20px serif", "#abcdef"] {
+                cached.store(PaintColor::Borrowed(value));
+                assert!(cached.matches(PaintColor::Borrowed(value)));
+                assert_eq!(cached.buffer.capacity(), capacity);
+                assert_eq!(cached.buffer.as_ptr(), allocation);
+            }
+        }
     }
 }

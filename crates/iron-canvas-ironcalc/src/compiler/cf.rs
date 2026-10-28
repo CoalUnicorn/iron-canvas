@@ -17,26 +17,25 @@ use ironcalc_base::{
 use super::glyphs::{self as cf, GlyphDef, GlyphPart};
 use iron_canvas_core::shape::place::{Placement, emit_poly, star_vertices};
 
-/// Resolved icon decoration: the engine-selected glyph and its resolved,
-/// interned color.
+/// Resolved icon decoration with the engine-selected glyph and an owned color.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CfIconPaint {
     pub glyph: Icon,
-    pub color: Rc<str>,
+    pub color: String,
     /// When false, the painted cell value is hidden (the model value, the
     /// formula bar, and editing are unaffected).
     pub show_value: bool,
 }
 
-/// Resolved data bar: interned positive/negative colors plus the lighter
+/// Resolved data bar: owned positive/negative colors plus the shared lighter
 /// shade each gradient runs from at the axis. `value` and `axis_position` are
 /// normalized positions in `[0, 1]`; the bar spans them, so it is not
 /// necessarily anchored at the cell's left edge.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CfDataBarPaint {
-    pub positive: Rc<str>,
+    pub positive: String,
     pub positive_light: Rc<str>,
-    pub negative: Rc<str>,
+    pub negative: String,
     pub negative_light: Rc<str>,
     pub is_gradient: bool,
     pub value: f64,
@@ -45,11 +44,11 @@ pub struct CfDataBarPaint {
     pub show_value: bool,
 }
 
-/// Resolved rating with its draw style and engine counts.
+/// Resolved rating with its draw style, engine counts, and an owned color.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CfRatingPaint {
     pub style: Icon,
-    pub color: Rc<str>,
+    pub color: String,
     /// Rating points the engine selected (`1..=max`).
     pub count: u32,
     /// Rating scale maximum (3, 4, or 5 for the built-in sets).
@@ -89,9 +88,14 @@ impl CfDecorationPaint {
         workbook: &UserModel<'_>,
         shades: &mut LightShades,
     ) -> Self {
-        let color = |c: &ironcalc_base::types::Color, fallback: &str| -> Rc<str> {
+        // Keep the engine's allocation. Only an empty result needs a fallback.
+        let color = |c: &ironcalc_base::types::Color, fallback: &str| -> String {
             let value = workbook.resolve_color(c);
-            Rc::from(if value.is_empty() { fallback } else { &value })
+            if value.is_empty() {
+                fallback.to_owned()
+            } else {
+                value
+            }
         };
         Self {
             icon: deco.icon.as_ref().map(|icon| CfIconPaint {
@@ -238,16 +242,18 @@ const GRADIENT_LIGHTEN: f64 = 0.6;
 /// The shade depends only on the color, so one derivation covers every cell of
 /// a rule.
 #[derive(Default)]
-pub(crate) struct LightShades(HashMap<Rc<str>, Rc<str>>);
+pub(crate) struct LightShades(HashMap<String, Rc<str>>);
 
 impl LightShades {
     /// The light shade of `color`, derived on first use.
-    fn shade(&mut self, color: &Rc<str>) -> Rc<str> {
-        let shade = self
-            .0
-            .entry(Rc::clone(color))
-            .or_insert_with(|| light_color(color));
-        Rc::clone(shade)
+    fn shade(&mut self, color: &str) -> Rc<str> {
+        // Borrow the key on a hit. Only a new color needs an owned cache key.
+        if let Some(shade) = self.0.get(color) {
+            return Rc::clone(shade);
+        }
+        let shade = light_color(color);
+        self.0.insert(color.to_owned(), Rc::clone(&shade));
+        shade
     }
 }
 
@@ -337,7 +343,7 @@ fn paint_data_bar(painter: &mut SceneBuilder, rect: PixelRect, bar: &CfDataBarPa
     };
     if bar.is_gradient && bar_width > 1 {
         // Axial side is lighter, the tip keeps the full color.
-        let (from, to) = if positive_side {
+        let (from, to): (&str, &str) = if positive_side {
             (&bar.positive_light, &bar.positive)
         } else {
             (&bar.negative, &bar.negative_light)
@@ -599,6 +605,78 @@ mod tests {
             rating: None,
         }
     }
+
+    #[test]
+    fn resolved_colors_preserve_engine_values_and_category_fallbacks() {
+        let workbook = model();
+        let theme_color = Color::Theme(4, 0.25);
+        let theme_rgb = workbook.resolve_color(&theme_color);
+        for (color, expected_glyph, expected_positive, expected_negative) in [
+            (Color::None, "#000000", "#638ec6", "#ff0000"),
+            (
+                Color::Rgb("#12Ab34".into()),
+                "#12Ab34",
+                "#12Ab34",
+                "#12Ab34",
+            ),
+            (
+                theme_color,
+                theme_rgb.as_str(),
+                theme_rgb.as_str(),
+                theme_rgb.as_str(),
+            ),
+        ] {
+            let ext = ExtendedStyle {
+                style: Style::default(),
+                icon: Some(CfIcon {
+                    icon: Icon::ArrowUp,
+                    color: color.clone(),
+                    show_value: true,
+                }),
+                data_bar: Some(CfDataBar {
+                    positive_color: color.clone(),
+                    negative_color: color.clone(),
+                    is_gradient: true,
+                    value: 1.0,
+                    axis_position: 0.5,
+                    show_value: true,
+                }),
+                rating: Some(CfRating {
+                    icon: Icon::Star,
+                    color: color.clone(),
+                    count: 3,
+                    max: 5,
+                    show_value: true,
+                }),
+            };
+            let resolved = CfDecorationPaint::resolve(&ext, &workbook);
+            assert_eq!(resolved.icon.unwrap().color, expected_glyph);
+            assert_eq!(resolved.rating.unwrap().color, expected_glyph);
+            let bar = resolved.data_bar.unwrap();
+            assert_eq!(bar.positive, expected_positive);
+            assert_eq!(bar.negative, expected_negative);
+        }
+    }
+
+    #[test]
+    fn shade_cache_shares_results_for_equal_borrowed_keys() {
+        let (first, repeated) = {
+            let mut shades = LightShades::default();
+            let color = String::from("#ff0000");
+            let first = shades.shade(&color);
+            drop(color);
+            let repeated = shades.shade(&String::from("#ff0000"));
+            assert!(Rc::ptr_eq(&first, &repeated));
+            assert_eq!(shades.0.len(), 1);
+            assert_eq!(shades.shade("#000000").as_ref(), "#999999");
+            assert_eq!(shades.0.len(), 2);
+            (first, repeated)
+        };
+        // Decorations retain their shades after the preparation cache drops.
+        assert_eq!(first.as_ref(), "#ff9999");
+        assert_eq!(repeated.as_ref(), "#ff9999");
+    }
+
     #[test]
     fn decorations_accept_tiny_placements_at_max_coordinates() {
         let mut ext = extended();

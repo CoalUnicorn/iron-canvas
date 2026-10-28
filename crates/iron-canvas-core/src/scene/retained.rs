@@ -422,7 +422,7 @@ mod tests {
             height: 20,
         };
         let color = Rc::from("#123456");
-        let path = Rc::from([
+        let path: Box<[PathCmd]> = Box::from([
             PathCmd::Move(PointF::new(2.0, 3.0)),
             PathCmd::Quad(PointF::new(4.0, 5.0), PointF::new(6.0, 7.0)),
             PathCmd::Cubic(
@@ -443,7 +443,7 @@ mod tests {
                 to: Rc::from("#abcdef"),
             },
             Primitive::FillPath {
-                path: Rc::clone(&path),
+                path: path.clone(),
                 color: Rc::clone(&color),
             },
             Primitive::StrokePath {
@@ -454,7 +454,7 @@ mod tests {
                     cap: LineCap::Round,
                     join: LineJoin::Miter,
                     miter_limit: 10.0,
-                    dash: Rc::from([3.0, 4.0]),
+                    dash: Box::from([3.0, 4.0]),
                 },
             },
             Primitive::Circle {
@@ -498,7 +498,7 @@ mod tests {
                 | Primitive::Line { color, .. }
                 | Primitive::TextLine { color, .. } => *color = Rc::from("#fedcba"),
                 Primitive::Gradient { to, .. } => *to = Rc::from("#fedcba"),
-                Primitive::StrokePath { style, .. } => style.dash = Rc::from([4.0, 3.0]),
+                Primitive::StrokePath { style, .. } => style.dash = Box::from([4.0, 3.0]),
                 Primitive::Text { font_css, .. } => *font_css = Rc::from("bold 12px sans-serif"),
                 _ => unreachable!(),
             }
@@ -539,7 +539,7 @@ mod tests {
             height: 96,
         };
         let make = |radius| Primitive::FillPath {
-            path: Rc::from([PathCmd::Arc(crate::geometry::path::ArcSpec::new(
+            path: Box::from([PathCmd::Arc(crate::geometry::path::ArcSpec::new(
                 PointF::new(20.0, 20.0),
                 radius,
                 0.2,

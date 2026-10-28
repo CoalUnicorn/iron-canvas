@@ -146,8 +146,12 @@ frame intact.
 
 ## IronCalc compiler
 
-`WorksheetCompiler::prepare(workbook, sheet, viewport, metrics, theme)` reads a
-borrowed `UserModel` and returns an owned `PreparedWorksheet`:
+`WorksheetCompiler::prepare(context, viewport, metrics)` returns an owned `PreparedWorksheet`.
+`WorksheetContext { workbook, sheet, theme }` borrows the workbook and theme.
+Each compiler entry point takes this context by value.
+Copying the context copies its references and sheet index.
+`Attempt` holds the context only during compilation.
+The prepared result retains no workbook or theme borrow:
 
 ```rust,ignore
 pub struct PreparedWorksheet {
@@ -165,7 +169,8 @@ pub struct PreparedWorksheet {
   `GridGeometry` when `bounds`, `origin`, and bands are equal, so a revision
   change need not rebuild equal geometry.
 - `prepare_with_shaper` accepts a shaper with caller-owned text storage.
-  The existing compiler entry points use a temporary text cache.
+  `WorksheetReuse` supplies optional geometry and metadata independently.
+  `prepare` and `prepare_reusing_geometry` use a temporary text cache.
 - Complete viewport preparation plans text spill before painting each row.
   Eligible unwrapped text keeps its source anchor and uses a wider clip.
   Occupied cells, merges, hidden columns, pane boundaries, and conditional-formatting
@@ -268,6 +273,25 @@ identity and clears old entries.
 `RenderOutcome::content_cached` is true only when the shared cache supplies
 content without compilation. Zero style reads alone do not prove a cache hit.
 An empty viewport can also report zero reads.
+
+Metadata means the complete sheet lists of links and merged ranges.
+The session can reuse these lists when it prepares a different viewport.
+Metadata reuse requires the same workbook identity, sheet, and content revision.
+It does not depend on viewport size, theme, or text metrics.
+The previous committed base or a shared cache entry supplies the lists.
+There is no separate metadata cache.
+Capacity zero, `clear`, pending invalidation, and `render_fresh` retain their cache bypass rules.
+The host advances the content revision after evaluation changes links or after merges change.
+Sheet insertion, deletion, and reordering also require a new content revision.
+Complete lists keep offscreen merge anchors and linked text spill available.
+The compiler still validates and scans merges during preparation.
+
+`PreparedWorksheet::metadata()` returns a borrowed `WorksheetMetadata` view.
+Explicit cell preparation returns `None` because it does not collect merges.
+`WorksheetCompiler::prepare_with_shaper` accepts `WorksheetReuse { geometry, metadata }`.
+Each field defaults to `None`. Geometry and metadata have separate validity rules.
+Direct callers check workbook identity, sheet, and revision before reuse.
+`prepare` and `prepare_reusing_geometry` collect fresh lists.
 
 GTK uses one cache with a fixed Pango metric profile. It prints cache hits and
 style reads for each draw. React sizes its cache from visible sheets. Sheet

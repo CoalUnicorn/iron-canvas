@@ -13,9 +13,9 @@ use std::{
 use iron_canvas_core::{CanvasTheme, CellCoord};
 #[cfg(any(feature = "svg", feature = "pdf"))]
 use iron_canvas_core::{painter::TextMetrics, scene::RenderBackend};
-use iron_canvas_ironcalc::WorksheetCompileError;
 #[cfg(any(feature = "svg", feature = "pdf"))]
 use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetCompiler, WorksheetViewport};
+use iron_canvas_ironcalc::{WorksheetCompileError, WorksheetContext};
 use ironcalc::import::load_from_xlsx;
 use ironcalc_base::UserModel;
 #[cfg(any(feature = "svg", feature = "pdf"))]
@@ -155,8 +155,24 @@ pub fn export_xlsx(
     let sheet = resolve_sheet(&workbook, sheet).map_err(WorkbookExportError::SheetSelection)?;
 
     match format {
-        OutputFormat::Svg => write_svg(&workbook, sheet, range, theme, output_path)?,
-        OutputFormat::Pdf => write_pdf(&workbook, sheet, range, theme, output_path)?,
+        OutputFormat::Svg => write_svg(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet,
+                theme,
+            },
+            range,
+            output_path,
+        )?,
+        OutputFormat::Pdf => write_pdf(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet,
+                theme,
+            },
+            range,
+            output_path,
+        )?,
     }
     Ok(sheet)
 }
@@ -182,14 +198,12 @@ fn output_format(path: &Path) -> Result<OutputFormat, WorkbookExportError> {
 
 #[cfg(feature = "svg")]
 fn write_svg(
-    workbook: &UserModel<'_>,
-    sheet: u32,
+    context: WorksheetContext<'_, '_>,
     range: CellRange,
-    theme: &CanvasTheme,
     output_path: &Path,
 ) -> Result<(), WorkbookExportError> {
     let mut backend = crate::SvgSceneBackend::new();
-    let prepared = prepare(workbook, sheet, range, backend.metrics(), theme)?;
+    let prepared = prepare(context, range, backend.metrics())?;
     let staged = match backend.stage_frame(&prepared.scene) {
         Ok(staged) => staged,
         Err(never) => match never {},
@@ -205,10 +219,8 @@ fn write_svg(
 
 #[cfg(not(feature = "svg"))]
 fn write_svg(
-    _workbook: &UserModel<'_>,
-    _sheet: u32,
+    _context: WorksheetContext<'_, '_>,
     _range: CellRange,
-    _theme: &CanvasTheme,
     _output_path: &Path,
 ) -> Result<(), WorkbookExportError> {
     Err(WorkbookExportError::FeatureDisabled("SVG"))
@@ -216,14 +228,12 @@ fn write_svg(
 
 #[cfg(feature = "pdf")]
 fn write_pdf(
-    workbook: &UserModel<'_>,
-    sheet: u32,
+    context: WorksheetContext<'_, '_>,
     range: CellRange,
-    theme: &CanvasTheme,
     output_path: &Path,
 ) -> Result<(), WorkbookExportError> {
     let mut backend = crate::PdfSceneBackend::new();
-    let prepared = prepare(workbook, sheet, range, backend.metrics(), theme)?;
+    let prepared = prepare(context, range, backend.metrics())?;
     let staged = match backend.stage_frame(&prepared.scene) {
         Ok(staged) => staged,
         Err(never) => match never {},
@@ -239,10 +249,8 @@ fn write_pdf(
 
 #[cfg(not(feature = "pdf"))]
 fn write_pdf(
-    _workbook: &UserModel<'_>,
-    _sheet: u32,
+    _context: WorksheetContext<'_, '_>,
     _range: CellRange,
-    _theme: &CanvasTheme,
     _output_path: &Path,
 ) -> Result<(), WorkbookExportError> {
     Err(WorkbookExportError::FeatureDisabled("PDF"))
@@ -258,16 +266,14 @@ fn write_output(output_path: &Path, document: &[u8]) -> Result<(), WorkbookExpor
 
 #[cfg(any(feature = "svg", feature = "pdf"))]
 fn prepare(
-    workbook: &UserModel<'_>,
-    sheet: u32,
+    context: WorksheetContext<'_, '_>,
     range: CellRange,
     metrics: &dyn TextMetrics,
-    theme: &CanvasTheme,
 ) -> Result<PreparedWorksheet, WorkbookExportError> {
-    let viewport = viewport_for_range(workbook, sheet, range, metrics)
+    let viewport = viewport_for_range(context.workbook, context.sheet, range, metrics)
         .map_err(WorkbookExportError::Viewport)?;
     WorksheetCompiler::new()
-        .prepare(workbook, sheet, viewport, metrics, theme)
+        .prepare(context, viewport, metrics)
         .map_err(WorkbookExportError::Compile)
 }
 

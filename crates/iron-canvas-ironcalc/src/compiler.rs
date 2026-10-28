@@ -30,6 +30,16 @@ use std::{collections::HashMap, fmt};
 const LAST_ROW: i32 = 1_048_576;
 const LAST_COLUMN: i32 = 16_384;
 
+/// Borrowed inputs for one worksheet compilation.
+/// The host retains ownership of the workbook and theme.
+/// `'a` covers these borrows. `'m` covers references inside the workbook.
+#[derive(Clone, Copy)]
+pub struct WorksheetContext<'a, 'm> {
+    pub workbook: &'a UserModel<'m>,
+    pub sheet: u32,
+    pub theme: &'a CanvasTheme,
+}
+
 /// A cell and its full logical drawing rectangle. Multiple fragments can share
 /// a coordinate; the compiler reads its engine content once per preparation.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -53,16 +63,98 @@ pub struct FrozenAxes {
     pub cols: i32,
 }
 
+/// Worksheet content and query data from [`WorksheetCompiler`].
+/// Use [`Self::cell_count`] and [`Self::cells`] to inspect placements.
+/// Regular viewports derive placements from [`Self::geometry`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedWorksheet {
     pub scene: GridScene,
-    pub cells: Rc<[CellPlacement]>,
+    // Arbitrary rectangles cannot be recovered from grid axes. Regular
+    // viewports use geometry alone and do not allocate this slice.
+    explicit_cells: Option<Rc<[CellPlacement]>>,
     pub geometry: Option<Rc<GridGeometry>>,
     pub frozen: FrozenAxes,
     pub merges: Rc<[MergedCell]>,
     pub links: Rc<[CellLinkView]>,
     /// Actual calls to `get_extended_cell_style` in this preparation.
     pub extended_style_reads: usize,
+}
+
+/// Borrowed complete link and merge lists from a prepared viewport.
+/// Reuse only for the same workbook, sheet, and content revision.
+/// Keep the source lists unchanged after compilation.
+#[derive(Debug, Clone, Copy)]
+pub struct WorksheetMetadata<'a> {
+    links: &'a Rc<[CellLinkView]>,
+    merges: &'a Rc<[MergedCell]>,
+}
+
+/// Optional inputs from an earlier compilation. The default reuses neither input.
+/// Geometry and metadata have separate validity rules.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct WorksheetReuse<'a> {
+    /// Resample dimensions and reuse this geometry only when it is equal.
+    pub geometry: Option<&'a Rc<GridGeometry>>,
+    /// Supply complete lists for the same workbook, sheet, and content revision.
+    /// Advance the revision after evaluation changes links or after merges change.
+    /// Use `None` when the revision is unknown.
+    pub metadata: Option<WorksheetMetadata<'a>>,
+}
+
+impl PreparedWorksheet {
+    /// Borrow metadata for another viewport at the same content revision.
+    /// Explicit cell preparation has no complete merge list and returns `None`.
+    pub fn metadata(&self) -> Option<WorksheetMetadata<'_>> {
+        self.explicit_cells.is_none().then_some(WorksheetMetadata {
+            links: &self.links,
+            merges: &self.merges,
+        })
+    }
+
+    /// Return the number of placements, including repeated explicit coordinates.
+    /// Exclude additional cells read for text spill and merge anchors.
+    pub fn cell_count(&self) -> usize {
+        if let Some(cells) = &self.explicit_cells {
+            cells.len()
+        } else {
+            self.geometry
+                .iter()
+                .flat_map(|geometry| &geometry.panes)
+                .map(|pane| pane.rows.len() * pane.columns.len())
+                .sum()
+        }
+    }
+
+    /// Return placements by value without allocating a list.
+    ///
+    /// Regular viewports use pane order, then row order, then column order.
+    /// Bounds include the full cell, even where the pane clips it.
+    /// Explicit placements keep their input order and rectangles.
+    /// Exclude additional cells read for text spill and merge anchors.
+    pub fn cells(&self) -> impl Iterator<Item = CellPlacement> + '_ {
+        let explicit = self
+            .explicit_cells
+            .iter()
+            .flat_map(|cells| cells.iter())
+            .copied();
+        let regular = self
+            .geometry
+            .iter()
+            .filter(|_| self.explicit_cells.is_none())
+            .flat_map(|geometry| &geometry.panes)
+            .flat_map(|pane| {
+                pane.rows.iter().flat_map(move |row| {
+                    pane.columns.iter().map(move |col| CellPlacement {
+                        coordinate: CellCoord {
+                            row: row.index,
+                            col: col.index,
+                        },
+                        bounds: composition::cell_rect(row, col),
+                    })
+                })
+            });
+        explicit.chain(regular)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,62 +199,61 @@ impl WorksheetCompiler {
     /// Compose a complete worksheet viewport with visible headers and frozen panes.
     pub fn prepare(
         &self,
-        workbook: &UserModel<'_>,
-        sheet: u32,
+        context: WorksheetContext<'_, '_>,
         viewport: WorksheetViewport,
         metrics: &dyn TextMetrics,
-        theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        self.prepare_reusing_geometry(workbook, sheet, viewport, metrics, theme, None)
+        self.prepare_reusing_geometry(context, viewport, metrics, None)
     }
 
     /// Resample dimensions after a revision, but retain equal slot buffers.
-    #[allow(clippy::too_many_arguments)]
     pub fn prepare_reusing_geometry(
         &self,
-        workbook: &UserModel<'_>,
-        sheet: u32,
+        context: WorksheetContext<'_, '_>,
         viewport: WorksheetViewport,
         metrics: &dyn TextMetrics,
-        theme: &CanvasTheme,
         geometry: Option<&Rc<GridGeometry>>,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
         let mut cache = TextLayoutCache::default();
         let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
-        self.prepare_with_shaper(workbook, sheet, viewport, &mut shaper, theme, geometry)
+        self.prepare_with_shaper(
+            context,
+            viewport,
+            &mut shaper,
+            WorksheetReuse {
+                geometry,
+                ..WorksheetReuse::default()
+            },
+        )
     }
 
-    /// Prepare with caller-owned text storage and optional geometry reuse.
+    /// Prepare with caller-owned text storage and optional geometry and metadata reuse.
     /// Bind the shaper to the same metrics that the backend uses to paint.
-    #[allow(clippy::too_many_arguments)]
+    /// Use [`WorksheetReuse::default`] for an independent compilation.
+    /// Check the validity rules on [`WorksheetReuse`] before supplying prior data.
     pub fn prepare_with_shaper(
         &self,
-        workbook: &UserModel<'_>,
-        sheet: u32,
+        context: WorksheetContext<'_, '_>,
         viewport: WorksheetViewport,
         shaper: &mut TextShaper<'_>,
-        theme: &CanvasTheme,
-        geometry: Option<&Rc<GridGeometry>>,
+        reuse: WorksheetReuse<'_>,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-        composition::prepare(workbook, sheet, viewport, shaper, theme, geometry)
+        composition::prepare(context, viewport, shaper, reuse)
     }
 
     /// Lower positioned cells into five shared paint buffers. Repeated
     /// coordinates reuse one preparation-local engine record. Text stays
     /// clipped because arbitrary placements do not establish adjacent geometry.
-    #[allow(clippy::too_many_arguments)]
     pub fn prepare_cells(
         &self,
-        workbook: &UserModel<'_>,
-        sheet: u32,
+        context: WorksheetContext<'_, '_>,
         clip: PixelRect,
         cells: impl IntoIterator<Item = CellPlacement>,
         metrics: &dyn TextMetrics,
-        theme: &CanvasTheme,
     ) -> Result<PreparedWorksheet, WorksheetCompileError> {
         let mut cache = TextLayoutCache::default();
         let mut shaper = TextShaper::new(metrics, TextMetricsKey::new(0, 0), &mut cache);
-        let mut attempt = Attempt::new(workbook, sheet, &mut shaper, theme)?;
+        let mut attempt = Attempt::new(context, &mut shaper, None)?;
         if !valid_rect(clip) {
             return Err(attempt.error(
                 CellCoord { row: 1, col: 1 },
@@ -171,7 +262,7 @@ impl WorksheetCompiler {
             ));
         }
         let mut passes = new_passes();
-        passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
+        passes[0].rect_fill(clip, PaintColor::Borrowed(&context.theme.cell_bg));
         let mut placements = Vec::new();
         for placement in cells {
             attempt.paint(placement, &mut passes, false, None, false)?;
@@ -182,11 +273,11 @@ impl WorksheetCompiler {
                 clip,
                 passes: passes.into_iter().map(SceneBuilder::finish).collect(),
             },
-            cells: placements.into(),
+            explicit_cells: Some(placements.into()),
             geometry: None,
             frozen: FrozenAxes::default(),
             merges: Rc::from([]),
-            links: attempt.links.into(),
+            links: attempt.links,
             extended_style_reads: attempt.reads,
         })
     }
@@ -208,25 +299,30 @@ struct CellRecord {
     value: String,
     occupied: bool,
 }
+
+// Lifetimes
+// 'w covers the context references and the mutable shaper borrow.
+// 'm covers references inside UserModel.
+// 's covers the metrics and cache references inside TextShaper.
 struct Attempt<'w, 'm, 's> {
-    workbook: &'w UserModel<'m>,
-    sheet: u32,
+    context: WorksheetContext<'w, 'm>,
     shaper: &'w mut TextShaper<'s>,
-    theme: &'w CanvasTheme,
     show_grid: bool,
     cached: HashMap<CellCoord, CellRecord>,
     reads: usize,
-    links: Vec<CellLinkView>,
+    links: Rc<[CellLinkView]>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
     shades: cf::LightShades,
 }
 impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
     fn new(
-        workbook: &'w UserModel<'m>,
-        sheet: u32,
+        context: WorksheetContext<'w, 'm>,
         shaper: &'w mut TextShaper<'s>,
-        theme: &'w CanvasTheme,
+        links: Option<&Rc<[CellLinkView]>>,
     ) -> Result<Self, WorksheetCompileError> {
+        let WorksheetContext {
+            workbook, sheet, ..
+        } = context;
         let err = |operation, message| WorksheetCompileError {
             sheet,
             cell: CellCoord { row: 1, col: 1 },
@@ -236,16 +332,16 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         let show_grid = workbook
             .get_show_grid_lines(sheet)
             .map_err(|e| err(CellReadOperation::Sheet, e))?;
-        let mut links = workbook
-            .get_links_list(sheet)
-            .map_err(|e| err(CellReadOperation::Links, e))?;
-        // Sort once, so the per-cell link lookup can binary search.
-        links.sort_by_key(|link| (link.row, link.column));
+        let links = match links {
+            Some(links) => Rc::clone(links),
+            None => workbook
+                .get_links_list(sheet)
+                .map_err(|e| err(CellReadOperation::Links, e))?
+                .into(),
+        };
         Ok(Self {
-            workbook,
-            sheet,
+            context,
             shaper,
-            theme,
             show_grid,
             cached: HashMap::new(),
             reads: 0,
@@ -261,7 +357,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         message: String,
     ) -> WorksheetCompileError {
         WorksheetCompileError {
-            sheet: self.sheet,
+            sheet: self.context.sheet,
             cell,
             operation,
             message,
@@ -280,16 +376,19 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         }
         self.reads += 1;
         let style = self
+            .context
             .workbook
-            .get_extended_cell_style(self.sheet, cell.row, cell.col)
+            .get_extended_cell_style(self.context.sheet, cell.row, cell.col)
             .map_err(|e| self.error(cell, CellReadOperation::ExtendedStyle, format!("{e:?}")))?;
         let kind = self
+            .context
             .workbook
-            .get_cell_type(self.sheet, cell.row, cell.col)
+            .get_cell_type(self.context.sheet, cell.row, cell.col)
             .map_err(|e| self.error(cell, CellReadOperation::CellType, e))?;
         let text = self
+            .context
             .workbook
-            .get_formatted_cell_value(self.sheet, cell.row, cell.col)
+            .get_formatted_cell_value(self.context.sheet, cell.row, cell.col)
             .map_err(|e| self.error(cell, CellReadOperation::FormattedValue, e))?;
         // Display text cannot identify empty cells: formulas and number formats
         // can hide occupied values. Inspect the stored cell without changing it.
@@ -324,12 +423,12 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         let record = &self.cached[&placement.coordinate];
         let rect = placement.bounds;
         let style = &record.extended.style;
-        let fill = self.workbook.resolve_color(&style.fill.color);
+        let fill = self.context.workbook.resolve_color(&style.fill.color);
         if merged || !fill.is_empty() {
             passes[0].rect_fill(
                 rect,
                 PaintColor::Borrowed(if fill.is_empty() {
-                    &self.theme.cell_bg
+                    &self.context.theme.cell_bg
                 } else {
                     &fill
                 }),
@@ -337,7 +436,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         }
         let cf = cf::CfDecorationPaint::resolve_memoized(
             &record.extended,
-            self.workbook,
+            self.context.workbook,
             &mut self.shades,
         );
         cf.paint(&mut passes[1], rect);
@@ -347,12 +446,11 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             borders::compile_borders(
                 &mut border_side[0],
                 &mut grid_side[2],
-                self.workbook,
+                self.context,
                 &style.border,
                 rect,
                 self.show_grid && fill.is_empty(),
                 hide_left_grid,
-                self.theme,
             );
         }
         self.paint_text(placement, &mut passes[4], spill_clip, &cf);
@@ -380,7 +478,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 .map(|index| &self.links[index]);
             text::compile_text(
                 out,
-                self.workbook,
+                self.context,
                 &record.extended.style,
                 &record.kind,
                 &record.value,
@@ -388,7 +486,6 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 cf.reserved_left(rect),
                 spill_clip,
                 self.shaper,
-                self.theme,
                 link,
                 &mut self.lines,
             );

@@ -3,7 +3,9 @@
 use iron_canvas_core::{
     CanvasTheme, CellCoord, Line, PixelRect, Side, painter::TextMetrics, scene::Primitive,
 };
-use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetCompiler, WorksheetViewport};
+use iron_canvas_ironcalc::{
+    PreparedWorksheet, WorksheetCompiler, WorksheetContext, WorksheetViewport,
+};
 use ironcalc_base::{
     UserModel,
     expressions::types::Area,
@@ -61,23 +63,24 @@ fn border(model: &mut UserModel<'_>, row: i32, col: i32, side: Side) {
 fn prepare(model: &UserModel<'_>, first: i32, width: i32) -> PreparedWorksheet {
     WorksheetCompiler::new()
         .prepare(
-            model,
-            0,
+            WorksheetContext {
+                workbook: model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             WorksheetViewport {
                 first_cell: CellCoord { row: 1, col: first },
                 width,
                 height: 120,
             },
             &Metrics,
-            &CanvasTheme::light(),
         )
         .unwrap()
 }
 
 fn rect(frame: &PreparedWorksheet, row: i32, col: i32) -> PixelRect {
     frame
-        .cells
-        .iter()
+        .cells()
         .find(|cell| cell.coordinate == CellCoord { row, col })
         .unwrap()
         .bounds
@@ -255,7 +258,7 @@ fn offscreen_sources_cross_formatted_empty_cells_but_stop_at_hidden_columns() {
         }
         let frame = prepare(&model, first, 198);
         assert_eq!(text_paint(&frame, TEXT), expected);
-        assert!(!frame.cells.iter().any(|cell| cell.coordinate.col == source));
+        assert!(!frame.cells().any(|cell| cell.coordinate.col == source));
         let hidden = if source == 1 { 2 } else { 6 };
         model.set_columns_hidden(0, hidden, hidden, true).unwrap();
         assert!(text_paint(&prepare(&model, first, 198), TEXT).is_empty());
@@ -428,8 +431,8 @@ fn sources_outside_both_viewport_edges_reach_visible_empty_cells() {
         let paint = text_paint(&frame, TEXT);
         assert_eq!(paint.len(), 1);
         assert!(paint[0].0.width > 0);
-        assert!(!frame.cells.iter().any(|cell| cell.coordinate.col == col));
-        assert!(frame.extended_style_reads <= frame.cells.len() + 2);
+        assert!(!frame.cells().any(|cell| cell.coordinate.col == col));
+        assert!(frame.extended_style_reads <= frame.cell_count() + 2);
     }
 }
 
@@ -440,10 +443,10 @@ fn offscreen_search_and_spill_distance_stop_at_64_columns() {
     model.set_user_input(0, 1, 1, &long).unwrap();
     let within = prepare(&model, 65, 198);
     assert_eq!(text_paint(&within, &long)[0].0.width, 50);
-    assert_eq!(within.extended_style_reads, within.cells.len() + 64);
+    assert_eq!(within.extended_style_reads, within.cell_count() + 64);
     let beyond = prepare(&model, 66, 198);
     assert!(text_paint(&beyond, &long).is_empty());
-    assert_eq!(beyond.extended_style_reads, beyond.cells.len());
+    assert_eq!(beyond.extended_style_reads, beyond.cell_count());
 
     let wide = prepare(&model, 1, 5048);
     assert_eq!(
@@ -540,7 +543,15 @@ fn svg_and_pdf_emit_the_spill_clip_selected_with_their_own_metrics() {
 
     let mut svg = SvgSceneBackend::new();
     let frame = WorksheetCompiler::new()
-        .prepare(&model, 0, viewport, svg.metrics(), &CanvasTheme::light())
+        .prepare(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            svg.metrics(),
+        )
         .unwrap();
     let clip = text_paint(&frame, TEXT)[0].0;
     assert!(clip.width > rect(&frame, 1, 1).width);
@@ -555,7 +566,15 @@ fn svg_and_pdf_emit_the_spill_clip_selected_with_their_own_metrics() {
 
     let mut pdf = PdfSceneBackend::new();
     let frame = WorksheetCompiler::new()
-        .prepare(&model, 0, viewport, pdf.metrics(), &CanvasTheme::light())
+        .prepare(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            pdf.metrics(),
+        )
         .unwrap();
     let clip = text_paint(&frame, TEXT)[0].0;
     assert!(clip.width > rect(&frame, 1, 1).width);

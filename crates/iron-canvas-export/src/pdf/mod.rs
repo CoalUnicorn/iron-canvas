@@ -2,10 +2,9 @@
 //! and the scene-assembly helper (`surface`).
 //!
 //! `PdfPainter` translates `Painter`/`BlitPainter`/`TextMetrics` calls
-//! into PDF content-stream ops and accumulates them in a shared
-//! `Rc<RefCell<ContentStream>>`. `PdfSurface::build_document` wraps a
-//! populated stream in the page-open CTM and emits a complete single-page
-//! document.
+//! into PDF content-stream ops and accumulates them in an owned buffer.
+//! `PdfPainter::finish` consumes the painter and assembles its stream and
+//! gradient registry into a complete single-page document.
 
 pub mod doc;
 pub mod painter;

@@ -1,8 +1,12 @@
 use iron_canvas_core::{
-    CanvasTheme, CellCoord, PixelRect, Point, painter::TextMetrics, scene::Primitive,
+    CanvasTheme, CellCoord, PixelRect, Point,
+    painter::TextMetrics,
+    scene::Primitive,
+    text_shaper::{TextLayoutCache, TextMetricsKey, TextShaper},
 };
 use iron_canvas_ironcalc::{
-    CellPlacement, PreparedWorksheet, WorksheetCompiler, WorksheetViewport,
+    CellPlacement, PreparedWorksheet, WorksheetCompiler, WorksheetContext, WorksheetReuse,
+    WorksheetViewport,
 };
 use ironcalc_base::UserModel;
 use ironcalc_base::expressions::types::Area;
@@ -25,15 +29,17 @@ fn rect() -> PixelRect {
 fn prepared(workbook: &UserModel<'_>) -> PreparedWorksheet {
     WorksheetCompiler::new()
         .prepare(
-            workbook,
-            0,
+            WorksheetContext {
+                workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             WorksheetViewport {
                 first_cell: CellCoord { row: 1, col: 1 },
                 width: 100,
                 height: 30,
             },
             &Metrics,
-            &CanvasTheme::light(),
         )
         .unwrap()
 }
@@ -43,6 +49,228 @@ fn external(target: &str) -> ic::Link {
         target: target.to_string(),
         tooltip: None,
     }
+}
+
+#[test]
+fn geometry_and_metadata_reuse_remain_independent() {
+    let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    workbook.set_user_input(0, 1, 1, "visible").unwrap();
+    // Keep metadata outside the viewport to check that reuse retains complete lists.
+    workbook
+        .set_cell_link(0, 100, 1, external("https://example.com"), None)
+        .unwrap();
+    workbook
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 100,
+            column: 3,
+            width: 2,
+            height: 1,
+        })
+        .unwrap();
+    let source = prepared(&workbook);
+    assert!(!source.links.is_empty());
+    assert!(!source.merges.is_empty());
+    let compiler = WorksheetCompiler::new();
+    let theme = CanvasTheme::light();
+
+    for reuse_geometry in [false, true] {
+        for reuse_metadata in [false, true] {
+            let mut reuse = WorksheetReuse::default();
+            if reuse_geometry {
+                reuse.geometry = source.geometry.as_ref();
+            }
+            if reuse_metadata {
+                reuse.metadata = source.metadata();
+            }
+            let mut cache = TextLayoutCache::default();
+            let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut cache);
+            let result = compiler
+                .prepare_with_shaper(
+                    WorksheetContext {
+                        workbook: &workbook,
+                        sheet: 0,
+                        theme: &theme,
+                    },
+                    WorksheetViewport {
+                        first_cell: CellCoord { row: 1, col: 1 },
+                        width: 100,
+                        height: 30,
+                    },
+                    &mut shaper,
+                    reuse,
+                )
+                .unwrap();
+
+            assert_eq!(result, source);
+            assert_eq!(
+                std::rc::Rc::ptr_eq(
+                    result.geometry.as_ref().unwrap(),
+                    source.geometry.as_ref().unwrap(),
+                ),
+                reuse_geometry,
+            );
+            assert_eq!(
+                std::rc::Rc::ptr_eq(&result.links, &source.links),
+                reuse_metadata
+            );
+            assert_eq!(
+                std::rc::Rc::ptr_eq(&result.merges, &source.merges),
+                reuse_metadata
+            );
+        }
+    }
+}
+
+#[test]
+fn viewport_placements_keep_pane_order_and_full_bounds() {
+    let mut workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    workbook.set_rows_height(0, 1, 10, 24.0).unwrap();
+    workbook.set_columns_width(0, 1, 10, 60.0).unwrap();
+    workbook.set_frozen_rows_count(0, 2).unwrap();
+    workbook.set_frozen_columns_count(0, 2).unwrap();
+    workbook.set_rows_hidden(0, 2, 2, true).unwrap();
+    workbook.set_columns_hidden(0, 2, 2, true).unwrap();
+    let viewport = WorksheetViewport {
+        first_cell: CellCoord { row: 5, col: 5 },
+        width: 180,
+        height: 82,
+    };
+    let prepared = WorksheetCompiler::new()
+        .prepare(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            &Metrics,
+        )
+        .unwrap();
+
+    // The last row and column cross the viewport edge. Their placements
+    // retain full bounds so callers can position text before clipping.
+    let expected: Vec<_> = [
+        (1, 1, 48, 24),
+        (1, 5, 108, 24),
+        (1, 6, 168, 24),
+        (5, 1, 48, 48),
+        (6, 1, 48, 72),
+        (5, 5, 108, 48),
+        (5, 6, 168, 48),
+        (6, 5, 108, 72),
+        (6, 6, 168, 72),
+    ]
+    .into_iter()
+    .map(|(row, col, x, y)| CellPlacement {
+        coordinate: CellCoord { row, col },
+        bounds: PixelRect {
+            top_left: Point { x, y },
+            width: 60,
+            height: 24,
+        },
+    })
+    .collect();
+    assert_eq!(prepared.cell_count(), expected.len());
+    assert_eq!(prepared.cells().collect::<Vec<_>>(), expected);
+
+    let reused = WorksheetCompiler::new()
+        .prepare_reusing_geometry(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            &Metrics,
+            prepared.geometry.as_ref(),
+        )
+        .unwrap();
+    assert!(std::rc::Rc::ptr_eq(
+        prepared.geometry.as_ref().unwrap(),
+        reused.geometry.as_ref().unwrap(),
+    ));
+    drop(prepared);
+    assert_eq!(reused.clone().cells().collect::<Vec<_>>(), expected);
+}
+
+#[test]
+fn explicit_placements_keep_input_order_rectangles_and_repeated_coordinates() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    let first = CellPlacement {
+        coordinate: CellCoord { row: 2, col: 1 },
+        bounds: rect(),
+    };
+    let second = CellPlacement {
+        coordinate: CellCoord { row: 1, col: 1 },
+        bounds: rect(),
+    };
+    let third = CellPlacement {
+        bounds: PixelRect {
+            top_left: Point { x: -20, y: 10 },
+            width: 140,
+            height: 40,
+        },
+        ..first
+    };
+    let placements = [first, second, third];
+    let prepared = WorksheetCompiler::new()
+        .prepare_cells(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            rect(),
+            placements,
+            &Metrics,
+        )
+        .unwrap();
+    assert!(prepared.geometry.is_none());
+    assert!(prepared.metadata().is_none());
+    assert_eq!(prepared.extended_style_reads, 2);
+    assert_eq!(prepared.cell_count(), placements.len());
+    let cloned = prepared.clone();
+    drop(prepared);
+    assert_eq!(cloned.cells().collect::<Vec<_>>(), placements);
+}
+
+#[test]
+fn empty_viewports_and_explicit_input_have_no_placements() {
+    let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
+    for (width, height) in [(0, 0), (0, 100), (100, 0), (48, 100), (100, 24)] {
+        let prepared = WorksheetCompiler::new()
+            .prepare(
+                WorksheetContext {
+                    workbook: &workbook,
+                    sheet: 0,
+                    theme: &CanvasTheme::light(),
+                },
+                WorksheetViewport {
+                    first_cell: CellCoord { row: 1, col: 1 },
+                    width,
+                    height,
+                },
+                &Metrics,
+            )
+            .unwrap();
+        assert_eq!(prepared.cell_count(), 0);
+        assert_eq!(prepared.cells().next(), None);
+    }
+    let explicit = WorksheetCompiler::new()
+        .prepare_cells(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            rect(),
+            [],
+            &Metrics,
+        )
+        .unwrap();
+    assert_eq!(explicit.cell_count(), 0);
+    assert_eq!(explicit.cells().next(), None);
 }
 
 #[test]
@@ -56,16 +284,18 @@ fn compiler_reads_each_distinct_cell_once_without_changing_workbook_or_view() {
     };
     let prepared = WorksheetCompiler::new()
         .prepare_cells(
-            &workbook,
-            0,
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             rect(),
             [placement, placement],
             &Metrics,
-            &CanvasTheme::light(),
         )
         .unwrap();
     assert_eq!(prepared.extended_style_reads, 1);
-    assert_eq!(prepared.cells.len(), 2);
+    assert_eq!(prepared.cell_count(), 2);
     assert_eq!(workbook.to_bytes(), before);
     assert!(
         prepared.scene.passes[4]
@@ -96,8 +326,11 @@ fn explicit_black_font_color_is_preserved_on_dark_theme() {
     let theme = CanvasTheme::dark();
     let prepared = WorksheetCompiler::new()
         .prepare_cells(
-            &workbook,
-            0,
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &theme,
+            },
             rect(),
             [
                 CellPlacement {
@@ -110,7 +343,6 @@ fn explicit_black_font_color_is_preserved_on_dark_theme() {
                 },
             ],
             &Metrics,
-            &theme,
         )
         .unwrap();
     let text_colors: Vec<_> = prepared.scene.passes[4]
@@ -131,27 +363,31 @@ fn invalid_sheet_is_rejected_even_without_cells() {
     assert!(
         WorksheetCompiler::new()
             .prepare_cells(
-                &workbook,
-                u32::MAX,
+                WorksheetContext {
+                    workbook: &workbook,
+                    sheet: u32::MAX,
+                    theme: &CanvasTheme::light()
+                },
                 rect(),
                 [],
                 &Metrics,
-                &CanvasTheme::light()
             )
             .is_err()
     );
     assert!(
         WorksheetCompiler::new()
             .prepare(
-                &workbook,
-                u32::MAX,
+                WorksheetContext {
+                    workbook: &workbook,
+                    sheet: u32::MAX,
+                    theme: &CanvasTheme::light()
+                },
                 WorksheetViewport {
                     first_cell: CellCoord { row: 1, col: 1 },
                     width: 0,
                     height: 0
                 },
                 &Metrics,
-                &CanvasTheme::light()
             )
             .is_err()
     );
@@ -171,7 +407,16 @@ fn invalid_late_coordinate_returns_an_error_instead_of_partial_scene() {
         },
     ];
     let error = WorksheetCompiler::new()
-        .prepare_cells(&workbook, 0, rect(), cells, &Metrics, &CanvasTheme::light())
+        .prepare_cells(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            rect(),
+            cells,
+            &Metrics,
+        )
         .unwrap_err();
     assert_eq!(error.cell.row, 0);
 }
@@ -181,8 +426,11 @@ fn zero_width_placement_at_max_coordinate_is_ignored_safely() {
     let workbook = UserModel::new_empty("workbook", "en", "UTC", "en").unwrap();
     let prepared = WorksheetCompiler::new()
         .prepare_cells(
-            &workbook,
-            0,
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             rect(),
             [CellPlacement {
                 coordinate: CellCoord { row: 1, col: 1 },
@@ -193,11 +441,10 @@ fn zero_width_placement_at_max_coordinate_is_ignored_safely() {
                 },
             }],
             &Metrics,
-            &CanvasTheme::light(),
         )
         .unwrap();
 
-    assert_eq!(prepared.cells.len(), 1);
+    assert_eq!(prepared.cell_count(), 1);
 }
 
 #[test]
@@ -223,15 +470,17 @@ fn one_pixel_placement_at_max_coordinate_is_ignored_safely() {
     ] {
         WorksheetCompiler::new()
             .prepare_cells(
-                &workbook,
-                0,
+                WorksheetContext {
+                    workbook: &workbook,
+                    sheet: 0,
+                    theme: &CanvasTheme::light(),
+                },
                 rect(),
                 [CellPlacement {
                     coordinate: CellCoord { row: 1, col: 1 },
                     bounds,
                 }],
                 &Metrics,
-                &CanvasTheme::light(),
             )
             .unwrap();
     }
@@ -246,15 +495,17 @@ fn explicit_sheet_does_not_change_selection() {
     let before = workbook.to_bytes();
     let result = WorksheetCompiler::new()
         .prepare(
-            &workbook,
-            0,
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
             WorksheetViewport {
                 first_cell: CellCoord { row: 1, col: 1 },
                 width: 100,
                 height: 30,
             },
             &Metrics,
-            &CanvasTheme::light(),
         )
         .unwrap();
     assert!(
@@ -437,15 +688,17 @@ fn linked_cells_paint_the_link_color_and_an_underline() {
     let paint = |row: i32| -> (String, usize, usize) {
         let prepared = WorksheetCompiler::new()
             .prepare_cells(
-                &workbook,
-                0,
+                WorksheetContext {
+                    workbook: &workbook,
+                    sheet: 0,
+                    theme: &theme,
+                },
                 rect(),
                 [CellPlacement {
                     coordinate: CellCoord { row, col: 1 },
                     bounds: rect(),
                 }],
                 &Metrics,
-                &theme,
             )
             .expect("cell preparation");
         let mut color = String::new();

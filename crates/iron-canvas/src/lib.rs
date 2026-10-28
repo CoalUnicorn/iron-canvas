@@ -23,7 +23,8 @@ use iron_canvas_core::CanvasTheme;
 pub use iron_canvas_core::scene::RenderBackend;
 use iron_canvas_core::text_shaper::{TextLayoutCache, TextShaper};
 use iron_canvas_ironcalc::{
-    PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetViewport,
+    PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetContext, WorksheetReuse,
+    WorksheetViewport,
 };
 use ironcalc_base::UserModel;
 
@@ -31,6 +32,8 @@ use ironcalc_base::UserModel;
 ///
 /// Replacing a workbook requires a new `workbook_id`, even if its revision
 /// starts at zero.
+/// Advance the revision after content or geometry changes, including evaluated
+/// link targets, link presence, merges, and sheet insertion, deletion, or order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RevisionToken {
     pub workbook_id: u64,
@@ -245,6 +248,24 @@ impl<B: RenderBackend> CanvasSession<B> {
             CacheLookup::Content(base) | CacheLookup::Geometry(base) => base.geometry.as_ref(),
             CacheLookup::Miss => None,
         };
+        // A viewport or metric change needs new content but can keep the full
+        // sheet metadata. Use only committed data with an exact revision match.
+        // Fresh, invalidation, and a disabled shared cache retain their bypass.
+        let metadata = if force {
+            None
+        } else {
+            match &source {
+                ContentSource::Previous => cached
+                    .filter(|(committed, _)| {
+                        committed.request.sheet == request.sheet
+                            && committed.request.revision == request.revision
+                    })
+                    .map(|(_, reuse)| &reuse.base),
+                ContentSource::Cache(cache, _) => cache.metadata(request),
+                ContentSource::Fresh => None,
+            }
+        }
+        .and_then(PreparedWorksheet::metadata);
         let content_reused = matches!(lookup, CacheLookup::Content(_));
         let content_cached = content_reused && matches!(source, ContentSource::Cache(_, _));
         let base = match lookup {
@@ -252,12 +273,17 @@ impl<B: RenderBackend> CanvasSession<B> {
             CacheLookup::Geometry(_) | CacheLookup::Miss => self
                 .compiler
                 .prepare_with_shaper(
-                    workbook,
-                    request.sheet,
+                    WorksheetContext {
+                        workbook,
+                        sheet: request.sheet,
+                        theme: &request.theme,
+                    },
                     request.viewport,
                     &mut shaper,
-                    &request.theme,
-                    donor,
+                    WorksheetReuse {
+                        geometry: donor,
+                        metadata,
+                    },
                 )
                 .map_err(RenderError::Preparation)?,
         };
@@ -339,7 +365,7 @@ impl<B: RenderBackend> CanvasSession<B> {
             sequence,
             sheet: request.sheet,
             revision: request.revision,
-            cell_count: worksheet.cells.len(),
+            cell_count: worksheet.cell_count(),
             extended_style_reads: reads,
             content_cached,
             reused_geometry,
@@ -347,6 +373,13 @@ impl<B: RenderBackend> CanvasSession<B> {
         };
         // Publish cache truth only after the backend accepts the whole frame.
         // A failed attempt also keeps the explicit invalidation pending.
+        // Clone only when an enabled shared cache needs another owner.
+        // Move the original into session reuse in every case.
+        if let ContentSource::Cache(cache, key) = source
+            && cache.capacity() > 0
+        {
+            cache.publish(request, key, base.clone());
+        }
         self.committed = Some(Committed {
             frame: PreparedWorksheetFrame {
                 sequence,
@@ -356,14 +389,11 @@ impl<B: RenderBackend> CanvasSession<B> {
             },
             request: request.clone(),
             reuse: Some(Reuse {
-                base: base.clone(),
+                base,
                 fingerprint,
                 metrics_key,
             }),
         });
-        if let ContentSource::Cache(cache, key) = source {
-            cache.publish(request, key, base);
-        }
         self.next_sequence = next_sequence;
         self.invalidated = false;
         Ok(outcome)

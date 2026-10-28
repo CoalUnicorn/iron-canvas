@@ -2,7 +2,8 @@ use super::*;
 use iron_canvas_core::{
     Axis, Point, Side,
     painter::{TextAlign, TextBaseline},
-    scene_geometry::{AxisCell, AxisError, GridGeometry, GridRange, sample_bands},
+    scene::Primitive,
+    scene_geometry::{AxisCell, AxisError, GridGeometry, GridPane, GridRange, sample_bands},
 };
 use ironcalc_base::{expressions::utils::number_to_column, types::Border};
 
@@ -19,16 +20,63 @@ const HEADER_LABEL_PADDING: i32 = 16;
 /// Floor for the row-header strip width.
 const MIN_HEADER_WIDTH: i32 = 48;
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn prepare(
-    workbook: &UserModel<'_>,
-    sheet: u32,
+    context: WorksheetContext<'_, '_>,
     viewport: WorksheetViewport,
     shaper: &mut TextShaper<'_>,
-    theme: &CanvasTheme,
-    previous: Option<&Rc<GridGeometry>>,
+    reuse: WorksheetReuse<'_>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-    let mut attempt = Attempt::new(workbook, sheet, shaper, theme)?;
+    let WorksheetContext {
+        workbook,
+        sheet,
+        theme,
+    } = context;
+    let WorksheetReuse {
+        geometry: previous,
+        metadata,
+    } = reuse;
+    let mut attempt = Attempt::new(context, shaper, metadata.map(|data| data.links))?;
+    let (frozen, merges) = read_structure(&attempt, viewport, metadata)?;
+    let mut dimensions = Dimensions {
+        workbook,
+        sheet,
+        rows: HashMap::new(),
+        cols: HashMap::new(),
+    };
+    let geometry = prepare_geometry(&mut attempt, viewport, frozen, &mut dimensions, previous)?;
+
+    // Draw ordinary cells first. Merges cover their contents and reuse their records.
+    let mut scene = paint_cells(&mut attempt, &geometry, frozen, &merges, &mut dimensions)?;
+    paint_merges(
+        &mut attempt,
+        &geometry,
+        &merges,
+        &mut dimensions,
+        &mut scene,
+    )?;
+    scene
+        .passes
+        .push(paint_headers_and_separators(&geometry, theme));
+
+    // Keep query data in engine types. All reads stop before staging starts.
+    Ok(PreparedWorksheet {
+        scene,
+        explicit_cells: None,
+        geometry: Some(geometry),
+        frozen,
+        merges,
+        links: attempt.links,
+        extended_style_reads: attempt.reads,
+    })
+}
+
+fn read_structure(
+    attempt: &Attempt<'_, '_, '_>,
+    viewport: WorksheetViewport,
+    metadata: Option<WorksheetMetadata<'_>>,
+) -> Result<(FrozenAxes, Rc<[MergedCell]>), WorksheetCompileError> {
+    let workbook = attempt.context.workbook;
+    let sheet = attempt.context.sheet;
     let first = viewport.first_cell;
     if !(1..=LAST_ROW).contains(&first.row)
         || !(1..=LAST_COLUMN).contains(&first.col)
@@ -48,10 +96,14 @@ pub(super) fn prepare(
     let frozen_cols = workbook
         .get_frozen_columns_count(sheet)
         .map_err(|e| err(CellReadOperation::Freeze, e))?;
-    let merges = workbook
-        .get_merged_cells(sheet)
-        .map_err(|e| err(CellReadOperation::Merges, e))?;
-    for merge in &merges {
+    let merges: Rc<[MergedCell]> = match metadata {
+        Some(data) => Rc::clone(data.merges),
+        None => workbook
+            .get_merged_cells(sheet)
+            .map_err(|e| err(CellReadOperation::Merges, e))?
+            .into(),
+    };
+    for merge in merges.iter() {
         if merge.row < 1
             || merge.column < 1
             || merge.width < 1
@@ -71,22 +123,34 @@ pub(super) fn prepare(
             ));
         }
     }
-    let mut dimensions = Dimensions {
-        workbook,
-        sheet,
-        rows: HashMap::new(),
-        cols: HashMap::new(),
-    };
+    Ok((
+        FrozenAxes {
+            rows: frozen_rows,
+            cols: frozen_cols,
+        },
+        merges,
+    ))
+}
+
+fn prepare_geometry(
+    attempt: &mut Attempt<'_, '_, '_>,
+    viewport: WorksheetViewport,
+    frozen: FrozenAxes,
+    dimensions: &mut Dimensions<'_, '_>,
+    previous: Option<&Rc<GridGeometry>>,
+) -> Result<Rc<GridGeometry>, WorksheetCompileError> {
+    let first = viewport.first_cell;
+    // Sample rows first. Their labels set the width of the row headers.
     let header_height = HEADER_STRIP_HEIGHT.min(viewport.height);
     let rows = sample_bands(
         first.row,
         LAST_ROW,
-        frozen_rows,
+        frozen.rows,
         header_height,
         viewport.height - header_height,
         |i| dimensions.extent(Axis::Row, i),
     )
-    .map_err(|e| axis_error(sheet, first, Axis::Row, e))?;
+    .map_err(|e| axis_error(attempt.context.sheet, first, Axis::Row, e))?;
     let label = rows
         .iter()
         .flat_map(|b| b.cells.iter())
@@ -105,12 +169,12 @@ pub(super) fn prepare(
     let columns = sample_bands(
         first.col,
         LAST_COLUMN,
-        frozen_cols,
+        frozen.cols,
         header_width,
         viewport.width - header_width,
         |i| dimensions.extent(Axis::Column, i),
     )
-    .map_err(|e| axis_error(sheet, first, Axis::Column, e))?;
+    .map_err(|e| axis_error(attempt.context.sheet, first, Axis::Column, e))?;
     let clip = PixelRect {
         top_left: Point { x: 0, y: 0 },
         width: viewport.width,
@@ -130,6 +194,16 @@ pub(super) fn prepare(
     } else {
         Rc::new(GridGeometry::new(clip, origin, rows, columns))
     };
+    Ok(geometry)
+}
+
+fn paint_cells(
+    attempt: &mut Attempt<'_, '_, '_>,
+    geometry: &GridGeometry,
+    frozen: FrozenAxes,
+    merges: &[MergedCell],
+    dimensions: &mut Dimensions<'_, '_>,
+) -> Result<GridScene, WorksheetCompileError> {
     let cell_count: usize = geometry
         .panes
         .iter()
@@ -143,8 +217,10 @@ pub(super) fn prepare(
             _ => 0,
         })
     });
-    passes[0].rect_fill(clip, PaintColor::Borrowed(&theme.cell_bg));
-    let mut cells = Vec::with_capacity(cell_count);
+    passes[0].rect_fill(
+        geometry.bounds,
+        PaintColor::Borrowed(&attempt.context.theme.cell_bg),
+    );
     for pane in &geometry.panes {
         for pass in &mut passes {
             pass.push_clip(pane.clip);
@@ -153,14 +229,14 @@ pub(super) fn prepare(
             let limits = if pane
                 .columns
                 .first()
-                .is_some_and(|column| column.index <= frozen_cols)
+                .is_some_and(|column| column.index <= frozen.cols)
             {
-                (1, frozen_cols)
+                (1, frozen.cols)
             } else {
-                (frozen_cols + 1, LAST_COLUMN)
+                (frozen.cols + 1, LAST_COLUMN)
             };
             let spill =
-                attempt.plan_spill(row, &pane.columns, pane.clip, limits, &merges, |index| {
+                attempt.plan_spill(row, &pane.columns, pane.clip, limits, merges, |index| {
                     dimensions
                         .extent(Axis::Column, index)
                         .map(|value| value as i32)
@@ -180,7 +256,6 @@ pub(super) fn prepare(
                     spill.clip(cell.coordinate),
                     spill.hides_grid(col.start),
                 )?;
-                cells.push(cell);
             }
             for source in &spill.sources {
                 if pane
@@ -190,7 +265,7 @@ pub(super) fn prepare(
                 {
                     let cf = cf::CfDecorationPaint::resolve(
                         &attempt.cached[&source.placement.coordinate].extended,
-                        workbook,
+                        attempt.context.workbook,
                     );
                     attempt.paint_text(source.placement, &mut passes[4], Some(source.clip), &cf);
                 }
@@ -200,13 +275,22 @@ pub(super) fn prepare(
             pass.pop_clip();
         }
     }
-    let mut scene = GridScene {
-        clip,
+    Ok(GridScene {
+        clip: geometry.bounds,
         passes: passes.into_iter().map(SceneBuilder::finish).collect(),
-    };
+    })
+}
+
+fn paint_merges(
+    attempt: &mut Attempt<'_, '_, '_>,
+    geometry: &GridGeometry,
+    merges: &[MergedCell],
+    dimensions: &mut Dimensions<'_, '_>,
+    scene: &mut GridScene,
+) -> Result<(), WorksheetCompileError> {
     // Merges cover the completed ordinary-cell passes. Each pane uses the
     // same logical merge rectangle, translated by that pane's axis samples.
-    for merge in &merges {
+    for merge in merges.iter() {
         let range = merge_range(*merge);
         for fragment in geometry.fragments(range) {
             let pane = &geometry.panes[fragment.pane];
@@ -238,70 +322,12 @@ pub(super) fn prepare(
                 false,
             )?;
             let show_merge_grid = attempt.show_grid
-                && workbook
+                && attempt
+                    .context
+                    .workbook
                     .resolve_color(&attempt.cached[&range.first].extended.style.fill.color)
                     .is_empty();
-            // IronCalc stores the border on each perimeter cell. Reuse the
-            // records fetched by the ordinary pass, including partial edges.
-            for row in pane.rows.iter() {
-                if !(range.first.row..=range.last.row).contains(&row.index) {
-                    continue;
-                }
-                for col in pane.columns.iter() {
-                    if !(range.first.col..=range.last.col).contains(&col.index) {
-                        continue;
-                    }
-                    let coord = CellCoord {
-                        row: row.index,
-                        col: col.index,
-                    };
-                    let record = &attempt.cached[&coord];
-                    let b = &record.extended.style.border;
-                    let border = Border {
-                        left: (coord.col == range.first.col)
-                            .then(|| b.left.clone())
-                            .flatten(),
-                        right: (coord.col == range.last.col)
-                            .then(|| b.right.clone())
-                            .flatten(),
-                        top: (coord.row == range.first.row)
-                            .then(|| b.top.clone())
-                            .flatten(),
-                        bottom: (coord.row == range.last.row)
-                            .then(|| b.bottom.clone())
-                            .flatten(),
-                        ..Default::default()
-                    };
-                    let rect = cell_rect(row, col);
-                    let (grid_side, border_side) = merged_passes.split_at_mut(3);
-                    borders::compile_borders(
-                        &mut border_side[0],
-                        &mut grid_side[2],
-                        workbook,
-                        &border,
-                        rect,
-                        false,
-                        false,
-                        theme,
-                    );
-                    if show_merge_grid {
-                        for (edge, side, item) in [
-                            (coord.col == range.first.col, Side::Left, &border.left),
-                            (coord.col == range.last.col, Side::Right, &border.right),
-                            (coord.row == range.first.row, Side::Top, &border.top),
-                            (coord.row == range.last.row, Side::Bottom, &border.bottom),
-                        ] {
-                            if edge && item.is_none() {
-                                merged_passes[2].stroke_line(
-                                    side.line(rect),
-                                    PaintColor::Borrowed(&theme.grid_color),
-                                    1.0,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
+            paint_merge_borders(attempt, pane, range, show_merge_grid, &mut merged_passes);
             for pass in &mut merged_passes {
                 pass.pop_clip();
             }
@@ -310,6 +336,79 @@ pub(super) fn prepare(
                 .extend(merged_passes.into_iter().map(SceneBuilder::finish));
         }
     }
+    Ok(())
+}
+
+fn paint_merge_borders(
+    attempt: &Attempt<'_, '_, '_>,
+    pane: &GridPane,
+    range: GridRange,
+    show_merge_grid: bool,
+    passes: &mut [SceneBuilder; 5],
+) {
+    // IronCalc stores the border on each perimeter cell. Reuse the
+    // records fetched by the ordinary pass, including partial edges.
+    for row in pane.rows.iter() {
+        if !(range.first.row..=range.last.row).contains(&row.index) {
+            continue;
+        }
+        for col in pane.columns.iter() {
+            if !(range.first.col..=range.last.col).contains(&col.index) {
+                continue;
+            }
+            let coord = CellCoord {
+                row: row.index,
+                col: col.index,
+            };
+            let record = &attempt.cached[&coord];
+            let b = &record.extended.style.border;
+            let border = Border {
+                left: (coord.col == range.first.col)
+                    .then(|| b.left.clone())
+                    .flatten(),
+                right: (coord.col == range.last.col)
+                    .then(|| b.right.clone())
+                    .flatten(),
+                top: (coord.row == range.first.row)
+                    .then(|| b.top.clone())
+                    .flatten(),
+                bottom: (coord.row == range.last.row)
+                    .then(|| b.bottom.clone())
+                    .flatten(),
+                ..Default::default()
+            };
+            let rect = cell_rect(row, col);
+            let (grid_side, border_side) = passes.split_at_mut(3);
+            borders::compile_borders(
+                &mut border_side[0],
+                &mut grid_side[2],
+                attempt.context,
+                &border,
+                rect,
+                false,
+                false,
+            );
+            if show_merge_grid {
+                for (edge, side, item) in [
+                    (coord.col == range.first.col, Side::Left, &border.left),
+                    (coord.col == range.last.col, Side::Right, &border.right),
+                    (coord.row == range.first.row, Side::Top, &border.top),
+                    (coord.row == range.last.row, Side::Bottom, &border.bottom),
+                ] {
+                    if edge && item.is_none() {
+                        passes[2].stroke_line(
+                            side.line(rect),
+                            PaintColor::Borrowed(&attempt.context.theme.grid_color),
+                            1.0,
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn paint_headers_and_separators(geometry: &GridGeometry, theme: &CanvasTheme) -> Rc<[Primitive]> {
     let mut chrome = SceneBuilder::default();
     for (axis, bands) in [
         (Axis::Row, &geometry.row_bands),
@@ -320,19 +419,19 @@ pub(super) fn prepare(
             let rect = match axis {
                 Axis::Row => PixelRect {
                     top_left: Point {
-                        x: header_width,
+                        x: geometry.origin.x,
                         y: split,
                     },
-                    width: viewport.width - header_width,
+                    width: geometry.bounds.width - geometry.origin.x,
                     height: 0,
                 },
                 Axis::Column => PixelRect {
                     top_left: Point {
                         x: split,
-                        y: header_height,
+                        y: geometry.origin.y,
                     },
                     width: 0,
-                    height: viewport.height - header_height,
+                    height: geometry.bounds.height - geometry.origin.y,
                 },
             };
             chrome.stroke_line(
@@ -346,23 +445,11 @@ pub(super) fn prepare(
             );
         }
     }
-    headers(&mut chrome, &geometry, theme);
-    scene.passes.push(chrome.finish());
-    // Keep query payloads engine-native. All reads stop before staging begins.
-    Ok(PreparedWorksheet {
-        scene,
-        cells: cells.into(),
-        geometry: Some(geometry),
-        frozen: FrozenAxes {
-            rows: frozen_rows,
-            cols: frozen_cols,
-        },
-        merges: merges.into(),
-        links: attempt.links.into(),
-        extended_style_reads: attempt.reads,
-    })
+    headers(&mut chrome, geometry, theme);
+    chrome.finish()
 }
-fn cell_rect(row: &AxisCell, col: &AxisCell) -> PixelRect {
+
+pub(super) fn cell_rect(row: &AxisCell, col: &AxisCell) -> PixelRect {
     PixelRect {
         top_left: Point {
             x: col.start,
