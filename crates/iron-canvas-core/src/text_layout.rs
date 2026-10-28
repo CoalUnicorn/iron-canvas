@@ -151,6 +151,7 @@ pub(crate) fn position_text_lines(
 /// Split and wrap text while reusing both output line strings and scratch
 /// storage. This lower-level entry point is useful to callers that need line
 /// counts or widths without positioning paint output.
+// Keep this public scratch input until the next API change.
 #[allow(clippy::too_many_arguments)]
 pub fn layout_text_lines_into(
     metrics: &dyn TextMetrics,
@@ -162,16 +163,10 @@ pub fn layout_text_lines_into(
     out: &mut Vec<TextLine>,
     wrap_buf: &mut String,
 ) {
-    layout_lines_into(
-        metrics,
-        font_css,
-        text,
-        wrap,
-        usable_w,
-        approx_char_w,
-        out,
-        wrap_buf,
-    );
+    // Preserve the public API's existing effect while the private line breaker
+    // no longer needs this string for storage.
+    wrap_buf.clear();
+    layout_lines_into(metrics, font_css, text, wrap, usable_w, approx_char_w, out);
 }
 
 fn position_lines(lines: &mut [TextLine], options: TextLayoutOptions, metrics: TextLineMetrics) {
@@ -274,7 +269,6 @@ fn emergency_break(left: &str, right: &str) -> bool {
         })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn layout_lines_into(
     metrics: &dyn TextMetrics,
     font_css: &str,
@@ -283,11 +277,7 @@ fn layout_lines_into(
     usable_w: f64,
     approx_char_w: f64,
     out: &mut Vec<TextLine>,
-    wrap_buf: &mut String,
 ) {
-    // Keep the scratch argument for source compatibility. Lines now borrow
-    // complete source slices during measurement instead of joining word pieces.
-    wrap_buf.clear();
     let mut idx = 0usize;
     let measure = |s: &str| -> f64 {
         let width = metrics.measure_text_width(s, font_css);
