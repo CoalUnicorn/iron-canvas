@@ -13,11 +13,9 @@ use std::{
 use iron_canvas_core::{CanvasTheme, CellCoord};
 #[cfg(any(feature = "svg", feature = "pdf"))]
 use iron_canvas_core::{painter::TextMetrics, scene::RenderBackend};
-use iron_canvas_ironcalc::WorksheetCompileError;
 #[cfg(any(feature = "svg", feature = "pdf"))]
-use iron_canvas_ironcalc::{
-    PreparedWorksheet, WorksheetCompiler, WorksheetContext, WorksheetViewport,
-};
+use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetCompiler, WorksheetViewport};
+use iron_canvas_ironcalc::{WorksheetCompileError, WorksheetContext};
 use ironcalc::import::load_from_xlsx;
 use ironcalc_base::UserModel;
 #[cfg(any(feature = "svg", feature = "pdf"))]
@@ -221,10 +219,8 @@ fn write_svg(
 
 #[cfg(not(feature = "svg"))]
 fn write_svg(
-    _workbook: &UserModel<'_>,
-    _sheet: u32,
+    _context: WorksheetContext<'_, '_>,
     _range: CellRange,
-    _theme: &CanvasTheme,
     _output_path: &Path,
 ) -> Result<(), WorkbookExportError> {
     Err(WorkbookExportError::FeatureDisabled("SVG"))
@@ -253,10 +249,8 @@ fn write_pdf(
 
 #[cfg(not(feature = "pdf"))]
 fn write_pdf(
-    _workbook: &UserModel<'_>,
-    _sheet: u32,
+    _context: WorksheetContext<'_, '_>,
     _range: CellRange,
-    _theme: &CanvasTheme,
     _output_path: &Path,
 ) -> Result<(), WorkbookExportError> {
     Err(WorkbookExportError::FeatureDisabled("PDF"))
