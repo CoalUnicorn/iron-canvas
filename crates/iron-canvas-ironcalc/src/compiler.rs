@@ -300,6 +300,11 @@ struct CellRecord {
     value: String,
     occupied: bool,
 }
+
+// Lifetimes
+// 'w borrows the workbook, text shaper, and theme.
+// 'm references inside UserModel.
+// 's borrows the text shaper.
 struct Attempt<'w, 'm, 's> {
     workbook: &'w UserModel<'m>,
     sheet: u32,
