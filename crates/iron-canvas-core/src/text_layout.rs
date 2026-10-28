@@ -144,16 +144,7 @@ pub(crate) fn position_text_lines(
     metrics: TextLineMetrics,
 ) -> bool {
     let usable_w = f64::from(options.bounds.width) - 2.0 * options.horizontal_padding;
-    position_lines(
-        out,
-        options.horizontal,
-        options.vertical,
-        options.bounds,
-        metrics.height,
-        metrics.advance,
-        options.horizontal_padding,
-        options.vertical_inset,
-    );
+    position_lines(out, options, metrics);
     lines_escape_clip(out, usable_w, options.clip, metrics.height)
 }
 
@@ -183,17 +174,10 @@ pub fn layout_text_lines_into(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-fn position_lines(
-    lines: &mut [TextLine],
-    h_align: TextAlign,
-    v_align: TextVerticalAlign,
-    rect: PixelRect,
-    size_px: f64,
-    line_height: f64,
-    horizontal_padding: f64,
-    vertical_inset: f64,
-) {
+fn position_lines(lines: &mut [TextLine], options: TextLayoutOptions, metrics: TextLineMetrics) {
+    let rect = options.bounds;
+    let font_box_height = metrics.height;
+    let line_spacing = metrics.advance;
     let right = rect.right();
     let bottom = rect.bottom();
     let center_x = f64::from(rect.left()) + f64::from(rect.width) / 2.0;
@@ -202,19 +186,22 @@ fn position_lines(
     for (i, line) in lines.iter_mut().enumerate() {
         let i_f = i as f64;
         let tw = line.width;
-        line.center_x = match h_align {
-            TextAlign::End => f64::from(right) - horizontal_padding - tw / 2.0,
+        line.center_x = match options.horizontal {
+            TextAlign::End => f64::from(right) - options.horizontal_padding - tw / 2.0,
             TextAlign::Center => center_x,
-            TextAlign::Start => f64::from(rect.left()) + horizontal_padding + tw / 2.0,
+            TextAlign::Start => f64::from(rect.left()) + options.horizontal_padding + tw / 2.0,
         };
-        line.center_y = match v_align {
+        line.center_y = match options.vertical {
             TextVerticalAlign::Bottom => {
-                f64::from(bottom) - size_px / 2.0 - vertical_inset
-                    + (i_f - line_count + 1.0) * line_height
+                f64::from(bottom) - font_box_height / 2.0 - options.vertical_inset
+                    + (i_f - line_count + 1.0) * line_spacing
             }
-            TextVerticalAlign::Center => center_y + (i_f + (1.0 - line_count) / 2.0) * line_height,
+            TextVerticalAlign::Center => center_y + (i_f + (1.0 - line_count) / 2.0) * line_spacing,
             TextVerticalAlign::Top => {
-                f64::from(rect.top()) + size_px / 2.0 + vertical_inset + i_f * line_height
+                f64::from(rect.top())
+                    + font_box_height / 2.0
+                    + options.vertical_inset
+                    + i_f * line_spacing
             }
         };
     }
