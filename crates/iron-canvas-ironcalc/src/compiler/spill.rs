@@ -69,7 +69,10 @@ fn eligible(record: CellView<'_>) -> bool {
 }
 
 impl Attempt<'_, '_, '_> {
-    fn occupied_kind(&self, cell: CellCoord) -> Result<Option<CellType>, WorksheetCompileError> {
+    pub(super) fn occupied_kind(
+        &self,
+        cell: CellCoord,
+    ) -> Result<Option<CellType>, WorksheetCompileError> {
         let sheet = self
             .context
             .workbook

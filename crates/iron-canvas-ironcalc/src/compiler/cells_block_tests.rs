@@ -202,3 +202,179 @@ fn block_matches_evaluated_cf_before_and_after_input_change() {
     model.evaluate();
     compare(&model, 0, (1, 1, 12, 24));
 }
+
+fn compile_with_blocks(
+    model: &UserModel<'_>,
+    sheet: u32,
+    viewport: WorksheetViewport,
+    limits: Option<cells::BlockLimits>,
+) -> PreparedWorksheet {
+    let theme = CanvasTheme::light();
+    let mut cache = TextLayoutCache::default();
+    let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut cache);
+    composition::prepare_with_blocks(
+        WorksheetContext {
+            workbook: model,
+            sheet,
+            theme: &theme,
+        },
+        viewport,
+        &mut shaper,
+        WorksheetReuse::default(),
+        limits,
+    )
+    .unwrap()
+}
+
+fn compare_frames(model: &UserModel<'_>, sheet: u32, viewport: WorksheetViewport) {
+    let reference = compile_with_blocks(model, sheet, viewport, None);
+    for limits in [
+        cells::BlockLimits::default(),
+        cells::BlockLimits {
+            cells_per_attempt: 4,
+            width: 2,
+            height: 2,
+            ..cells::BlockLimits::default()
+        },
+    ] {
+        let candidate = compile_with_blocks(model, sheet, viewport, Some(limits));
+        assert_eq!(candidate.scene, reference.scene);
+        assert_eq!(candidate.geometry, reference.geometry);
+        assert_eq!(candidate.merges, reference.merges);
+        assert_eq!(candidate.links, reference.links);
+        assert_eq!(
+            candidate.cells().collect::<Vec<_>>(),
+            reference.cells().collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn block_frames_match_individual_frames_with_fallback_merges_and_hidden_gaps() {
+    let mut model = UserModel::new_empty("frames", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "anchor").unwrap();
+    model
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 1,
+            column: 1,
+            width: 8,
+            height: 4,
+        })
+        .unwrap();
+    model
+        .set_user_input(0, 5, 3, "offscreen spill source")
+        .unwrap();
+    model.set_user_input(0, 6, 6, "=\"\"").unwrap();
+    model.set_columns_hidden(0, 9, 10, true).unwrap();
+    model.set_rows_hidden(0, 8, 9, true).unwrap();
+    let viewport = WorksheetViewport {
+        first_cell: CellCoord { row: 3, col: 5 },
+        width: 500,
+        height: 300,
+    };
+    compare_frames(&model, 0, viewport);
+    model.set_frozen_rows_count(0, 1).unwrap();
+    model.set_frozen_columns_count(0, 1).unwrap();
+    compare_frames(&model, 0, viewport);
+}
+
+#[test]
+fn block_frames_match_individual_cf_frames() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/cf_tests.xlsx");
+    let model =
+        UserModel::from_model(ironcalc::import::load_from_xlsx(path, "en", "UTC", "en").unwrap());
+    for sheet in 0..7 {
+        compare_frames(
+            &model,
+            sheet,
+            WorksheetViewport {
+                first_cell: CellCoord { row: 1, col: 1 },
+                width: 700,
+                height: 600,
+            },
+        );
+    }
+}
+
+#[test]
+fn block_records_preserve_occupancy_and_count_styles_and_fallback_once() {
+    let mut model = UserModel::new_empty("counts", "en", "UTC", "en").unwrap();
+    model.set_user_input(0, 1, 1, "=\"\"").unwrap();
+    let viewport = WorksheetViewport {
+        first_cell: CellCoord { row: 1, col: 1 },
+        width: 350,
+        height: 150,
+    };
+    let prepared = compile_with_blocks(&model, 0, viewport, None);
+    let theme = CanvasTheme::light();
+    let mut cache = TextLayoutCache::default();
+    let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut cache);
+    let mut attempt = Attempt::new(
+        WorksheetContext {
+            workbook: &model,
+            sheet: 0,
+            theme: &theme,
+        },
+        &mut shaper,
+        None,
+    )
+    .unwrap();
+    attempt
+        .load_blocks(
+            prepared.geometry.as_ref().unwrap(),
+            cells::BlockLimits::default(),
+        )
+        .unwrap();
+    let style_count = attempt.reads;
+    assert!(attempt.read_stats.block_calls > 0);
+    assert!(style_count < attempt.read_stats.block_cells);
+    assert_eq!(style_count, attempt.read_stats.block_styles);
+    for _ in 0..2 {
+        attempt.read(CellCoord { row: 1, col: 1 }).unwrap();
+        attempt.read(CellCoord { row: 100, col: 100 }).unwrap();
+    }
+    assert!(attempt.cached.view(CellCoord { row: 1, col: 1 }).occupied);
+    assert_eq!(attempt.cached.view(CellCoord { row: 1, col: 1 }).value, "");
+    assert_eq!(attempt.read_stats.fallback_cells, 1);
+    assert_eq!(attempt.reads, style_count + 1);
+}
+
+#[test]
+fn failed_block_read_reports_bounds_and_does_not_retry_individual_cells() {
+    let model = UserModel::new_empty("errors", "en", "UTC", "en").unwrap();
+    let viewport = WorksheetViewport {
+        first_cell: CellCoord { row: 1, col: 1 },
+        width: 200,
+        height: 100,
+    };
+    let prepared = compile_with_blocks(&model, 0, viewport, None);
+    let theme = CanvasTheme::light();
+    let mut cache = TextLayoutCache::default();
+    let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut cache);
+    let mut attempt = Attempt::new(
+        WorksheetContext {
+            workbook: &model,
+            sheet: 0,
+            theme: &theme,
+        },
+        &mut shaper,
+        None,
+    )
+    .unwrap();
+    // Use an absent sheet after reading the valid sheet metadata. This isolates
+    // block error mapping from earlier sheet validation.
+    attempt.context.sheet = 99;
+    let error = attempt
+        .load_blocks(
+            prepared.geometry.as_ref().unwrap(),
+            cells::BlockLimits::default(),
+        )
+        .unwrap_err();
+    assert_eq!(error.operation, CellReadOperation::CellsBlock);
+    assert_eq!(error.sheet, 99);
+    assert_eq!(error.cell, CellCoord { row: 1, col: 1 });
+    assert!(error.message.starts_with("block "));
+    assert_eq!(attempt.read_stats.fallback_cells, 0);
+    assert_eq!(attempt.read_stats.block_calls, 0);
+}

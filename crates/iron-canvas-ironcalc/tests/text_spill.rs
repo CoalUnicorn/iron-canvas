@@ -443,10 +443,14 @@ fn offscreen_search_and_spill_distance_stop_at_64_columns() {
     model.set_user_input(0, 1, 1, &long).unwrap();
     let within = prepare(&model, 65, 198);
     assert_eq!(text_paint(&within, &long)[0].0.width, 50);
-    assert_eq!(within.extended_style_reads, within.cell_count() + 64);
     let beyond = prepare(&model, 66, 198);
     assert!(text_paint(&beyond, &long).is_empty());
-    assert_eq!(beyond.extended_style_reads, beyond.cell_count());
+    // One visible block style plus 64 individual offscreen cells within reach.
+    assert_eq!(beyond.extended_style_reads, 1);
+    assert_eq!(
+        within.extended_style_reads,
+        beyond.extended_style_reads + 64
+    );
 
     let wide = prepare(&model, 1, 5048);
     assert_eq!(

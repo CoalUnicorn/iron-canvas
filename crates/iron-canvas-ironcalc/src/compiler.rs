@@ -1,7 +1,5 @@
 //! Read only IronCalc worksheet compilation. No legacy model adapter is used.
 mod borders;
-// Enable the planner for production when block reads enter preparation.
-#[cfg(test)]
 mod cells;
 #[cfg(test)]
 mod cells_block_tests;
@@ -81,7 +79,8 @@ pub struct PreparedWorksheet {
     pub frozen: FrozenAxes,
     pub merges: Rc<[MergedCell]>,
     pub links: Rc<[CellLinkView]>,
-    /// Actual calls to `get_extended_cell_style` in this preparation.
+    /// Calls to `get_extended_cell_style`, including calls inside block reads.
+    /// At the pinned engine revision, each block style entry counts as one call.
     pub extended_style_reads: usize,
 }
 
@@ -174,6 +173,7 @@ pub enum CellReadOperation {
     ExtendedStyle,
     CellType,
     FormattedValue,
+    CellsBlock,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,12 +318,17 @@ struct CellView<'a> {
 #[derive(Default)]
 struct CellRecords {
     individual: HashMap<CellCoord, CellRecord>,
+    blocks: cells::CellBlocks,
+    covered: HashMap<CellCoord, cells::BlockRecord>,
 }
 impl CellRecords {
     // Keep lookup on cell storage so mutable shaper and paint caches remain
     // available while a consumer borrows the cell view.
     // Call Attempt::read before requesting the view, including offscreen cells.
     fn view(&self, coordinate: CellCoord) -> CellView<'_> {
+        if let Some(record) = self.covered.get(&coordinate) {
+            return self.blocks.view(record);
+        }
         let record = &self.individual[&coordinate];
         CellView {
             extended: &record.extended,
@@ -332,6 +337,14 @@ impl CellRecords {
             occupied: record.occupied,
         }
     }
+}
+
+#[derive(Default)]
+struct ReadStats {
+    block_calls: usize,
+    block_cells: usize,
+    block_styles: usize,
+    fallback_cells: usize,
 }
 
 // Lifetimes
@@ -344,6 +357,7 @@ struct Attempt<'w, 'm, 's> {
     show_grid: bool,
     cached: CellRecords,
     reads: usize,
+    read_stats: ReadStats,
     links: Rc<[CellLinkView]>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
     shades: cf::LightShades,
@@ -379,6 +393,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             show_grid,
             cached: CellRecords::default(),
             reads: 0,
+            read_stats: ReadStats::default(),
             links,
             lines: Vec::new(),
             shades: cf::LightShades::default(),
@@ -397,6 +412,51 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             message,
         }
     }
+    fn load_blocks(
+        &mut self,
+        geometry: &GridGeometry,
+        limits: cells::BlockLimits,
+    ) -> Result<(), WorksheetCompileError> {
+        let rectangles = cells::plan_blocks(&geometry.panes, limits).map_err(|e| {
+            self.error(
+                CellCoord { row: 1, col: 1 },
+                CellReadOperation::CellsBlock,
+                format!("invalid block plan: {e:?}"),
+            )
+        })?;
+        for rect in rectangles {
+            let error = |message| {
+                self.error(
+                    CellCoord {
+                        row: rect.row,
+                        col: rect.column,
+                    },
+                    CellReadOperation::CellsBlock,
+                    format!("block {}x{}: {message}", rect.width, rect.height),
+                )
+            };
+            let block = self
+                .context
+                .workbook
+                .get_cells_block(
+                    self.context.sheet,
+                    rect.row,
+                    rect.column,
+                    rect.width,
+                    rect.height,
+                )
+                .map_err(error)?;
+            let block =
+                cells::ValidatedBlock::new(rect, block).map_err(|message| error(message.into()))?;
+            self.read_stats.block_calls += 1;
+            self.read_stats.block_cells += block.cell_count();
+            self.read_stats.block_styles += block.style_count();
+            self.reads += block.style_count();
+            self.cached.blocks.insert(block);
+        }
+        Ok(())
+    }
+
     fn read(&mut self, cell: CellCoord) -> Result<(), WorksheetCompileError> {
         if !(1..=LAST_ROW).contains(&cell.row) || !(1..=LAST_COLUMN).contains(&cell.col) {
             return Err(self.error(
@@ -405,7 +465,26 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 "invalid cell coordinate".into(),
             ));
         }
-        if self.cached.individual.contains_key(&cell) {
+        if self.cached.individual.contains_key(&cell) || self.cached.covered.contains_key(&cell) {
+            return Ok(());
+        }
+        if let Some((block, slot)) = self.cached.blocks.locate(cell) {
+            let stored_kind = self.occupied_kind(cell)?;
+            let occupied = stored_kind.is_some();
+            let kind = self
+                .cached
+                .blocks
+                .text_kind(block, slot)
+                .unwrap_or_else(|| stored_kind.unwrap_or(CellType::Number));
+            self.cached.covered.insert(
+                cell,
+                cells::BlockRecord {
+                    block,
+                    slot,
+                    kind,
+                    occupied,
+                },
+            );
             return Ok(());
         }
         let record = self.read_individual(cell)?;
@@ -417,6 +496,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
     // when later changes select block reads for visible cells.
     fn read_individual(&mut self, cell: CellCoord) -> Result<CellRecord, WorksheetCompileError> {
         self.reads += 1;
+        self.read_stats.fallback_cells += 1;
         let style = self
             .context
             .workbook

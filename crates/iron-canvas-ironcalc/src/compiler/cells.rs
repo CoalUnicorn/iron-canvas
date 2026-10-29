@@ -1,6 +1,9 @@
 //! Plan dense engine reads from visible worksheet samples.
-use super::{LAST_COLUMN, LAST_ROW};
+use super::{CellView, LAST_COLUMN, LAST_ROW};
+use iron_canvas_core::CellCoord;
 use iron_canvas_core::scene_geometry::{AxisCell, GridPane};
+use ironcalc_base::{CellsBlock, types::CellType};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct BlockRect {
@@ -141,6 +144,145 @@ pub(super) fn plan_blocks(
     Ok(blocks)
 }
 
+// Validate public engine vectors before any indexed cell access. Keep indices,
+// rather than references, so blocks can move while the attempt owns them.
+
+pub(super) struct ValidatedBlock {
+    data: CellsBlock,
+    text_slots: Vec<Option<usize>>,
+}
+
+fn cell_type(value: i32) -> Option<CellType> {
+    match value {
+        1 => Some(CellType::Number),
+        2 => Some(CellType::Text),
+        4 => Some(CellType::LogicalValue),
+        16 => Some(CellType::ErrorValue),
+        64 => Some(CellType::Array),
+        128 => Some(CellType::CompoundData),
+        _ => None,
+    }
+}
+
+impl ValidatedBlock {
+    pub(super) fn new(rect: BlockRect, data: CellsBlock) -> Result<Self, &'static str> {
+        BlockRect::checked(
+            rect.row,
+            rect.column,
+            usize::try_from(rect.width).map_err(|_| "invalid width")?,
+            usize::try_from(rect.height).map_err(|_| "invalid height")?,
+        )
+        .map_err(|_| "invalid bounds")?;
+        if (data.row, data.column, data.width, data.height)
+            != (rect.row, rect.column, rect.width, rect.height)
+        {
+            return Err("returned bounds differ from request");
+        }
+        let count = (rect.width as usize)
+            .checked_mul(rect.height as usize)
+            .ok_or("invalid cell count")?;
+        if data.style_indices.len() != count
+            || data
+                .style_indices
+                .iter()
+                .any(|&index| index as usize >= data.styles.len())
+        {
+            return Err("invalid style indices");
+        }
+        let mut text_slots = vec![None; count];
+        let mut previous = None;
+        for (index, text) in data.texts.iter().enumerate() {
+            if text.row < rect.row
+                || text.row >= rect.row + rect.height
+                || text.column < rect.column
+                || text.column >= rect.column + rect.width
+                || text.text.is_empty()
+                || cell_type(text.cell_type).is_none()
+            {
+                return Err("invalid text entry");
+            }
+            let slot = ((text.row - rect.row) * rect.width + (text.column - rect.column)) as usize;
+            if previous.is_some_and(|previous| previous >= slot) {
+                return Err("text entries are not unique and ordered");
+            }
+            text_slots[slot] = Some(index);
+            previous = Some(slot);
+        }
+        Ok(Self { data, text_slots })
+    }
+    pub(super) fn cell_count(&self) -> usize {
+        self.data.style_indices.len()
+    }
+    pub(super) fn style_count(&self) -> usize {
+        self.data.styles.len()
+    }
+}
+
+pub(super) struct BlockRecord {
+    pub block: usize,
+    pub slot: usize,
+    pub kind: CellType,
+    pub occupied: bool,
+}
+
+struct RowInterval {
+    first: i32,
+    last: i32,
+    block: usize,
+    row_slot: usize,
+}
+
+#[derive(Default)]
+pub(super) struct CellBlocks {
+    blocks: Vec<ValidatedBlock>,
+    rows: BTreeMap<i32, Vec<RowInterval>>,
+}
+impl CellBlocks {
+    pub(super) fn insert(&mut self, block: ValidatedBlock) {
+        let index = self.blocks.len();
+        let data = &block.data;
+        for row in data.row..data.row + data.height {
+            let intervals = self.rows.entry(row).or_default();
+            let position = intervals.partition_point(|interval| interval.first < data.column);
+            intervals.insert(
+                position,
+                RowInterval {
+                    first: data.column,
+                    last: data.column + data.width - 1,
+                    block: index,
+                    row_slot: ((row - data.row) * data.width) as usize,
+                },
+            );
+        }
+        self.blocks.push(block);
+    }
+    pub(super) fn locate(&self, cell: CellCoord) -> Option<(usize, usize)> {
+        let intervals = self.rows.get(&cell.row)?;
+        let position = intervals
+            .partition_point(|interval| interval.first <= cell.col)
+            .checked_sub(1)?;
+        let interval = &intervals[position];
+        (cell.col <= interval.last).then_some((
+            interval.block,
+            interval.row_slot + (cell.col - interval.first) as usize,
+        ))
+    }
+    pub(super) fn text_kind(&self, block: usize, slot: usize) -> Option<CellType> {
+        let block = &self.blocks[block];
+        block.text_slots[slot].and_then(|index| cell_type(block.data.texts[index].cell_type))
+    }
+    pub(super) fn view<'a>(&'a self, record: &'a BlockRecord) -> CellView<'a> {
+        let block = &self.blocks[record.block];
+        CellView {
+            extended: &block.data.styles[block.data.style_indices[record.slot] as usize],
+            kind: &record.kind,
+            occupied: record.occupied,
+            value: block.text_slots[record.slot]
+                .map_or("", |index| block.data.texts[index].text.as_str()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,6 +318,39 @@ mod tests {
             rows: samples(rows),
             columns: samples(columns),
         }
+    }
+
+    #[test]
+    fn malformed_blocks_fail_before_indexed_access() {
+        let mut model =
+            ironcalc_base::UserModel::new_empty("validation", "en", "UTC", "en").unwrap();
+        model.set_user_input(0, 1, 1, "first").unwrap();
+        model.set_user_input(0, 2, 2, "last").unwrap();
+        let original = model.get_cells_block(0, 1, 1, 2, 2).unwrap();
+        let rect = BlockRect {
+            row: 1,
+            column: 1,
+            width: 2,
+            height: 2,
+        };
+        let mutations: [fn(&mut CellsBlock); 8] = [
+            |b| b.width = 3,
+            |b| {
+                b.style_indices.pop();
+            },
+            |b| b.style_indices[0] = u32::MAX,
+            |b| b.texts[0].row = 0,
+            |b| b.texts[0].cell_type = 3,
+            |b| b.texts.swap(0, 1),
+            |b| b.texts.push(b.texts[0].clone()),
+            |b| b.texts[0].text.clear(),
+        ];
+        for mutate in mutations {
+            let mut block = original.clone();
+            mutate(&mut block);
+            assert!(ValidatedBlock::new(rect, block).is_err());
+        }
+        assert!(ValidatedBlock::new(rect, original).is_ok());
     }
 
     #[test]

@@ -181,12 +181,22 @@ pub struct PreparedWorksheet {
   Crossed vertical grid lines are omitted. Horizontal and explicit borders stay.
   `prepare_cells` keeps cell clips because arbitrary placements do not establish
   adjacent worksheet geometry. See the text design, sections 13-14, for limits.
-- Preparation is bounded and cached per attempt: a preparation-local record
-  serves ordinary cells, offscreen merge anchors, and active-cell restoration;
-  each distinct needed cell is read once (`get_extended_cell_style`).
-  `CellRecords` owns these individual records. Paint and spill code use a
+- Preparation caches cell records per attempt. After geometry, the compiler
+  fetches bounded `CellsBlock` rectangles from consecutive pane samples.
+  Hidden coordinate gaps and pane boundaries separate requests.
+  Tiles contain at most 64 by 64 cells. An attempt accepts at most 65,536
+  block cells and 256 blocks. Remaining cells use individual reads.
+  `CellRecords` owns validated blocks, compact covered-cell records, and
+  individual records for offscreen cells and cells outside the block budget.
+  Sorted row intervals find blocks. Dense text-slot indices find sparse text.
+  Paint and spill code use a
   short-lived `CellView` that borrows style, cell type, and display text.
   The view keeps cell storage separate from mutable layout and paint caches.
+  Stored cells determine occupancy even when display text is empty.
+  Blocks do not survive preparation or enter the shared worksheet cache.
+  `extended_style_reads` counts block style entries plus individual style reads.
+  At the pinned engine revision, each block style entry requires one internal
+  `get_extended_cell_style` call. Fill runs do not change painting yet.
 - Pass order is fixed: background, CF graphics, grid borders, explicit borders,
   text, then merge composition. `CellReadOperation` and `WorksheetCompileError`
   report structured preparation failures (sheet, cell, operation, engine

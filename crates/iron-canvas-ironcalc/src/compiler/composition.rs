@@ -27,6 +27,22 @@ pub(super) fn prepare(
     shaper: &mut TextShaper<'_>,
     reuse: WorksheetReuse<'_>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+    prepare_with_blocks(
+        context,
+        viewport,
+        shaper,
+        reuse,
+        Some(cells::BlockLimits::default()),
+    )
+}
+
+pub(super) fn prepare_with_blocks(
+    context: WorksheetContext<'_, '_>,
+    viewport: WorksheetViewport,
+    shaper: &mut TextShaper<'_>,
+    reuse: WorksheetReuse<'_>,
+    blocks: Option<cells::BlockLimits>,
+) -> Result<PreparedWorksheet, WorksheetCompileError> {
     let WorksheetContext {
         workbook,
         sheet,
@@ -45,6 +61,11 @@ pub(super) fn prepare(
         cols: HashMap::new(),
     };
     let geometry = prepare_geometry(&mut attempt, viewport, frozen, &mut dimensions, previous)?;
+
+    // Load visible data before spill searches request offscreen cells.
+    if let Some(limits) = blocks {
+        attempt.load_blocks(&geometry, limits)?;
+    }
 
     // Draw ordinary cells first. Merges cover their contents and reuse their records.
     let mut scene = paint_cells(&mut attempt, &geometry, frozen, &merges, &mut dimensions)?;

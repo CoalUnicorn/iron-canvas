@@ -141,7 +141,9 @@ fn cf_fixture_renders_through_svg_backend() {
             backend.metrics(),
         )
         .unwrap();
-    assert_eq!(prepared.extended_style_reads, prepared.cell_count());
+    // Unchanged styles share entries even when other cells have CF.
+    assert!(prepared.extended_style_reads > 0);
+    assert!(prepared.extended_style_reads < prepared.cell_count());
     assert!(
         prepared.scene.passes[1]
             .iter()
