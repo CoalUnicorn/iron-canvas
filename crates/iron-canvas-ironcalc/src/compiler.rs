@@ -1,5 +1,7 @@
 //! Read only IronCalc worksheet compilation. No legacy model adapter is used.
 mod borders;
+#[cfg(test)]
+mod cells_block_tests;
 mod cf;
 mod composition;
 mod glyphs;
@@ -374,6 +376,14 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         if self.cached.contains_key(&cell) {
             return Ok(());
         }
+        let record = self.read_individual(cell)?;
+        self.cached.insert(cell, record);
+        Ok(())
+    }
+
+    // Keep this path independent of block storage. Tests use it as the reference
+    // when later changes select block reads for visible cells.
+    fn read_individual(&mut self, cell: CellCoord) -> Result<CellRecord, WorksheetCompileError> {
         self.reads += 1;
         let style = self
             .context
@@ -393,16 +403,12 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         // Display text cannot identify empty cells: formulas and number formats
         // can hide occupied values. Inspect the stored cell without changing it.
         let occupied = self.occupied(cell)?;
-        self.cached.insert(
-            cell,
-            CellRecord {
-                extended: style,
-                kind,
-                value: text,
-                occupied,
-            },
-        );
-        Ok(())
+        Ok(CellRecord {
+            extended: style,
+            kind,
+            value: text,
+            occupied,
+        })
     }
     fn paint(
         &mut self,
