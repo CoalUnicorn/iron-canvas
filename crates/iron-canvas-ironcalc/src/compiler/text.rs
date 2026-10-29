@@ -1,5 +1,5 @@
 //! Spreadsheet text policy. Generic layout stays in core.
-use super::{CellRecord, WorksheetContext};
+use super::{CellView, WorksheetContext};
 use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline};
 use iron_canvas_core::scene::SceneBuilder;
 use iron_canvas_core::text_shaper::TextShaper;
@@ -7,7 +7,7 @@ use iron_canvas_core::{PixelRect, geometry::path::PointF, text_layout::*};
 use ironcalc_base::types::{CellType, HorizontalAlignment as H, Style, VerticalAlignment as V};
 
 pub(super) struct CellTextPaint<'a> {
-    pub(super) record: &'a CellRecord,
+    pub(super) record: CellView<'a>,
     pub(super) bounds: PixelRect,
     pub(super) reserved_left: i32,
     pub(super) spill_clip: Option<PixelRect>,
@@ -29,8 +29,8 @@ pub(super) fn compile_text(
         has_link,
     } = input;
     let style = &record.extended.style;
-    let kind = &record.kind;
-    let text = &record.value;
+    let kind = record.kind;
+    let text = record.value;
     let WorksheetContext {
         workbook, theme, ..
     } = context;

@@ -305,6 +305,35 @@ struct CellRecord {
     occupied: bool,
 }
 
+/// Borrow cell data only while a consumer needs it. The view does not clone
+/// styles or text, and it can later refer to shared block storage.
+#[derive(Clone, Copy)]
+struct CellView<'a> {
+    extended: &'a ExtendedStyle,
+    kind: &'a CellType,
+    value: &'a str,
+    occupied: bool,
+}
+
+#[derive(Default)]
+struct CellRecords {
+    individual: HashMap<CellCoord, CellRecord>,
+}
+impl CellRecords {
+    // Keep lookup on cell storage so mutable shaper and paint caches remain
+    // available while a consumer borrows the cell view.
+    // Call Attempt::read before requesting the view, including offscreen cells.
+    fn view(&self, coordinate: CellCoord) -> CellView<'_> {
+        let record = &self.individual[&coordinate];
+        CellView {
+            extended: &record.extended,
+            kind: &record.kind,
+            value: &record.value,
+            occupied: record.occupied,
+        }
+    }
+}
+
 // Lifetimes
 // 'w covers the context references and the mutable shaper borrow.
 // 'm covers references inside UserModel.
@@ -313,7 +342,7 @@ struct Attempt<'w, 'm, 's> {
     context: WorksheetContext<'w, 'm>,
     shaper: &'w mut TextShaper<'s>,
     show_grid: bool,
-    cached: HashMap<CellCoord, CellRecord>,
+    cached: CellRecords,
     reads: usize,
     links: Rc<[CellLinkView]>,
     lines: Vec<iron_canvas_core::text_layout::TextLine>,
@@ -348,7 +377,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             context,
             shaper,
             show_grid,
-            cached: HashMap::new(),
+            cached: CellRecords::default(),
             reads: 0,
             links,
             lines: Vec::new(),
@@ -376,11 +405,11 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 "invalid cell coordinate".into(),
             ));
         }
-        if self.cached.contains_key(&cell) {
+        if self.cached.individual.contains_key(&cell) {
             return Ok(());
         }
         let record = self.read_individual(cell)?;
-        self.cached.insert(cell, record);
+        self.cached.individual.insert(cell, record);
         Ok(())
     }
 
@@ -429,7 +458,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             ));
         }
         self.read(placement.coordinate)?;
-        let record = &self.cached[&placement.coordinate];
+        let record = self.cached.view(placement.coordinate);
         let rect = placement.bounds;
         let style = &record.extended.style;
         let fill = self.context.workbook.resolve_color(&style.fill.color);
@@ -444,7 +473,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             );
         }
         let cf = cf::CfDecorationPaint::resolve_memoized(
-            &record.extended,
+            record.extended,
             self.context.workbook,
             &mut self.shades,
         );
@@ -477,7 +506,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         spill_clip: Option<PixelRect>,
         cf: &cf::CfDecorationPaint,
     ) {
-        let record = &self.cached[&placement.coordinate];
+        let record = self.cached.view(placement.coordinate);
         let rect = placement.bounds;
         if !cf.hides_value() {
             let link = self

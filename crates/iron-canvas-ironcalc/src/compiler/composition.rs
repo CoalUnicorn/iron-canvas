@@ -265,7 +265,7 @@ fn paint_cells(
                     .is_err()
                 {
                     let cf = cf::CfDecorationPaint::resolve(
-                        &attempt.cached[&source.placement.coordinate].extended,
+                        attempt.cached.view(source.placement.coordinate).extended,
                         attempt.context.workbook,
                     );
                     attempt.paint_text(source.placement, &mut passes[4], Some(source.clip), &cf);
@@ -326,7 +326,7 @@ fn paint_merges(
                 && attempt
                     .context
                     .workbook
-                    .resolve_color(&attempt.cached[&range.first].extended.style.fill.color)
+                    .resolve_color(&attempt.cached.view(range.first).extended.style.fill.color)
                     .is_empty();
             paint_merge_borders(attempt, pane, range, show_merge_grid, &mut merged_passes);
             for pass in &mut merged_passes {
@@ -361,7 +361,7 @@ fn paint_merge_borders(
                 row: row.index,
                 col: col.index,
             };
-            let record = &attempt.cached[&coord];
+            let record = attempt.cached.view(coord);
             let b = &record.extended.style.border;
             let border = Border {
                 left: (coord.col == range.first.col)

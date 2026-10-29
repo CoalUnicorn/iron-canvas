@@ -41,13 +41,13 @@ fn merged(cell: CellCoord, merges: &[MergedCell]) -> bool {
     })
 }
 
-fn graphics(record: &CellRecord) -> bool {
+fn graphics(record: CellView<'_>) -> bool {
     record.extended.icon.is_some()
         || record.extended.data_bar.is_some()
         || record.extended.rating.is_some()
 }
 
-fn eligible(record: &CellRecord) -> bool {
+fn eligible(record: CellView<'_>) -> bool {
     matches!(record.kind, CellType::Text)
         && !record.value.is_empty()
         && !graphics(record)
@@ -91,7 +91,7 @@ impl Attempt<'_, '_, '_> {
     }
 
     fn blocker(&self, cell: CellCoord, merges: &[MergedCell]) -> bool {
-        let record = &self.cached[&cell];
+        let record = self.cached.view(cell);
         // Fills and borders paint before text. They do not occupy an empty
         // cell. Resolved borders can also come from the row above or below;
         // those shared edges cannot determine horizontal text spill.
@@ -156,7 +156,7 @@ impl Attempt<'_, '_, '_> {
                 None => previous = column,
                 Some(CellType::Text) => {
                     self.read(coordinate)?;
-                    if eligible(&self.cached[&coordinate]) {
+                    if eligible(self.cached.view(coordinate)) {
                         if direction < 0 {
                             cells.reverse();
                         }
@@ -209,7 +209,7 @@ impl Attempt<'_, '_, '_> {
                 row: row.index,
                 col: column.index,
             };
-            let record = &self.cached[&coordinate];
+            let record = self.cached.view(coordinate);
             if !eligible(record) || merged(coordinate, merges) || row.extent < 10 {
                 continue;
             }
@@ -224,8 +224,8 @@ impl Attempt<'_, '_, '_> {
             let layout = text::layout(
                 self.shaper,
                 &record.extended.style,
-                &record.kind,
-                &record.value,
+                record.kind,
+                record.value,
                 rect,
                 &mut self.lines,
             );

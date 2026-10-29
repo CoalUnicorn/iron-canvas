@@ -184,6 +184,9 @@ pub struct PreparedWorksheet {
 - Preparation is bounded and cached per attempt: a preparation-local record
   serves ordinary cells, offscreen merge anchors, and active-cell restoration;
   each distinct needed cell is read once (`get_extended_cell_style`).
+  `CellRecords` owns these individual records. Paint and spill code use a
+  short-lived `CellView` that borrows style, cell type, and display text.
+  The view keeps cell storage separate from mutable layout and paint caches.
 - Pass order is fixed: background, CF graphics, grid borders, explicit borders,
   text, then merge composition. `CellReadOperation` and `WorksheetCompileError`
   report structured preparation failures (sheet, cell, operation, engine
