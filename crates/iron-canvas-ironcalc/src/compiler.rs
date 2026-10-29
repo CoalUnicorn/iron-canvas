@@ -1,5 +1,8 @@
 //! Read only IronCalc worksheet compilation. No legacy model adapter is used.
 mod borders;
+// Enable the planner for production when block reads enter preparation.
+#[cfg(test)]
+mod cells;
 #[cfg(test)]
 mod cells_block_tests;
 mod cf;
