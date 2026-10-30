@@ -220,8 +220,7 @@ fn fill_text_emits_BT_Tf_color_Tm_Tj_ET() {
     let p = PdfPainter::new(W, H);
     p.fill_text(
         "Hi",
-        20.0,
-        15.0,
+        iron_canvas_core::geometry::path::PointF::new(20.0, 15.0),
         PaintColor::Static("14px sans-serif"),
         PaintColor::Static("#000000"),
         TextAlign::Start,
@@ -244,8 +243,7 @@ fn fill_text_align_center_shifts_x_by_half_width() {
     let width = metrics::helvetica_advance_width("abcd", 10.0);
     p.fill_text(
         "abcd",
-        100.0,
-        20.0,
+        iron_canvas_core::geometry::path::PointF::new(100.0, 20.0),
         PaintColor::Static("10px sans-serif"),
         PaintColor::Static("#000000"),
         TextAlign::Center,
@@ -264,8 +262,7 @@ fn fill_text_align_end_shifts_x_by_full_width() {
     let width = metrics::helvetica_advance_width("abcd", 10.0);
     p.fill_text(
         "abcd",
-        100.0,
-        20.0,
+        iron_canvas_core::geometry::path::PointF::new(100.0, 20.0),
         PaintColor::Static("10px sans-serif"),
         PaintColor::Static("#000000"),
         TextAlign::End,
@@ -299,8 +296,7 @@ fn selected_helvetica_face_controls_width_and_alignment() {
             let painter = PdfPainter::new(400, 100);
             painter.fill_text(
                 "iiii",
-                220.0,
-                60.0,
+                iron_canvas_core::geometry::path::PointF::new(220.0, 60.0),
                 PaintColor::Static(font),
                 PaintColor::Static("#000000"),
                 align,
@@ -361,8 +357,7 @@ fn fill_text_escapes_parens_and_backslash() {
     let p = PdfPainter::new(W, H);
     p.fill_text(
         "a(b\\c)",
-        0.0,
-        0.0,
+        iron_canvas_core::geometry::path::PointF::new(0.0, 0.0),
         PaintColor::Static("12px sans-serif"),
         PaintColor::Static("#000000"),
         TextAlign::Start,

@@ -207,6 +207,27 @@ fn visit(
             if clip.width == 0 || clip.height == 0 {
                 continue;
             }
+            // Hash the same rectangles that painting emits. Run grouping cannot
+            // change damage or scroll-blit eligibility at a tile or pane edge.
+            if let Primitive::RectFillRun { rect, edges, color } = op {
+                for pair in edges.windows(2) {
+                    let cell = Primitive::RectFill {
+                        rect: PixelRect {
+                            top_left: Point {
+                                x: pair[0],
+                                y: rect.top(),
+                            },
+                            width: pair[1] - pair[0],
+                            height: rect.height,
+                        },
+                        color: std::rc::Rc::clone(color),
+                    };
+                    if let Some(coverage) = coverage(&cell, clip, delta) {
+                        emit(&cell, clip, coverage);
+                    }
+                }
+                continue;
+            }
             let Some(coverage) = coverage(op, clip, delta) else {
                 continue;
             };
@@ -307,7 +328,10 @@ fn hash_paint(
             std::mem::discriminant(align).hash(h);
             std::mem::discriminant(baseline).hash(h);
         }
-        Primitive::RectFill { .. } | Primitive::Clip { .. } | Primitive::EndClip => {
+        Primitive::RectFill { .. }
+        | Primitive::RectFillRun { .. }
+        | Primitive::Clip { .. }
+        | Primitive::EndClip => {
             unreachable!()
         }
     }
@@ -315,7 +339,9 @@ fn hash_paint(
 
 pub(super) fn coverage(op: &Primitive, clip: PixelRect, delta: Point) -> Option<PixelRect> {
     let bounds = match op {
-        Primitive::RectFill { rect, .. } | Primitive::Gradient { rect, .. } => {
+        Primitive::RectFill { rect, .. }
+        | Primitive::RectFillRun { rect, .. }
+        | Primitive::Gradient { rect, .. } => {
             return shifted(*rect, delta).intersection(clip);
         }
         Primitive::Line { line, width, .. } => {

@@ -4,7 +4,7 @@
 //! dash buffers. A scene clone shares complete passes and their contents.
 pub mod retained;
 
-use crate::geometry::path::{Path, PathCmd};
+use crate::geometry::path::{Path, PathCmd, PointF};
 use crate::painter::{
     LineCap, LineJoin, PaintColor, Painter, StrokeStyle, TextAlign, TextBaseline,
 };
@@ -27,6 +27,13 @@ pub struct SceneStroke {
 pub enum Primitive {
     RectFill {
         rect: PixelRect,
+        color: Rc<str>,
+    },
+    /// Adjacent solid rectangles in one row. Keep internal boundaries because
+    /// fractional device scales can rasterize them differently from their union.
+    RectFillRun {
+        rect: PixelRect,
+        edges: Rc<[i32]>,
         color: Rc<str>,
     },
     Gradient {
@@ -138,6 +145,21 @@ impl Primitive {
             Primitive::RectFill { rect, color } => {
                 painter.rect_fill(*rect, PaintColor::Borrowed(color))
             }
+            Primitive::RectFillRun { rect, edges, color } => {
+                for pair in edges.windows(2) {
+                    painter.rect_fill(
+                        PixelRect {
+                            top_left: crate::Point {
+                                x: pair[0],
+                                y: rect.top(),
+                            },
+                            width: pair[1] - pair[0],
+                            height: rect.height,
+                        },
+                        PaintColor::Borrowed(color),
+                    );
+                }
+            }
             Primitive::Gradient { rect, from, to } => painter.rect_fill_hgradient(
                 *rect,
                 PaintColor::Borrowed(from),
@@ -185,8 +207,7 @@ impl Primitive {
                 baseline,
             } => painter.fill_text(
                 text,
-                *x,
-                *y,
+                PointF::new(*x, *y),
                 PaintColor::Borrowed(font_css),
                 PaintColor::Borrowed(color),
                 *align,
@@ -225,6 +246,26 @@ impl SceneBuilder {
     pub fn rect_fill(&mut self, rect: PixelRect, color: PaintColor) {
         let color = self.intern(color.as_str());
         self.ops.push(Primitive::RectFill { rect, color });
+    }
+    /// Store a row fill compactly while retaining each rectangle's raster edges.
+    /// Supply ordered boundaries from rect.left() through rect.right().
+    pub fn rect_fill_run(&mut self, rect: PixelRect, edges: &[i32], color: PaintColor) {
+        debug_assert!(
+            edges.len() >= 2
+                && edges.first() == Some(&rect.left())
+                && edges.last() == Some(&rect.right())
+                && edges.windows(2).all(|p| p[0] < p[1])
+        );
+        if edges.len() == 2 {
+            self.rect_fill(rect, color);
+            return;
+        }
+        let color = self.intern(color.as_str());
+        self.ops.push(Primitive::RectFillRun {
+            rect,
+            edges: Rc::from(edges),
+            color,
+        });
     }
     pub fn rect_fill_hgradient(&mut self, rect: PixelRect, from: PaintColor, to: PaintColor) {
         let from = self.intern(from.as_str());
@@ -285,8 +326,7 @@ impl SceneBuilder {
     pub fn fill_text(
         &mut self,
         text: &str,
-        x: f64,
-        y: f64,
+        position: PointF,
         font_css: PaintColor,
         color: PaintColor,
         align: TextAlign,
@@ -296,8 +336,8 @@ impl SceneBuilder {
         let color = self.intern(color.as_str());
         self.ops.push(Primitive::Text {
             text: text.to_owned(),
-            x,
-            y,
+            x: position.x,
+            y: position.y,
             font_css,
             color,
             align,

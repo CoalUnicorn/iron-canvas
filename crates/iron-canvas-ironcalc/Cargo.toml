@@ -3,6 +3,10 @@ name = "iron-canvas-ironcalc"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
+# The cell-block evidence files use private compiler state. compiler.rs loads
+# them as unit-test modules. List integration tests to avoid a second build of
+# those files as standalone test crates.
+autotests = false
 
 [lib]
 crate-type = ["rlib"]
@@ -22,3 +26,23 @@ iron-canvas-native = { path = "../iron-canvas-native" }
 
 [lints]
 workspace = true
+
+[[test]]
+name = "cf_fixture"
+path = "tests/cf_fixture.rs"
+
+[[test]]
+name = "cf_round_trip"
+path = "tests/cf_round_trip.rs"
+
+[[test]]
+name = "compiler"
+path = "tests/compiler.rs"
+
+[[test]]
+name = "text_metrics"
+path = "tests/text_metrics.rs"
+
+[[test]]
+name = "text_spill"
+path = "tests/text_spill.rs"

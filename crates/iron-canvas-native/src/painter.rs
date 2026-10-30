@@ -1,7 +1,7 @@
 use cairo::{Context, ImageSurface};
 use iron_canvas_core::{
     Line, PixelRect, Span,
-    geometry::path::{Path, PathCmd},
+    geometry::path::{Path, PathCmd, PointF},
     painter::*,
 };
 use std::{
@@ -293,8 +293,7 @@ impl Painter for NativePainter {
     fn fill_text(
         &self,
         text: &str,
-        x: f64,
-        y: f64,
+        position: PointF,
         font_css: PaintColor,
         color: PaintColor,
         align: TextAlign,
@@ -304,17 +303,19 @@ impl Painter for NativePainter {
         let (w, h) = layout.size();
         let w = f64::from(w) / f64::from(pango::SCALE);
         let h = f64::from(h) / f64::from(pango::SCALE);
-        let x = x - match align {
-            TextAlign::Start => 0.0,
-            TextAlign::Center => w / 2.0,
-            TextAlign::End => w,
-        };
-        let y = y - match baseline {
-            TextBaseline::Top => 0.0,
-            TextBaseline::Middle => h / 2.0,
-            TextBaseline::Bottom => h,
-            TextBaseline::Alphabetic => f64::from(layout.baseline()) / f64::from(pango::SCALE),
-        };
+        let x = position.x
+            - match align {
+                TextAlign::Start => 0.0,
+                TextAlign::Center => w / 2.0,
+                TextAlign::End => w,
+            };
+        let y = position.y
+            - match baseline {
+                TextBaseline::Top => 0.0,
+                TextBaseline::Middle => h / 2.0,
+                TextBaseline::Bottom => h,
+                TextBaseline::Alphabetic => f64::from(layout.baseline()) / f64::from(pango::SCALE),
+            };
         self.source(color);
         self.context.move_to(x, y);
         pangocairo::functions::show_layout(&self.context, &layout);

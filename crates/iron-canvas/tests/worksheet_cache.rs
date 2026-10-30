@@ -714,3 +714,32 @@ fn empty_viewport_read_count_does_not_imply_a_cache_hit() {
     assert!(second.content_cached);
     assert_eq!(second.extended_style_reads, 0);
 }
+
+#[test]
+#[ignore = "release timing of a full content-cache hit with a no-op backend"]
+fn measure_full_content_cache_hit() {
+    if std::hint::black_box(cfg!(debug_assertions)) {
+        panic!("measure with --release");
+    }
+    let (model, request) = fixture();
+    let mut session = CanvasSession::new(Backend::new(8.0));
+    let mut cache = WorksheetCache::new(2);
+    session
+        .render_cached(&mut cache, &model, &request, METRICS)
+        .unwrap();
+    let mut times = Vec::new();
+    for _ in 0..101 {
+        let start = std::time::Instant::now();
+        let result = session
+            .render_cached(&mut cache, &model, &request, METRICS)
+            .unwrap();
+        times.push(start.elapsed().as_nanos());
+        assert!(result.content_cached);
+        assert_eq!(result.extended_style_reads, 0);
+    }
+    times.sort_unstable();
+    println!(
+        "CACHE_HIT_NS median={} p10={} p90={}",
+        times[50], times[10], times[90]
+    );
+}

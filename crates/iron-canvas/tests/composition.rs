@@ -120,7 +120,11 @@ fn offscreen_merge_anchor_is_read_once_and_link_intents_do_not_write() {
     req.overlays.active_cell = Some(coord(5, 5));
     session.render(&w, &req).unwrap();
     let worksheet = &session.committed_frame().unwrap().worksheet;
-    assert_eq!(worksheet.extended_style_reads, worksheet.cell_count() + 1);
+    // Each plain pane shares one style. The offscreen anchor adds one read.
+    assert_eq!(
+        worksheet.extended_style_reads,
+        worksheet.geometry.as_ref().unwrap().panes.len() + 1
+    );
     assert!(!worksheet.cells().any(|cell| cell.coordinate == coord(3, 3)));
     let fragments = session.visible_fragments(range(3, 3, 7, 7));
     assert_eq!(fragments.len(), 1);
@@ -155,7 +159,11 @@ fn merge_crossing_freeze_has_four_fragments_and_one_anchor_read() {
     session.render(&w, &request()).unwrap();
     assert_eq!(session.visible_fragments(range(1, 1, 7, 7)).len(), 4);
     let worksheet = &session.committed_frame().unwrap().worksheet;
-    assert_eq!(worksheet.extended_style_reads, worksheet.cell_count());
+    // Each plain pane constructs one shared style, including merged cells.
+    assert_eq!(
+        worksheet.extended_style_reads,
+        worksheet.geometry.as_ref().unwrap().panes.len()
+    );
     for fragment in session.visible_fragments(range(1, 1, 7, 7)) {
         assert_eq!(
             session
@@ -268,7 +276,11 @@ fn pdf_and_svg_stage_the_identical_prepared_scene_with_overlays() {
     let mut session = CanvasSession::new(SvgSceneBackend::new());
     session.render(&w, &request).unwrap();
     let worksheet = &session.committed_frame().unwrap().worksheet;
-    assert_eq!(worksheet.extended_style_reads, worksheet.cell_count());
+    // Each plain pane constructs one shared style, including merged cells.
+    assert_eq!(
+        worksheet.extended_style_reads,
+        worksheet.geometry.as_ref().unwrap().panes.len()
+    );
     assert!(
         worksheet
             .scene

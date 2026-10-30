@@ -1,6 +1,7 @@
 use super::*;
 use iron_canvas_core::{
     Axis, Point, Side,
+    geometry::path::PointF,
     painter::{TextAlign, TextBaseline},
     scene::Primitive,
     scene_geometry::{AxisCell, AxisError, GridGeometry, GridPane, GridRange, sample_bands},
@@ -26,6 +27,42 @@ pub(super) fn prepare(
     shaper: &mut TextShaper<'_>,
     reuse: WorksheetReuse<'_>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+    prepare_with_fill_paint(
+        context,
+        viewport,
+        shaper,
+        reuse,
+        Some(cells::BlockLimits::default()),
+        cells::FillPaint::Runs,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn prepare_with_blocks(
+    context: WorksheetContext<'_, '_>,
+    viewport: WorksheetViewport,
+    shaper: &mut TextShaper<'_>,
+    reuse: WorksheetReuse<'_>,
+    blocks: Option<cells::BlockLimits>,
+) -> Result<PreparedWorksheet, WorksheetCompileError> {
+    prepare_with_fill_paint(
+        context,
+        viewport,
+        shaper,
+        reuse,
+        blocks,
+        cells::FillPaint::Cells,
+    )
+}
+
+pub(super) fn prepare_with_fill_paint(
+    context: WorksheetContext<'_, '_>,
+    viewport: WorksheetViewport,
+    shaper: &mut TextShaper<'_>,
+    reuse: WorksheetReuse<'_>,
+    blocks: Option<cells::BlockLimits>,
+    fill_paint: cells::FillPaint,
+) -> Result<PreparedWorksheet, WorksheetCompileError> {
     let WorksheetContext {
         workbook,
         sheet,
@@ -36,6 +73,7 @@ pub(super) fn prepare(
         metadata,
     } = reuse;
     let mut attempt = Attempt::new(context, shaper, metadata.map(|data| data.links))?;
+    attempt.fill_paint = fill_paint;
     let (frozen, merges) = read_structure(&attempt, viewport, metadata)?;
     let mut dimensions = Dimensions {
         workbook,
@@ -44,6 +82,11 @@ pub(super) fn prepare(
         cols: HashMap::new(),
     };
     let geometry = prepare_geometry(&mut attempt, viewport, frozen, &mut dimensions, previous)?;
+
+    // Load visible data before spill searches request offscreen cells.
+    if let Some(limits) = blocks {
+        attempt.load_blocks(&geometry, limits)?;
+    }
 
     // Draw ordinary cells first. Merges cover their contents and reuse their records.
     let mut scene = paint_cells(&mut attempt, &geometry, frozen, &merges, &mut dimensions)?;
@@ -67,6 +110,8 @@ pub(super) fn prepare(
         merges,
         links: attempt.links,
         extended_style_reads: attempt.reads,
+        #[cfg(test)]
+        read_stats: attempt.read_stats,
     })
 }
 
@@ -226,6 +271,12 @@ fn paint_cells(
             pass.push_clip(pane.clip);
         }
         for row in pane.rows.iter() {
+            if attempt.fill_paint == cells::FillPaint::Runs {
+                attempt
+                    .cached
+                    .blocks
+                    .paint_row_fills(row, pane, &mut passes[0]);
+            }
             let limits = if pane
                 .columns
                 .first()
@@ -264,7 +315,7 @@ fn paint_cells(
                     .is_err()
                 {
                     let cf = cf::CfDecorationPaint::resolve(
-                        &attempt.cached[&source.placement.coordinate].extended,
+                        attempt.cached.view(source.placement.coordinate).extended,
                         attempt.context.workbook,
                     );
                     attempt.paint_text(source.placement, &mut passes[4], Some(source.clip), &cf);
@@ -325,7 +376,7 @@ fn paint_merges(
                 && attempt
                     .context
                     .workbook
-                    .resolve_color(&attempt.cached[&range.first].extended.style.fill.color)
+                    .resolve_color(&attempt.cached.view(range.first).extended.style.fill.color)
                     .is_empty();
             paint_merge_borders(attempt, pane, range, show_merge_grid, &mut merged_passes);
             for pass in &mut merged_passes {
@@ -360,7 +411,7 @@ fn paint_merge_borders(
                 row: row.index,
                 col: col.index,
             };
-            let record = &attempt.cached[&coord];
+            let record = attempt.cached.view(coord);
             let b = &record.extended.style.border;
             let border = Border {
                 left: (coord.col == range.first.col)
@@ -385,8 +436,7 @@ fn paint_merge_borders(
                 attempt.context,
                 &border,
                 rect,
-                false,
-                false,
+                borders::GridEdges::default(),
             );
             if show_merge_grid {
                 for (edge, side, item) in [
@@ -540,8 +590,7 @@ fn headers(out: &mut SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme)
                 out.push_clip(rect);
                 out.fill_text(
                     &label,
-                    f64::from(rect.center().x),
-                    f64::from(rect.center().y),
+                    PointF::new(f64::from(rect.center().x), f64::from(rect.center().y)),
                     font,
                     PaintColor::Borrowed(&theme.header_text_color),
                     TextAlign::Center,

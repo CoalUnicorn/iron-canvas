@@ -13,6 +13,12 @@ enum Rule {
     Double,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct GridEdges {
+    pub(super) top: bool,
+    pub(super) left: bool,
+}
+
 impl Rule {
     /// Extension at each end along the segment.
     /// Where two perpendicular edges meet at a cell corner the thicker
@@ -48,8 +54,7 @@ pub(super) fn compile_borders(
     context: WorksheetContext<'_, '_>,
     border: &Border,
     rect: PixelRect,
-    show_grid: bool,
-    hide_left_grid: bool,
+    grid_edges: GridEdges,
 ) {
     let WorksheetContext {
         workbook, theme, ..
@@ -83,7 +88,7 @@ pub(super) fn compile_borders(
                     rule.width(),
                 );
             }
-        } else if show_grid && (side == Side::Top || (side == Side::Left && !hide_left_grid)) {
+        } else if (side == Side::Top && grid_edges.top) || (side == Side::Left && grid_edges.left) {
             grid.stroke_line(
                 side.line(rect),
                 PaintColor::Borrowed(&theme.grid_color),
@@ -125,8 +130,10 @@ mod tests {
                 width: 80,
                 height: 30,
             },
-            true,
-            false,
+            GridEdges {
+                top: true,
+                left: true,
+            },
         );
         let grid = grid.finish();
         assert_eq!(grid.len(), 1);

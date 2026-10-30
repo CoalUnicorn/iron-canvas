@@ -189,8 +189,7 @@ impl SceneDto {
                         }
                         builder.fill_text(
                             &text,
-                            x,
-                            y,
+                            PointF::new(x, y),
                             PaintColor::Borrowed(&font_css),
                             PaintColor::Borrowed(&color),
                             align.into(),

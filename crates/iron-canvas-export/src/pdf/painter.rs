@@ -451,8 +451,7 @@ impl Painter for PdfPainter {
     fn fill_text(
         &self,
         text: &str,
-        x: f64,
-        y: f64,
+        position: PointF,
         font_css: PaintColor,
         color: PaintColor,
         align: TextAlign,
@@ -470,18 +469,18 @@ impl Painter for PdfPainter {
         // upright glyphs while letting us specify the baseline origin
         // directly in painter coordinates.
         let tx = match align {
-            TextAlign::Start => x,
-            TextAlign::Center => x - text_width / 2.0,
-            TextAlign::End => x - text_width,
+            TextAlign::Start => position.x,
+            TextAlign::Center => position.x - text_width / 2.0,
+            TextAlign::End => position.x - text_width,
         };
         // Helvetica ascent aprox 0.8 x size, descent aprox 0.2 x size — Type1 base-14
         // metrics aren't queryable without parsing AFM tables we don't
         // ship, so these are the published nominal ratios.
         let ty = match baseline {
-            TextBaseline::Top => y + size * 0.8,
-            TextBaseline::Middle => y + size * 0.5,
-            TextBaseline::Bottom => y - size * 0.2,
-            TextBaseline::Alphabetic => y,
+            TextBaseline::Top => position.y + size * 0.8,
+            TextBaseline::Middle => position.y + size * 0.5,
+            TextBaseline::Bottom => position.y - size * 0.2,
+            TextBaseline::Alphabetic => position.y,
         };
 
         let (r, g, b) = parse_css_color(color.as_str());
@@ -624,8 +623,7 @@ mod tests {
         ] {
             painter.fill_text(
                 "styled",
-                0.0,
-                12.0,
+                PointF::new(0.0, 12.0),
                 PaintColor::Static(font_css),
                 PaintColor::Static("#000"),
                 TextAlign::Start,

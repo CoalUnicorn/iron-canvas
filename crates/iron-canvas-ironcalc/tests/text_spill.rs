@@ -336,8 +336,8 @@ fn fills_and_font_only_styles_preserve_spill_and_backgrounds() {
             assert_eq!(text_paint(&frame, TEXT), expected, "{alignment}, {color}");
             for col in 1..=6 {
                 assert!(frame.scene.passes[0].iter().any(|op| matches!(
-                    op, Primitive::RectFill { rect: bounds, color: fill }
-                        if *bounds == rect(&frame, 2, col) && fill.as_ref() == color
+                    op, Primitive::RectFill { rect: bounds, color: fill } | Primitive::RectFillRun { rect: bounds, color: fill, .. }
+                        if bounds.intersection(rect(&frame, 2, col)) == Some(rect(&frame, 2, col)) && fill.as_ref() == color
                 )));
             }
         }
@@ -443,10 +443,14 @@ fn offscreen_search_and_spill_distance_stop_at_64_columns() {
     model.set_user_input(0, 1, 1, &long).unwrap();
     let within = prepare(&model, 65, 198);
     assert_eq!(text_paint(&within, &long)[0].0.width, 50);
-    assert_eq!(within.extended_style_reads, within.cell_count() + 64);
     let beyond = prepare(&model, 66, 198);
     assert!(text_paint(&beyond, &long).is_empty());
-    assert_eq!(beyond.extended_style_reads, beyond.cell_count());
+    // One visible block style plus 64 individual offscreen cells within reach.
+    assert_eq!(beyond.extended_style_reads, 1);
+    assert_eq!(
+        within.extended_style_reads,
+        beyond.extended_style_reads + 64
+    );
 
     let wide = prepare(&model, 1, 5048);
     assert_eq!(

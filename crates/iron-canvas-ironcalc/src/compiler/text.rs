@@ -1,28 +1,36 @@
 //! Spreadsheet text policy. Generic layout stays in core.
-use super::WorksheetContext;
+use super::{CellView, WorksheetContext};
 use iron_canvas_core::painter::{PaintColor, TextAlign, TextBaseline};
 use iron_canvas_core::scene::SceneBuilder;
 use iron_canvas_core::text_shaper::TextShaper;
-use iron_canvas_core::{PixelRect, text_layout::*};
-use ironcalc_base::{
-    links::CellLinkView,
-    types::{CellType, HorizontalAlignment as H, Style, VerticalAlignment as V},
-};
+use iron_canvas_core::{PixelRect, geometry::path::PointF, text_layout::*};
+use ironcalc_base::types::{CellType, HorizontalAlignment as H, Style, VerticalAlignment as V};
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct CellTextPaint<'a> {
+    pub(super) record: CellView<'a>,
+    pub(super) bounds: PixelRect,
+    pub(super) reserved_left: i32,
+    pub(super) spill_clip: Option<PixelRect>,
+    pub(super) has_link: bool,
+}
+
 pub(super) fn compile_text(
     out: &mut SceneBuilder,
     context: WorksheetContext<'_, '_>,
-    style: &Style,
-    kind: &CellType,
-    text: &str,
-    rect: PixelRect,
-    reserved: i32,
-    spill_clip: Option<PixelRect>,
+    input: CellTextPaint<'_>,
     shaper: &mut TextShaper<'_>,
-    link: Option<&CellLinkView>,
     lines: &mut Vec<TextLine>,
 ) {
+    let CellTextPaint {
+        record,
+        bounds: rect,
+        reserved_left,
+        spill_clip,
+        has_link,
+    } = input;
+    let style = &record.extended.style;
+    let kind = record.kind;
+    let text = record.value;
     let WorksheetContext {
         workbook, theme, ..
     } = context;
@@ -31,7 +39,7 @@ pub(super) fn compile_text(
     if text.is_empty() || (rect.width < 10 && spill_clip.is_none()) || rect.height < 10 {
         return;
     }
-    let reserved = reserved.clamp(0, rect.width);
+    let reserved = reserved_left.clamp(0, rect.width);
     let rect = PixelRect {
         top_left: iron_canvas_core::Point {
             x: rect.left() + reserved,
@@ -54,7 +62,7 @@ pub(super) fn compile_text(
     let resolved = workbook.resolve_color(&font.color);
     // IronCalc keeps the hyperlink theme slot private. It is OOXML slot 10.
     let link_color =
-        link.map(|_| workbook.resolve_color(&ironcalc_base::types::Color::Theme(10, 0.0)));
+        has_link.then(|| workbook.resolve_color(&ironcalc_base::types::Color::Theme(10, 0.0)));
     let color = if matches!(kind, CellType::ErrorValue) {
         &theme.error_text_color
     } else if let Some(color) = link_color.as_deref().filter(|color| !color.is_empty()) {
@@ -79,8 +87,7 @@ pub(super) fn compile_text(
         };
         out.fill_text(
             &line.text,
-            x,
-            line.center_y + metrics.baseline_offset,
+            PointF::new(x, line.center_y + metrics.baseline_offset),
             PaintColor::Borrowed(&css),
             PaintColor::Borrowed(color),
             horizontal,
@@ -88,7 +95,7 @@ pub(super) fn compile_text(
         );
         let x1 = line.center_x - line.width / 2.0;
         let x2 = line.center_x + line.width / 2.0;
-        if font.u || link.is_some() {
+        if font.u || has_link {
             // The measured font box does not share the old middle baseline.
             // Place the underline halfway into the descent. The metric
             // interface has no font-specific underline position.
