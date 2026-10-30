@@ -336,8 +336,8 @@ fn fills_and_font_only_styles_preserve_spill_and_backgrounds() {
             assert_eq!(text_paint(&frame, TEXT), expected, "{alignment}, {color}");
             for col in 1..=6 {
                 assert!(frame.scene.passes[0].iter().any(|op| matches!(
-                    op, Primitive::RectFill { rect: bounds, color: fill }
-                        if *bounds == rect(&frame, 2, col) && fill.as_ref() == color
+                    op, Primitive::RectFill { rect: bounds, color: fill } | Primitive::RectFillRun { rect: bounds, color: fill, .. }
+                        if bounds.intersection(rect(&frame, 2, col)) == Some(rect(&frame, 2, col)) && fill.as_ref() == color
                 )));
             }
         }

@@ -147,9 +147,16 @@ pub(super) fn plan_blocks(
 // Validate public engine vectors before any indexed cell access. Keep indices,
 // rather than references, so blocks can move while the attempt owns them.
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum FillPaint {
+    Cells,
+    Runs,
+}
+
 pub(super) struct ValidatedBlock {
     data: CellsBlock,
     text_slots: Vec<Option<usize>>,
+    fill_rows: Vec<std::ops::Range<usize>>,
 }
 
 fn cell_type(value: i32) -> Option<CellType> {
@@ -208,7 +215,39 @@ impl ValidatedBlock {
             text_slots[slot] = Some(index);
             previous = Some(slot);
         }
-        Ok(Self { data, text_slots })
+        // Require complete row coverage before ordinary fills can be skipped.
+        // Empty colors still cover cells, but add no paint over the sheet background.
+        let mut fill_rows = Vec::with_capacity(rect.height as usize);
+        let mut index = 0;
+        for row in rect.row..rect.row + rect.height {
+            let first = index;
+            let mut column = rect.column;
+            while column < rect.column + rect.width {
+                let run = data.fills.get(index).ok_or("missing fill run")?;
+                let end = run
+                    .column
+                    .checked_add(run.width)
+                    .ok_or("invalid fill width")?;
+                if run.row != row
+                    || run.column != column
+                    || run.width < 1
+                    || end > rect.column + rect.width
+                {
+                    return Err("invalid fill coverage");
+                }
+                column = end;
+                index += 1;
+            }
+            fill_rows.push(first..index);
+        }
+        if index != data.fills.len() {
+            return Err("extra fill runs");
+        }
+        Ok(Self {
+            data,
+            text_slots,
+            fill_rows,
+        })
     }
     pub(super) fn cell_count(&self) -> usize {
         self.data.style_indices.len()
@@ -267,6 +306,56 @@ impl CellBlocks {
             interval.row_slot + (cell.col - interval.first) as usize,
         ))
     }
+    pub(super) fn paint_row_fills(
+        &self,
+        row: &AxisCell,
+        pane: &GridPane,
+        out: &mut iron_canvas_core::scene::SceneBuilder,
+    ) {
+        use iron_canvas_core::{PixelRect, Point, painter::PaintColor};
+        let Some(intervals) = self.rows.get(&row.index) else {
+            return;
+        };
+        for interval in intervals {
+            let block = &self.blocks[interval.block];
+            let row_slot = (row.index - block.data.row) as usize;
+            for run in &block.data.fills[block.fill_rows[row_slot].clone()] {
+                if run.color.is_empty() {
+                    continue;
+                }
+                // Use sampled column positions. Fixed-width multiplication loses
+                // custom sizes and can cross hidden or frozen coordinate gaps.
+                let first = pane.columns.partition_point(|col| col.index < run.column);
+                let end = pane
+                    .columns
+                    .partition_point(|col| col.index < run.column + run.width);
+                if first == end {
+                    continue;
+                }
+                let left = &pane.columns[first];
+                let right = &pane.columns[end - 1];
+                let rect = PixelRect {
+                    top_left: Point {
+                        x: left.start,
+                        y: row.start,
+                    },
+                    width: right.start + right.extent - left.start,
+                    height: row.extent,
+                };
+                // Retain full cell bounds and the pane clip. Trimming the last
+                // rectangle changes edge antialiasing at fractional scales.
+                let mut edges = Vec::with_capacity(end - first + 1);
+                edges.push(left.start);
+                edges.extend(
+                    pane.columns[first..end]
+                        .iter()
+                        .map(|col| col.start + col.extent),
+                );
+                out.rect_fill_run(rect, &edges, PaintColor::Borrowed(&run.color));
+            }
+        }
+    }
+
     pub(super) fn text_kind(&self, block: usize, slot: usize) -> Option<CellType> {
         let block = &self.blocks[block];
         block.text_slots[slot].and_then(|index| cell_type(block.data.texts[index].cell_type))
@@ -333,7 +422,7 @@ mod tests {
             width: 2,
             height: 2,
         };
-        let mutations: [fn(&mut CellsBlock); 8] = [
+        let mutations: [fn(&mut CellsBlock); 14] = [
             |b| b.width = 3,
             |b| {
                 b.style_indices.pop();
@@ -344,6 +433,14 @@ mod tests {
             |b| b.texts.swap(0, 1),
             |b| b.texts.push(b.texts[0].clone()),
             |b| b.texts[0].text.clear(),
+            |b| {
+                b.fills.pop();
+            },
+            |b| b.fills[0].width = 0,
+            |b| b.fills[0].width = i32::MAX,
+            |b| b.fills[0].column += 1,
+            |b| b.fills[0].row += 1,
+            |b| b.fills.push(b.fills[0].clone()),
         ];
         for mutate in mutations {
             let mut block = original.clone();

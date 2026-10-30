@@ -2,7 +2,11 @@
 mod borders;
 mod cells;
 #[cfg(test)]
+mod cells_block_evidence;
+#[cfg(test)]
 mod cells_block_tests;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod cells_fill_tests;
 mod cf;
 mod composition;
 mod glyphs;
@@ -82,6 +86,8 @@ pub struct PreparedWorksheet {
     /// Calls to `get_extended_cell_style`, including calls inside block reads.
     /// At the pinned engine revision, each block style entry counts as one call.
     pub extended_style_reads: usize,
+    #[cfg(test)]
+    read_stats: ReadStats,
 }
 
 /// Borrowed complete link and merge lists from a prepared viewport.
@@ -284,6 +290,8 @@ impl WorksheetCompiler {
             merges: Rc::from([]),
             links: attempt.links,
             extended_style_reads: attempt.reads,
+            #[cfg(test)]
+            read_stats: attempt.read_stats,
         })
     }
 }
@@ -339,7 +347,7 @@ impl CellRecords {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
 struct ReadStats {
     block_calls: usize,
     block_cells: usize,
@@ -355,6 +363,7 @@ struct Attempt<'w, 'm, 's> {
     context: WorksheetContext<'w, 'm>,
     shaper: &'w mut TextShaper<'s>,
     show_grid: bool,
+    fill_paint: cells::FillPaint,
     cached: CellRecords,
     reads: usize,
     read_stats: ReadStats,
@@ -391,6 +400,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             context,
             shaper,
             show_grid,
+            fill_paint: cells::FillPaint::Cells,
             cached: CellRecords::default(),
             reads: 0,
             read_stats: ReadStats::default(),
@@ -542,7 +552,11 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         let rect = placement.bounds;
         let style = &record.extended.style;
         let fill = self.context.workbook.resolve_color(&style.fill.color);
-        if merged || !fill.is_empty() {
+        // Covered ordinary cells already have one background from their run.
+        // Merges still cover ordinary content in their later composition pass.
+        let run_fill = self.fill_paint == cells::FillPaint::Runs
+            && self.cached.covered.contains_key(&placement.coordinate);
+        if merged || (!run_fill && !fill.is_empty()) {
             passes[0].rect_fill(
                 rect,
                 PaintColor::Borrowed(if fill.is_empty() {

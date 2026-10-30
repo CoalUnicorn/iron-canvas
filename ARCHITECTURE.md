@@ -196,7 +196,13 @@ pub struct PreparedWorksheet {
   Blocks do not survive preparation or enter the shared worksheet cache.
   `extended_style_reads` counts block style entries plus individual style reads.
   At the pinned engine revision, each block style entry requires one internal
-  `get_extended_cell_style` call. Fill runs do not change painting yet.
+  `get_extended_cell_style` call. Ordinary covered cells use validated fill runs.
+  Each `RectFillRun` stores one color and the sampled cell boundaries.
+  Painting expands those boundaries into the original cell rectangles.
+  This preserves fractional-scale pixels while reducing stored scene commands.
+  Retained fingerprints expand the same rectangles, so grouping does not change
+  damage or blit decisions. Uncovered cells and merged cells keep individual fills.
+
 - Pass order is fixed: background, CF graphics, grid borders, explicit borders,
   text, then merge composition. `CellReadOperation` and `WorksheetCompileError`
   report structured preparation failures (sheet, cell, operation, engine

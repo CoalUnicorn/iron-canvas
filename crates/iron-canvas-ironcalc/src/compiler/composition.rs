@@ -27,21 +27,41 @@ pub(super) fn prepare(
     shaper: &mut TextShaper<'_>,
     reuse: WorksheetReuse<'_>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
-    prepare_with_blocks(
+    prepare_with_fill_paint(
         context,
         viewport,
         shaper,
         reuse,
         Some(cells::BlockLimits::default()),
+        cells::FillPaint::Runs,
     )
 }
 
+#[cfg(test)]
 pub(super) fn prepare_with_blocks(
     context: WorksheetContext<'_, '_>,
     viewport: WorksheetViewport,
     shaper: &mut TextShaper<'_>,
     reuse: WorksheetReuse<'_>,
     blocks: Option<cells::BlockLimits>,
+) -> Result<PreparedWorksheet, WorksheetCompileError> {
+    prepare_with_fill_paint(
+        context,
+        viewport,
+        shaper,
+        reuse,
+        blocks,
+        cells::FillPaint::Cells,
+    )
+}
+
+pub(super) fn prepare_with_fill_paint(
+    context: WorksheetContext<'_, '_>,
+    viewport: WorksheetViewport,
+    shaper: &mut TextShaper<'_>,
+    reuse: WorksheetReuse<'_>,
+    blocks: Option<cells::BlockLimits>,
+    fill_paint: cells::FillPaint,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
     let WorksheetContext {
         workbook,
@@ -53,6 +73,7 @@ pub(super) fn prepare_with_blocks(
         metadata,
     } = reuse;
     let mut attempt = Attempt::new(context, shaper, metadata.map(|data| data.links))?;
+    attempt.fill_paint = fill_paint;
     let (frozen, merges) = read_structure(&attempt, viewport, metadata)?;
     let mut dimensions = Dimensions {
         workbook,
@@ -89,6 +110,8 @@ pub(super) fn prepare_with_blocks(
         merges,
         links: attempt.links,
         extended_style_reads: attempt.reads,
+        #[cfg(test)]
+        read_stats: attempt.read_stats,
     })
 }
 
@@ -248,6 +271,12 @@ fn paint_cells(
             pass.push_clip(pane.clip);
         }
         for row in pane.rows.iter() {
+            if attempt.fill_paint == cells::FillPaint::Runs {
+                attempt
+                    .cached
+                    .blocks
+                    .paint_row_fills(row, pane, &mut passes[0]);
+            }
             let limits = if pane
                 .columns
                 .first()
