@@ -2,10 +2,12 @@
 mod borders;
 mod cells;
 #[cfg(test)]
+#[path = "../tests/cells_block_evidence.rs"]
 mod cells_block_evidence;
 #[cfg(test)]
 mod cells_block_tests;
 #[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "../tests/cells_fill_tests.rs"]
 mod cells_fill_tests;
 mod cf;
 mod composition;
