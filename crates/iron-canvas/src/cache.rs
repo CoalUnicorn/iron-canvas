@@ -203,6 +203,14 @@ mod tests {
             cache.lookup(&changed, METRICS),
             CacheLookup::Geometry(_)
         ));
+        // Offset-only movement is still a different viewport.
+        changed = original.clone();
+        changed.viewport.scroll.offset_x = 1;
+        changed.viewport.scroll.offset_y = 1;
+        assert!(matches!(
+            cache.lookup(&changed, METRICS),
+            CacheLookup::Geometry(_)
+        ));
         cache.publish(&changed, METRICS, base());
         assert_eq!(cache.len(), 1);
         assert!(matches!(

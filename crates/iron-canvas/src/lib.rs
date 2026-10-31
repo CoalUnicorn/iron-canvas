@@ -99,6 +99,8 @@ pub struct RenderOutcome {
     pub extended_style_reads: usize,
     /// True when the shared cache supplies prepared content without compilation.
     pub content_cached: bool,
+    /// True when complete link and merge metadata came from the shared cache.
+    pub metadata_reused: bool,
     pub reused_geometry: bool,
     pub strategy: RenderStrategy,
 }
@@ -380,6 +382,7 @@ impl<B: RenderBackend> CanvasSession<B> {
             cell_count: worksheet.cell_count(),
             extended_style_reads: reads,
             content_cached,
+            metadata_reused: metadata.is_some(),
             reused_geometry,
             strategy,
         };

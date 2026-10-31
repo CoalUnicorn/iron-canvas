@@ -514,6 +514,97 @@ fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
 }
 
 #[wasm_bindgen_test]
+fn offset_viewports_miss_content_cache_keep_metadata_and_match_fresh() {
+    use iron_canvas::{RenderStrategy, TextMetricsKey, WorksheetCache};
+    use ironcalc_base::types::Link;
+
+    let mut model = UserModel::new_empty("offset cache", "en", "UTC", "en").unwrap();
+    model.set_rows_height(0, 1, 20, 24.0).unwrap();
+    model.set_columns_width(0, 1, 20, 60.0).unwrap();
+    model.set_user_input(0, 5, 5, "offset cache").unwrap();
+    model
+        .set_cell_link(
+            0,
+            5,
+            5,
+            Link::External {
+                target: "https://example.test".into(),
+                tooltip: None,
+            },
+            None,
+        )
+        .unwrap();
+    let mut request = RenderRequest {
+        sheet: 0,
+        revision: RevisionToken {
+            workbook_id: 1,
+            revision: 0,
+        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 5, col: 5 }, 400, 300),
+        theme: CanvasTheme::light(),
+        overlays: Default::default(),
+    };
+    let dpr = 1.25;
+    let canvas = make_canvas();
+    let metrics = CanvasMetrics::new(CanvasSize { w: 400.0, h: 300.0 }, dpr).unwrap();
+    let mut session =
+        CanvasSession::new(Canvas2dSceneBackend::new(canvas.clone(), metrics).unwrap());
+    let mut cache = WorksheetCache::new(2);
+    let key = TextMetricsKey::new(1, 0);
+
+    let first = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(!first.content_cached);
+    let same = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(same.content_cached);
+    assert_eq!(same.strategy, RenderStrategy::Reuse);
+
+    request.viewport.scroll.offset_x = 7;
+    request.viewport.scroll.offset_y = 5;
+    let moved = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(
+        !moved.content_cached,
+        "an offset-only change is a content miss"
+    );
+    assert!(
+        moved.metadata_reused,
+        "link and merge metadata survive the move"
+    );
+    assert_eq!(moved.strategy, RenderStrategy::Fresh);
+    assert!(moved.extended_style_reads > 0);
+    assert_fresh(&session, &model, &request, dpr);
+    let repeat = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(repeat.content_cached);
+    assert_eq!(repeat.strategy, RenderStrategy::Reuse);
+
+    // A failed preparation keeps the committed frame and the cache entry.
+    let frame = session.committed_frame().cloned();
+    let before = pixels(&canvas);
+    let mut invalid = request.clone();
+    invalid.viewport.scroll.offset_x = 10_000;
+    assert!(
+        session
+            .render_cached(&mut cache, &model, &invalid, key)
+            .is_err()
+    );
+    assert_eq!(session.committed_frame(), frame.as_ref());
+    assert_eq!(pixels(&canvas), before);
+    let retry = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(retry.content_cached);
+    assert_eq!(retry.strategy, RenderStrategy::Reuse);
+    assert_eq!(pixels(&canvas), before);
+}
+
+#[wasm_bindgen_test]
 fn selection_union_headers_freeze_and_removal_match_fresh_at_four_scales() {
     use iron_canvas::{
         AreaId, SelectionArea, SelectionKind, SelectionMode, SelectionSnapshot, SelectionTarget,
