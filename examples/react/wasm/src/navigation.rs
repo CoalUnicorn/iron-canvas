@@ -44,7 +44,7 @@ pub fn classify_key(
 #[derive(Default)]
 pub(super) struct NavigationController {
     pub commands: SharedController,
-    pub presented: Option<(InteractionFrame, u64)>,
+    pub presented: Option<(InteractionFrame, u64, Option<u64>)>,
 }
 
 impl NavigationController {
@@ -56,7 +56,7 @@ impl NavigationController {
 }
 
 impl Workbook {
-    fn navigation_scope(&self) -> Result<NavigationScope, JsValue> {
+    pub(super) fn navigation_scope(&self) -> Result<NavigationScope, JsValue> {
         let sheet = self.workbook.get_selected_sheet();
         let sheet_id = self
             .workbook
@@ -213,9 +213,17 @@ impl Workbook {
             .render_request()
             .ok_or_else(|| JsValue::from_str("viewport unavailable"))?;
         let stamp = self.session.interaction_frame();
+        let scope = self.navigation_scope()?;
+        let generation = self.navigation.commands.view_generation(scope);
         if !self.navigation.commands.is_empty()
             || self.navigation.presented
-                != stamp.map(|stamp| (stamp, self.navigation.commands.selection_revision()))
+                != stamp.map(|stamp| {
+                    (
+                        stamp,
+                        self.navigation.commands.selection_revision(),
+                        generation,
+                    )
+                })
             || stamp.is_none_or(|stamp| {
                 stamp.viewport != expected.viewport
                     || stamp.revision != expected.revision

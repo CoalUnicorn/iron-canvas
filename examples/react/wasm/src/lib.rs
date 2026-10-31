@@ -9,19 +9,13 @@ pub use navigation::{NavigationCommand, classify_key};
 use iron_canvas::{
     CanvasSession, OverlayState, RenderRequest, RevisionToken, TextMetricsKey, WorksheetCache,
 };
-use iron_canvas_canvas2d::CanvasPainter;
-use iron_canvas_core::{
-    CanvasMetrics, CanvasSize, CanvasTheme, CellCoord,
-    painter::{Painter, TextMetrics},
-    scene::{GridScene, RenderBackend},
-};
+use iron_canvas_canvas2d::Canvas2dSceneBackend;
+use iron_canvas_core::{CanvasMetrics, CanvasSize, CanvasTheme, CellCoord};
 use iron_canvas_ironcalc::WorksheetViewport;
-use iron_canvas_wasm::CanvasRenderer;
 use ironcalc::import::load_from_xlsx_bytes;
 use ironcalc_base::{Model, UserModel};
-use std::convert::Infallible;
-use wasm_bindgen::{JsCast, prelude::*};
-use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement};
+use wasm_bindgen::prelude::*;
+use web_sys::HtmlCanvasElement;
 
 const LAST_ROW: i32 = 1_048_576;
 const LAST_COLUMN: i32 = 16_384;
@@ -49,8 +43,8 @@ impl SheetTab {
 pub struct Workbook {
     workbook: UserModel<'static>,
     metrics: CanvasMetrics,
-    renderer: CanvasRenderer,
-    session: CanvasSession<SceneCompilerBackend>,
+    canvas: HtmlCanvasElement,
+    session: CanvasSession<Canvas2dSceneBackend>,
     workbook_id: u64,
     revision: u64,
     cache: WorksheetCache,
@@ -65,8 +59,7 @@ impl Workbook {
     #[wasm_bindgen(constructor)]
     pub fn new(canvas: HtmlCanvasElement) -> Result<Workbook, JsValue> {
         let metrics = metrics_for(0.0, 0.0, 1.0)?;
-        let renderer = CanvasRenderer::new(canvas.clone())?;
-        let session = new_session(&canvas)?;
+        let session = new_session(canvas.clone(), metrics)?;
         let workbook = sample_workbook()?;
         let cache = WorksheetCache::new(visible_sheet_count(&workbook));
         Ok(Workbook {
@@ -77,7 +70,7 @@ impl Workbook {
             #[cfg(test)]
             fail_presentation: false,
             metrics,
-            renderer,
+            canvas,
             session,
             workbook_id: 1,
             revision: 0,
@@ -93,11 +86,12 @@ impl Workbook {
                 .checked_add(1)
                 .ok_or_else(|| JsValue::from_str("text metric generation exhausted"))?;
             self.navigation.presented = None;
-            self.renderer.resize(width, height, dpr)?;
+            // Target size and scale are fixed per session. Construction also
+            // clears the canvas, so pointers stay suspended until the frame.
+            self.session = new_session(self.canvas.clone(), metrics)?;
             self.metrics = metrics;
             self.metrics_generation = generation;
             self.cache.clear();
-            self.session.invalidate();
         }
         self.render()
     }
@@ -216,21 +210,23 @@ impl Workbook {
                 TextMetricsKey::new(1, self.metrics_generation),
             )
             .map_err(|error| JsValue::from_str(&format!("{error:?}")))?;
-        let scene = &self
-            .session
-            .committed_frame()
-            .expect("a successful render commits a frame")
-            .worksheet
-            .scene;
         #[cfg(test)]
         if self.fail_presentation {
             return Err(JsValue::from_str("injected presentation failure"));
         }
-        self.renderer.render_grid_scene(scene)?;
-        self.navigation.presented = self
-            .session
-            .interaction_frame()
-            .map(|stamp| (stamp, self.navigation.commands.selection_revision()));
+        // The backend committed the canvas before the session published its
+        // query state. Record that same frame as presented.
+        let generation = self
+            .navigation_scope()
+            .ok()
+            .and_then(|scope| self.navigation.commands.view_generation(scope));
+        self.navigation.presented = self.session.interaction_frame().map(|stamp| {
+            (
+                stamp,
+                self.navigation.commands.selection_revision(),
+                generation,
+            )
+        });
         Ok(())
     }
     fn render_request(&self) -> Option<RenderRequest> {
@@ -295,40 +291,13 @@ fn metrics_for(width: f64, height: f64, dpr: f64) -> Result<CanvasMetrics, JsVal
     .map_err(|error| JsValue::from_str(&error.to_string()))
 }
 
-fn new_session(canvas: &HtmlCanvasElement) -> Result<CanvasSession<SceneCompilerBackend>, JsValue> {
-    let context = canvas
-        .get_context("2d")?
-        .ok_or_else(|| JsValue::from_str("Canvas2D unavailable"))?
-        .dyn_into::<CanvasRenderingContext2d>()?;
-    Ok(CanvasSession::new(SceneCompilerBackend {
-        metrics: CanvasPainter::new(context),
-    }))
-}
-
-struct SceneCompilerBackend {
-    metrics: CanvasPainter,
-}
-
-impl RenderBackend for SceneCompilerBackend {
-    type StagedFrame = ();
-    type Error = Infallible;
-
-    fn metrics(&self) -> &dyn TextMetrics {
-        &self.metrics
-    }
-
-    fn stage_frame(&mut self, _scene: &GridScene) -> Result<Self::StagedFrame, Self::Error> {
-        Ok(())
-    }
-
-    fn invalidate_metrics(&mut self) {
-        self.metrics.clear_measure_cache();
-        self.metrics.invalidate_cache();
-    }
-
-    fn commit_frame(&mut self, _staged: Self::StagedFrame) -> Result<(), Self::Error> {
-        Ok(())
-    }
+fn new_session(
+    canvas: HtmlCanvasElement,
+    metrics: CanvasMetrics,
+) -> Result<CanvasSession<Canvas2dSceneBackend>, JsValue> {
+    Ok(CanvasSession::new(Canvas2dSceneBackend::new(
+        canvas, metrics,
+    )?))
 }
 
 fn sample_workbook() -> Result<UserModel<'static>, JsValue> {
