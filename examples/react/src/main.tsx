@@ -159,6 +159,24 @@ function App() {
     }
   };
 
+  // Navigation and wheel input share one queued paint per animation frame.
+  const schedulePublish = () => {
+    if (navigationFrame.current !== null) return;
+    navigationFrame.current = requestAnimationFrame(() => {
+      navigationFrame.current = null;
+      const workbook = workbookRef.current;
+      if (!workbook) return;
+      try {
+        workbook.flushNavigation();
+        setError(null);
+      } catch (navigationError) {
+        setError(messageFromError(navigationError));
+      } finally {
+        setActiveCell(workbook.activeCell());
+      }
+    });
+  };
+
   const navigateGrid = (event: KeyboardEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget;
     if (event.target !== canvas || document.activeElement !== canvas ||
@@ -175,19 +193,7 @@ function App() {
     event.preventDefault();
     try {
       workbook.enqueueNavigation(command, event.repeat);
-      if (navigationFrame.current === null) {
-        navigationFrame.current = requestAnimationFrame(() => {
-          navigationFrame.current = null;
-          try {
-            workbook.flushNavigation();
-            setError(null);
-          } catch (navigationError) {
-            setError(messageFromError(navigationError));
-          } finally {
-            setActiveCell(workbook.activeCell());
-          }
-        });
-      }
+      schedulePublish();
     } catch (navigationError) {
       setError(messageFromError(navigationError));
     }
@@ -210,24 +216,15 @@ function App() {
   };
 
   const scrollGrid = (event: WheelEvent<HTMLCanvasElement>) => {
+    // Leave browser zoom gestures on the existing browser path.
+    if (event.ctrlKey || event.metaKey) return;
     event.preventDefault();
     const workbook = workbookRef.current;
     if (!workbook) return;
 
-    const scale = event.deltaMode === 1 ? 1 : event.deltaMode === 2 ? 20 : 1 / 24;
-    const step = (delta: number) =>
-      delta === 0
-        ? 0
-        : Math.sign(delta) * Math.max(1, Math.round(Math.abs(delta) * scale));
-    const verticalDelta = step(event.deltaY);
-    const horizontalDelta = step(event.deltaX);
-    const rowDelta = event.shiftKey ? 0 : verticalDelta;
-    const columnDelta = event.shiftKey ? verticalDelta || horizontalDelta : horizontalDelta;
-
-    if (rowDelta === 0 && columnDelta === 0) return;
     try {
-      workbook.scrollBy(rowDelta, columnDelta);
-      setError(null);
+      workbook.wheel(event.deltaX, event.deltaY, event.deltaMode, event.shiftKey);
+      schedulePublish();
     } catch (scrollError) {
       setError(messageFromError(scrollError));
     }

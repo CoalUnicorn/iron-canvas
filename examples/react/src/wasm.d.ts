@@ -32,6 +32,8 @@ declare module "*.js" {
     loadXlsx(bytes: Uint8Array, name: string): void;
     resize(width: number, height: number, dpr: number): void;
     scrollBy(rowDelta: number, columnDelta: number): void;
+    scrollPixels(dx: number, dy: number): void;
+    wheel(dx: number, dy: number, mode: number, shift: boolean): void;
     selectSheet(index: number): void;
     selectedSheet(): number;
     workbookName(): string;
