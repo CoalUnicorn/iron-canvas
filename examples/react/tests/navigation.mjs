@@ -97,7 +97,15 @@ try {
   assert.match(await painted(), /, C1$/);
   assert.equal(await execute(`${keyScript} canvas.focus(); const consumed = key('ArrowRight'); window.dispatchEvent(new Event('blur')); return consumed;`), true);
   assert.match(await painted(), /, C1$/);
-  console.log("React navigation route: FIFO, reverse Enter, modifiers, IME, input focus, and blur pass.");
+  const canvasState = async () => command(`/session/${session}/execute/async`, {
+    script: "const done = arguments[0]; requestAnimationFrame(() => requestAnimationFrame(() => done(document.querySelector('canvas').toDataURL())));",
+    args: [],
+  });
+  const beforeWheel = await canvasState();
+  await execute(`${keyScript} canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, deltaMode: 0, bubbles: true, cancelable: true })); return true;`);
+  await delay(100);
+  assert.notEqual(await canvasState(), beforeWheel, "wheel input must repaint the grid");
+  console.log("React navigation route: FIFO, reverse Enter, modifiers, IME, input focus, blur, and wheel pass.");
 } finally {
   if (session) await fetch(`${driverUrl}/session/${session}`, { method: "DELETE" }).catch(() => {});
   for (const child of children) child.kill();
