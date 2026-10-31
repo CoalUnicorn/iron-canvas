@@ -631,6 +631,89 @@ mod browser_tests {
     }
 
     #[wasm_bindgen_test]
+    fn wheel_keeps_fractional_pixels_and_maps_shift_to_horizontal() {
+        let mut host = crate::tests::host();
+        let scope = host.navigation_scope().unwrap();
+        host.wheel(0.0, 7.6, 0, false).unwrap();
+        host.flush_navigation().unwrap();
+        let first = host.navigation.commands.view_position(scope).unwrap();
+        assert_eq!(first.offset_y, 7);
+        assert_eq!(first.first_cell.row, 1);
+        host.wheel(0.0, 7.6, 0, false).unwrap();
+        host.flush_navigation().unwrap();
+        let second = host.navigation.commands.view_position(scope).unwrap();
+        assert_eq!(second.offset_y, 15);
+        // Offset-only movement must not move the engine origin.
+        assert_eq!(host.workbook.get_selected_view().top_row, 1);
+        host.wheel(0.0, 30.0, 0, true).unwrap();
+        host.flush_navigation().unwrap();
+        let shifted = host.navigation.commands.view_position(scope).unwrap();
+        assert_eq!(shifted.offset_x, 30);
+        assert_eq!(shifted.offset_y, 15);
+        assert!(host.wheel(f64::NAN, 0.0, 0, false).is_err());
+    }
+
+    #[wasm_bindgen_test]
+    fn wheel_line_and_page_units_use_logical_geometry() {
+        let mut host = crate::tests::host();
+        let scope = host.navigation_scope().unwrap();
+        host.wheel(0.0, 1.0, 1, false).unwrap();
+        host.flush_navigation().unwrap();
+        assert_eq!(
+            host.navigation
+                .commands
+                .view_position(scope)
+                .unwrap()
+                .offset_y,
+            24
+        );
+        let mut host = crate::tests::host();
+        let scope = host.navigation_scope().unwrap();
+        host.wheel(0.0, 1.0, 2, false).unwrap();
+        host.flush_navigation().unwrap();
+        let position = host.navigation.commands.view_position(scope).unwrap();
+        assert_eq!(position.first_cell.row, 16);
+        assert_eq!(position.offset_y, 1);
+    }
+
+    #[wasm_bindgen_test]
+    fn flush_paints_once_for_mixed_ordered_input_and_reports_full_queue() {
+        let mut host = crate::tests::host();
+        let sequence = host.session.interaction_frame().unwrap().sequence;
+        host.wheel(0.0, 5.0, 0, false).unwrap();
+        host.scroll_pixels(3.0, 0.0).unwrap();
+        queue(&mut host, "ArrowRight", false);
+        host.flush_navigation().unwrap();
+        assert_eq!(
+            host.session.interaction_frame().unwrap().sequence,
+            sequence + 1
+        );
+        host.cancel_navigation().unwrap();
+        for _ in 0..QUEUE_LIMIT {
+            host.scroll_pixels(1.0, 0.0).unwrap();
+        }
+        assert!(host.scroll_pixels(1.0, 0.0).is_err());
+        host.cancel_navigation().unwrap();
+        assert!(host.navigation.commands.is_empty());
+    }
+
+    #[wasm_bindgen_test]
+    fn resize_rebuilds_the_target_and_preserves_the_saved_position() {
+        let mut host = crate::tests::host();
+        let scope = host.navigation_scope().unwrap();
+        host.wheel(0.0, 15.0, 0, false).unwrap();
+        host.flush_navigation().unwrap();
+        let saved = host.navigation.commands.view_position(scope).unwrap();
+        assert_eq!(host.session.backend().canvas().width(), 640);
+        host.resize(800.0, 500.0, 2.0).unwrap();
+        assert_eq!(host.session.backend().canvas().width(), 1600);
+        assert_eq!(host.navigation.commands.view_position(scope), Some(saved));
+        let rect = host.session.cell_rect(1, 1).unwrap();
+        host.select_at(rect.center().x, rect.center().y).unwrap();
+        assert_eq!(host.active_cell(), "A1");
+    }
+
+    #[wasm_bindgen_test]
     fn execution_errors_publish_actual_view_and_zero_panes_consume_page_as_a_noop() {
         let mut host = crate::tests::host();
         host.workbook.set_selected_cell(LAST_ROW, 1).unwrap();

@@ -98,7 +98,24 @@ impl Workbook {
             self.metrics_generation = generation;
             self.cache.clear();
         }
-        self.render()
+        self.render()?;
+        // Validate a saved position against the new pane only after the new
+        // target has its first frame.
+        if let Ok(scope) = self.navigation_scope()
+            && self.navigation.commands.view_position(scope).is_some()
+        {
+            let axes = self.axes_for_selected_sheet()?;
+            let viewport = self.viewport_context()?;
+            let update = self
+                .navigation
+                .commands
+                .resize_view(&mut self.workbook, scope, &axes, viewport)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?;
+            if update.changed {
+                self.render()?;
+            }
+        }
+        Ok(())
     }
 
     /// Refresh metric-dependent content after browser fonts change.
