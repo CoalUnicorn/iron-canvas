@@ -178,8 +178,9 @@ impl NavigationController {
             &axes.cols,
             column_window(axes, viewport.frozen_columns),
         );
-        self.views.insert(scope, ViewState::new(position, viewport));
+        let state = ViewState::new(position, viewport);
         let mirrored = self.mirror(model, scope, position)?;
+        self.views.insert(scope, state);
         Ok(ScrollUpdate {
             position,
             generation: 0,
