@@ -14,7 +14,17 @@ declare module "*.js" {
     resize(width: number, height: number, dpr: number): void;
   }
 
+  export class NavigationCommand {}
+
+  export function classifyKey(key: string, primary: boolean, shift: boolean,
+    alt: boolean, altGraph: boolean): NavigationCommand | undefined;
+
   export class Workbook {
+    activeCell(): string;
+    enqueueNavigation(command: NavigationCommand, repeat: boolean): void;
+    flushNavigation(): void;
+    cancelNavigation(): void;
+    selectAt(x: number, y: number): void;
     constructor(canvas: HTMLCanvasElement);
     addSheet(): void;
     getSheets(): SheetTab[];

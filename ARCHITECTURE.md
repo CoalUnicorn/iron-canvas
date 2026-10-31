@@ -21,6 +21,8 @@ The crate keeps a strict split:
   (styles, conditional formatting, borders, links, merges, auto-fit).
 - **iron-canvas** owns the render session: request, reuse, frame publication,
   host queries, overlays, and the shared worksheet cache.
+- **iron-canvas-navigation** applies Basic navigation to a short mutable
+  `UserModel` borrow. It also stores the ordered command queue.
 - **iron-canvas-export** owns SVG/PDF backends plus workbook loading, range
   selection, and export orchestration; it delegates worksheet compilation to
   `iron-canvas-ironcalc`.
@@ -32,6 +34,9 @@ The crate keeps a strict split:
 ```mermaid
 flowchart TD
     Host["Host: RustyCalc playground / native app"] --> API["iron-canvas: CanvasSession"]
+    Host --> Navigation["iron-canvas-navigation: model commands"]
+    Navigation --> API
+    Navigation --> Engine
     API --> IC["iron-canvas-ironcalc: worksheet compiler"]
     API --> Core["iron-canvas-core: geometry + scene"]
     IC --> Engine["ironcalc_base"]
@@ -52,13 +57,14 @@ flowchart TD
 | `iron-canvas-core` | Coordinates, bounds, canvas metrics, axis sampling, pane geometry and fragments, hit/resize geometry, text layout, resolved paint primitives and scene execution, retained-pixel fingerprints and damage bands, grid theme defaults | `UserModel`, CF enums, workbook themes, formula references, browser or Cairo calls |
 | `iron-canvas-ironcalc` | Direct immutable IronCalc reads, worksheet preparation, style/CF/border/text lowering, merge and link semantics, the CF glyph catalogue, auto-fit measurement | Workbook writes, backends, host event loop |
 | `iron-canvas` | Shared `WorksheetCache`, `CanvasSession` state and invalidation, request/frame planning, prepare/stage/commit coordination, committed-frame queries and host intents, spreadsheet overlay composition | Formula evaluation, duplicate engine getters, backend drawing |
+| `iron-canvas-navigation` | Basic engine navigation, explicit anchor/focus application, and ordered commands | Browser focus, frame presentation, workbook lifetime |
 | `iron-canvas-canvas2d` | Browser `<canvas>` surfaces, the Canvas2D painter, text metrics and memo, the CSS-var theme bridge, the scene backend | IronCalc, workbook scheduling |
 | `iron-canvas-native` | Cairo/Pango metrics and raster primitives, staged image surfaces | Window ownership, workbook access |
 | `iron-canvas-export` | SVG and PDF painters and their scene backends, font resources, document assembly, XLSX loading, sheet/range selection, export orchestration | A separate worksheet renderer or CF resolver |
 
 Arrows mean compile-time dependencies. `iron-canvas` is generic over the
-backend contract and does not depend on any concrete backend crate. No crate
-depends on `iron-canvas` except the host.
+backend contract and does not depend on any concrete backend crate.
+The navigation crate depends on `iron-canvas` for command types.
 
 ## Core: generic grid and drawing
 
@@ -319,6 +325,77 @@ the revision with a checked counter. Workbook replacement advances the workbook
 identity. Browser font events clear the cache, advance the metric generation,
 and invalidate the session.
 
+### Navigation and selection (P3a)
+
+`classify_navigation` maps a normalized key and modifiers to a typed
+`NavigationIntent`. `HostIntent::Navigate` carries this intent to a host.
+The classifier reads no workbook. Both binding profiles expose Basic commands.
+Extended commands stay unhandled until P3b passes its engine gate.
+
+`interaction_frame` returns an owned stamp for the committed frame. The stamp
+contains sequence, sheet, content token, viewport, and an optional selection
+revision. It identifies committed data. A host separately proves that its
+surface presents that frame.
+
+`navigation_geometry(expected)` returns ready geometry or a pending reason.
+It checks workbook identity, sheet, content revision, logical size, theme,
+geometry availability, and session invalidation. A selection-only change or
+a new requested scroll origin does not invalidate pane dimensions.
+`scroll_to_show_checked` starts from that requested origin and preserves
+pending, bounds, and extent errors. It returns `Unchanged` or `ScrollTo`.
+The old optional `scroll_to_show` remains available. The host supplies the
+workbook that matches the expected content token.
+
+A `SelectionSnapshot` is an immutable description of accepted selection.
+Checked constructors validate the areas, active area, active cell, and bounds.
+`SelectionKind` preserves full rows, full columns, and whole-sheet meaning.
+`propose_selection` returns a candidate for replace, add, extend, subtract,
+activate, or mode changes. Work depends on rectangle count. The limits are
+256 areas and 256 disjoint coverage pieces. Subtraction keeps the identity
+nearest the old focus. A private counter prevents reuse of removed identities.
+The host validates merge closure and assigns the next selection revision
+before acceptance. This API neither changes the engine nor accepts a proposal.
+
+`OverlayState::selection_snapshot` replaces legacy `selection` and
+`active_cell` paint input when present. A workbook or sheet mismatch returns
+`RenderError::InvalidOverlay` before preparation or staging. The previous frame
+and cache remain unchanged. `OverlayState` is an additive field change.
+External exhaustive struct literals add the new field or use `..Default::default()`.
+External exhaustive matches also handle `HostIntent::Navigate` and
+`RenderError::InvalidOverlay`.
+
+Selection fill coverage is disjoint. Header spans form their own unions.
+Logical area boundaries determine outlines, so coverage seams stay invisible.
+The active area has a solid outline; other areas have dashed outlines.
+The compiler's prepared content restores one active logical cell.
+Several areas produce no autofill handle. One finite area, or a legacy active
+cell without a range, retains the existing handle and sheet-limit rules.
+Selection-only changes reuse prepared content without a content revision bump.
+
+React owns a queue with at most 64 pending commands. It consumes recognized
+keys before execution. Repeat events beyond the limit are dropped. Other
+excess commands report an error. Commands bind to workbook, sheet, and grid
+interaction identity. Focus loss, composition entry, disposal, sheet changes,
+and workbook replacement cancel the queue. Failed preparation retains
+unstarted commands. Execution removes each command before engine movement,
+so a failed execution or presentation cannot replay it.
+
+The host uses the pinned engine's movement methods. Basic Shift+Arrow passes
+real-engine merge extend/contract tests in both horizontal directions.
+Tab and Enter collapse a larger selection and take one logical step in P3a.
+Retained-set traversal remains P3b. A page command in a zero-height pane is a
+no-op. Navigation does not create a content undo entry.
+
+A presentation stamp records the committed frame and host selection revision
+only after `CanvasRenderer::render_grid_scene` succeeds. A click requires that
+stamp to match the full current viewport and request. A failed presentation
+blocks hits against the unseen candidate frame. The DOM route handles only
+focused grid keys. IME composition and unrelated input keep their keys.
+
+P3b requires E9 and Tasks 6–11 in the navigation plan. Extended bindings,
+multi-area pointer selection, retained-set traversal, selection-border hits,
+and transfer previews remain unavailable.
+
 ### Retained rendering
 
 Core hashes every resolved primitive and its effective clip into 32-pixel
@@ -448,6 +525,9 @@ validation and limits.
 | `iron-canvas/src/lib.rs` | `CanvasSession`, request/outcome/error, frame publication |
 | `iron-canvas/src/cache.rs` | `WorksheetCache`, `TextMetricsKey`, content validity and use order |
 | `iron-canvas/src/interaction.rs` | committed queries and `HostIntent` |
+| `iron-canvas/src/navigation.rs` | Pure keyboard classification and typed navigation intents |
+| `iron-canvas/src/navigation_queries.rs` | Interaction stamps, readiness, and checked visibility |
+| `iron-canvas/src/selection.rs` | Validated snapshots and bounded rectangle algebra |
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |
 | `iron-canvas/src/retained.rs` | scroll-blit planning |
 | `iron-canvas/examples/` | host tools: `linux_xlsx_viewer_gtk4` (GTK4) and the `export_workbook` Clap CLI |

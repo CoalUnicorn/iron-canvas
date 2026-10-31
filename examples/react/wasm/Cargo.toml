@@ -15,6 +15,7 @@ iron-canvas = { path = "../../../crates/iron-canvas" }
 iron-canvas-canvas2d = { path = "../../../crates/iron-canvas-canvas2d" }
 iron-canvas-core = { path = "../../../crates/iron-canvas-core" }
 iron-canvas-ironcalc = { path = "../../../crates/iron-canvas-ironcalc" }
+iron-canvas-navigation = { version = "0.1.0-beta.2", path = "../../../crates/iron-canvas-navigation" }
 iron-canvas-wasm = { path = "../../../bindings/wasm" }
 ironcalc.workspace = true
 ironcalc_base.workspace = true

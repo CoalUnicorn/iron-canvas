@@ -46,6 +46,93 @@ fn workbook() -> UserModel<'static> {
     w.set_columns_hidden(0, 2, 2, true).unwrap();
     w
 }
+
+#[test]
+fn snapshots_override_legacy_input_and_union_fills_headers_without_multi_area_handles() {
+    use iron_canvas::{
+        AreaId, OverlayError, RenderError, SelectionArea, SelectionKind, SelectionMode,
+        SelectionSnapshot, SelectionTarget,
+    };
+    let w = workbook();
+    let mut request = request();
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    let areas = [range(1, 1, 7, 7), range(3, 3, 9, 9)]
+        .into_iter()
+        .enumerate()
+        .map(|(index, range)| {
+            SelectionArea::new(
+                AreaId(index as u64),
+                SelectionTarget::new(SelectionKind::Cells, range.first, range.last, range).unwrap(),
+            )
+        })
+        .collect();
+    let snapshot = SelectionSnapshot::new(
+        1,
+        0,
+        3,
+        areas,
+        AreaId(1),
+        coord(9, 9),
+        SelectionMode::Normal,
+    )
+    .unwrap();
+    request.overlays.selection_snapshot = Some(snapshot.clone());
+    session.render(&w, &request).unwrap();
+    let scene = session.committed_frame().unwrap().worksheet.scene.clone();
+    assert!(scene.passes.last().unwrap().is_empty());
+    let rect = session.cell_rect(5, 5).unwrap();
+    let geometry = session
+        .committed_frame()
+        .unwrap()
+        .worksheet
+        .geometry
+        .as_ref()
+        .unwrap();
+    for point in [
+        rect.center(),
+        Point {
+            x: 1,
+            y: rect.center().y,
+        },
+        Point {
+            x: rect.center().x,
+            y: 1,
+        },
+    ] {
+        let count = scene.passes.iter().flat_map(|pass| pass.iter()).filter(|primitive| {
+            matches!(primitive,Primitive::RectFill { rect,color } if color.as_ref() == request.theme.selection_fill && iron_canvas_core::scene_geometry::contains(*rect,point))
+        }).count();
+        assert_eq!(count, 1, "overlap at {point:?}");
+    }
+    assert_eq!(geometry.panes.len(), 4);
+    assert_eq!(
+        session.interaction_frame().unwrap().selection_revision,
+        Some(3)
+    );
+    request.overlays.selection = vec![range(1, 1, 1, 1)];
+    request.overlays.active_cell = Some(coord(1, 1));
+    assert_eq!(
+        session.render(&w, &request).unwrap().extended_style_reads,
+        0
+    );
+    assert_eq!(session.committed_frame().unwrap().worksheet.scene, scene);
+    let before = session.committed_frame().cloned();
+    let stamp = session.interaction_frame();
+    request.revision.workbook_id = 2;
+    assert!(matches!(
+        session.render(&w, &request),
+        Err(RenderError::InvalidOverlay(OverlayError::Workbook))
+    ));
+    assert_eq!(session.committed_frame(), before.as_ref());
+    assert_eq!(session.interaction_frame(), stamp);
+    request.revision.workbook_id = 1;
+    request.sheet = 1;
+    assert!(matches!(
+        session.render(&w, &request),
+        Err(RenderError::InvalidOverlay(OverlayError::Sheet))
+    ));
+    assert_eq!(session.committed_frame(), before.as_ref());
+}
 #[test]
 fn frozen_panes_hidden_axes_headers_and_explicit_sheet_share_hit_geometry() {
     let mut w = workbook();
@@ -257,6 +344,7 @@ fn pdf_and_svg_stage_the_identical_prepared_scene_with_overlays() {
     let w = workbook();
     let mut request = request();
     request.overlays = OverlayState {
+        selection_snapshot: None,
         selection: vec![range(1, 1, 7, 7)],
         active_cell: Some(coord(1, 1)),
         clipboard: Some(range(5, 5, 6, 6)),

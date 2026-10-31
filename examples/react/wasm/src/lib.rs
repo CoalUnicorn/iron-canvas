@@ -3,6 +3,9 @@
 //! This app-specific glue lives under `examples/react`; the reusable
 //! WebAssembly binding in `bindings/wasm` only accepts Iron Canvas scenes.
 
+mod navigation;
+pub use navigation::{NavigationCommand, classify_key};
+
 use iron_canvas::{
     CanvasSession, OverlayState, RenderRequest, RevisionToken, TextMetricsKey, WorksheetCache,
 };
@@ -52,6 +55,9 @@ pub struct Workbook {
     revision: u64,
     cache: WorksheetCache,
     metrics_generation: u64,
+    navigation: navigation::NavigationController,
+    #[cfg(test)]
+    fail_presentation: bool,
 }
 
 #[wasm_bindgen]
@@ -67,6 +73,9 @@ impl Workbook {
             workbook,
             cache,
             metrics_generation: 0,
+            navigation: Default::default(),
+            #[cfg(test)]
+            fail_presentation: false,
             metrics,
             renderer,
             session,
@@ -83,6 +92,7 @@ impl Workbook {
                 .metrics_generation
                 .checked_add(1)
                 .ok_or_else(|| JsValue::from_str("text metric generation exhausted"))?;
+            self.navigation.presented = None;
             self.renderer.resize(width, height, dpr)?;
             self.metrics = metrics;
             self.metrics_generation = generation;
@@ -130,6 +140,7 @@ impl Workbook {
 
     #[wasm_bindgen(js_name = selectSheet)]
     pub fn select_sheet(&mut self, index: u32) -> Result<(), JsValue> {
+        self.cancel_navigation()?;
         self.workbook
             .set_selected_sheet(index)
             .map_err(|error| JsValue::from_str(&error))?;
@@ -160,6 +171,7 @@ impl Workbook {
             .revision
             .checked_add(1)
             .ok_or_else(|| JsValue::from_str("workbook revision exhausted"))?;
+        self.cancel_navigation()?;
         self.workbook
             .new_sheet()
             .map_err(|error| JsValue::from_str(&error))?;
@@ -179,6 +191,7 @@ impl Workbook {
             .workbook_id
             .checked_add(1)
             .ok_or_else(|| JsValue::from_str("workbook identity exhausted"))?;
+        self.cancel_navigation()?;
         self.workbook = UserModel::from_model(model);
         self.workbook_id = workbook_id;
         self.cache.clear();
@@ -190,34 +203,9 @@ impl Workbook {
 
 impl Workbook {
     fn render(&mut self) -> Result<(), JsValue> {
-        let (width, height) = self.metrics.size().to_logical_extent();
-        if width == 0 || height == 0 {
+        self.navigation.presented = None;
+        let Some(request) = self.render_request() else {
             return Ok(());
-        }
-
-        let view = self.workbook.get_selected_view();
-        let request = RenderRequest {
-            sheet: view.sheet,
-            revision: RevisionToken {
-                workbook_id: self.workbook_id,
-                revision: self.revision,
-            },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord {
-                    row: view.top_row.max(1),
-                    col: view.left_column.max(1),
-                },
-                width,
-                height,
-            },
-            theme: CanvasTheme::light(),
-            overlays: OverlayState {
-                active_cell: Some(CellCoord {
-                    row: view.row.max(1),
-                    col: view.column.max(1),
-                }),
-                ..OverlayState::default()
-            },
         };
 
         self.session
@@ -234,7 +222,57 @@ impl Workbook {
             .expect("a successful render commits a frame")
             .worksheet
             .scene;
-        self.renderer.render_grid_scene(scene)
+        #[cfg(test)]
+        if self.fail_presentation {
+            return Err(JsValue::from_str("injected presentation failure"));
+        }
+        self.renderer.render_grid_scene(scene)?;
+        self.navigation.presented = self
+            .session
+            .interaction_frame()
+            .map(|stamp| (stamp, self.navigation.commands.selection_revision()));
+        Ok(())
+    }
+    fn render_request(&self) -> Option<RenderRequest> {
+        let (width, height) = self.metrics.size().to_logical_extent();
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        let view = self.workbook.get_selected_view();
+        Some(RenderRequest {
+            sheet: view.sheet,
+            revision: RevisionToken {
+                workbook_id: self.workbook_id,
+                revision: self.revision,
+            },
+            viewport: WorksheetViewport {
+                first_cell: CellCoord {
+                    row: view.top_row.max(1),
+                    col: view.left_column.max(1),
+                },
+                width,
+                height,
+            },
+            theme: CanvasTheme::light(),
+            overlays: OverlayState {
+                selection: vec![iron_canvas_core::scene_geometry::GridRange {
+                    first: CellCoord {
+                        row: view.range[0],
+                        col: view.range[1],
+                    },
+                    last: CellCoord {
+                        row: view.range[2],
+                        col: view.range[3],
+                    },
+                }],
+                active_cell: Some(CellCoord {
+                    row: view.row.max(1),
+                    col: view.column.max(1),
+                }),
+                ..OverlayState::default()
+            },
+        })
     }
 }
 
@@ -338,7 +376,7 @@ mod tests {
 
     wasm_bindgen_test_configure!(run_in_browser);
 
-    fn host() -> Workbook {
+    pub(crate) fn host() -> Workbook {
         let canvas = web_sys::window()
             .unwrap()
             .document()
