@@ -7,7 +7,7 @@ use iron_canvas::{
 };
 use iron_canvas_core::{CellCoord, Point};
 use iron_canvas_navigation::{
-    ControllerCommand, NavigationController as SharedController, NavigationScope,
+    ControllerCommand, NavigationController as SharedController, NavigationScope, QueueError,
 };
 use ironcalc_base::UserModel;
 use wasm_bindgen::prelude::*;
@@ -86,10 +86,15 @@ impl Workbook {
             return self.cancel_navigation();
         }
         let scope = self.navigation_scope()?;
-        self.navigation
+        match self
+            .navigation
             .commands
             .enqueue(command.intent, scope, repeat)
-            .map_err(|error| JsValue::from_str(&error.to_string()))
+        {
+            Ok(()) => Ok(()),
+            Err(QueueError::RepeatDropped) if repeat => Ok(()),
+            Err(error) => Err(JsValue::from_str(&error.to_string())),
+        }
     }
 
     #[wasm_bindgen(js_name = cancelNavigation)]

@@ -32,6 +32,8 @@ pub enum ControllerCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QueueError {
     Full,
+    /// A repeated input arrived at capacity and was discarded.
+    RepeatDropped,
     InteractionExhausted,
 }
 
@@ -39,6 +41,7 @@ impl std::fmt::Display for QueueError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Full => f.write_str("navigation queue is full"),
+            Self::RepeatDropped => f.write_str("repeated input was dropped at capacity"),
             Self::InteractionExhausted => f.write_str("grid interaction identity exhausted"),
         }
     }
@@ -105,11 +108,11 @@ impl NavigationController {
             return Err(QueueError::InteractionExhausted);
         }
         if self.pending.len() == QUEUE_LIMIT {
-            return if repeat {
-                Ok(())
+            return Err(if repeat {
+                QueueError::RepeatDropped
             } else {
-                Err(QueueError::Full)
-            };
+                QueueError::Full
+            });
         }
         self.pending.push_back(PendingCommand {
             command,
@@ -310,9 +313,10 @@ mod tests {
                 .enqueue(NavigationIntent::Step(Direction::Right), scope, false)
                 .unwrap();
         }
-        controller
-            .enqueue(NavigationIntent::Step(Direction::Down), scope, true)
-            .unwrap();
+        assert_eq!(
+            controller.enqueue(NavigationIntent::Step(Direction::Down), scope, true),
+            Err(QueueError::RepeatDropped)
+        );
         assert_eq!(controller.len(), QUEUE_LIMIT);
         assert_eq!(
             controller.enqueue(NavigationIntent::Step(Direction::Down), scope, false),
