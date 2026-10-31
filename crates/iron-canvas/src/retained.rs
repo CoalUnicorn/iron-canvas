@@ -23,12 +23,9 @@ pub(crate) fn scroll_plan(
         || previous.overlays != request.overlays
         || request.overlays != Default::default()
         || previous.viewport.scroll.first_cell.col != request.viewport.scroll.first_cell.col
-        // Pixel movement changes every placed slot. Until the translated-scene
-        // comparison covers offsets, only aligned whole-cell scrolls reuse pixels.
-        || request.viewport.scroll.offset_x != 0
-        || request.viewport.scroll.offset_y != 0
+        // Only vertical movement is eligible. Horizontal pixel copies remain a
+        // separate optimization, so the column offset must not change.
         || previous.viewport.scroll.offset_x != request.viewport.scroll.offset_x
-        || previous.viewport.scroll.offset_y != request.viewport.scroll.offset_y
     {
         return None;
     }

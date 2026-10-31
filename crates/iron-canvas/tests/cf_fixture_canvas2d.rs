@@ -939,6 +939,74 @@ fn cf_revisions_repaint_visible_results_of_offscreen_edits() {
 }
 
 #[wasm_bindgen_test]
+fn vertical_pixel_blit_matches_fresh_at_four_scales() {
+    use iron_canvas::RenderStrategy;
+
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let mut model = UserModel::new_empty("pixel blit", "en", "UTC", "en").unwrap();
+        model.set_rows_height(0, 1, 80, 24.0).unwrap();
+        model.set_columns_width(0, 1, 20, 80.0).unwrap();
+        for row in 1..40 {
+            for col in 1..8 {
+                model
+                    .set_user_input(0, row, col, &format!("{row}-{col}"))
+                    .unwrap();
+            }
+        }
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        session.render(&model, &request).unwrap();
+        for offset in [4, 8, 4, 0] {
+            request.viewport.scroll.offset_y = offset;
+            let outcome = session.render(&model, &request).unwrap();
+            assert_eq!(
+                outcome.strategy,
+                RenderStrategy::Blit,
+                "offset {offset} at scale {dpr}"
+            );
+            assert_fresh(&session, &model, &request, dpr);
+        }
+        // Horizontal pixel movement stays on the Fresh path.
+        request.viewport.scroll.offset_x = 4;
+        assert_eq!(
+            session.render(&model, &request).unwrap().strategy,
+            RenderStrategy::Fresh
+        );
+        request.viewport.scroll.offset_x = 0;
+        session.render(&model, &request).unwrap();
+        if dpr == 1.25 {
+            // One logical pixel is not an integral device pixel at 1.25.
+            request.viewport.scroll.offset_y = 3;
+            assert_eq!(
+                session.render(&model, &request).unwrap().strategy,
+                RenderStrategy::Fresh
+            );
+            request.viewport.scroll.offset_y = 4;
+            session.render(&model, &request).unwrap();
+        }
+        // Frozen panes remain outside this optimization.
+        model.set_frozen_rows_count(0, 1).unwrap();
+        request.viewport.scroll.first_cell.row = 2;
+        request.viewport.scroll.offset_y = 0;
+        assert_eq!(
+            session.render(&model, &request).unwrap().strategy,
+            RenderStrategy::Fresh
+        );
+    }
+}
+
+#[wasm_bindgen_test]
 fn failed_partial_updates_keep_pixels_queries_and_fingerprints_until_retry() {
     use iron_canvas::{RenderBackend, RenderStrategy};
     use iron_canvas_core::{
