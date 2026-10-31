@@ -7,6 +7,8 @@ license.workspace = true
 
 [dependencies]
 iron-canvas = { version = "0.1.0-beta.2", path = "../iron-canvas" }
+iron-canvas-core = { version = "0.1.0-beta.2", path = "../iron-canvas-core" }
+iron-canvas-ironcalc = { version = "0.1.0-beta.2", path = "../iron-canvas-ironcalc" }
 ironcalc_base.workspace = true
 
 [lints]

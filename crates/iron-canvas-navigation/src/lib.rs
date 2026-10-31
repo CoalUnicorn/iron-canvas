@@ -3,17 +3,30 @@
 //! A host grants a short mutable model borrow for each command. The engine
 //! resolves merges and hidden axes. The caller owns frame presentation.
 
+mod scroll;
+pub use scroll::{ScrollCommand, ScrollError, ScrollUpdate, ScrollViewport};
+
 use iron_canvas::{Direction, NavigationIntent, PageDirection, TraversalAxis, TraversalDirection};
 use ironcalc_base::{UserModel, worksheet::NavigationDirection};
+use scroll::ViewMap;
 use std::collections::VecDeque;
 
 const QUEUE_LIMIT: usize = 64;
 
 /// Identity of a queued command. The sheet ID survives sheet reordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A host view identity separates two windows that show the same sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NavigationScope {
     pub workbook_id: u64,
+    pub view_id: u64,
     pub sheet_id: u32,
+}
+
+/// One entry in the shared navigation and scroll queue.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ControllerCommand {
+    Navigation(NavigationIntent),
+    Scroll(ScrollCommand),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,7 +48,7 @@ impl std::error::Error for QueueError {}
 
 #[derive(Debug, Clone, Copy)]
 struct PendingCommand {
-    intent: NavigationIntent,
+    command: ControllerCommand,
     scope: NavigationScope,
     interaction: u64,
 }
@@ -46,6 +59,10 @@ pub struct NavigationController {
     pending: VecDeque<PendingCommand>,
     interaction: u64,
     selection_revision: u64,
+    views: ViewMap,
+    primary: Option<NavigationScope>,
+    #[cfg(test)]
+    fail_next_engine_write: bool,
 }
 
 impl NavigationController {
@@ -75,6 +92,15 @@ impl NavigationController {
         scope: NavigationScope,
         repeat: bool,
     ) -> Result<(), QueueError> {
+        self.enqueue_queued(ControllerCommand::Navigation(intent), scope, repeat)
+    }
+
+    pub(crate) fn enqueue_queued(
+        &mut self,
+        command: ControllerCommand,
+        scope: NavigationScope,
+        repeat: bool,
+    ) -> Result<(), QueueError> {
         if self.interaction == u64::MAX {
             return Err(QueueError::InteractionExhausted);
         }
@@ -86,7 +112,7 @@ impl NavigationController {
             };
         }
         self.pending.push_back(PendingCommand {
-            intent,
+            command,
             scope,
             interaction: self.interaction,
         });
@@ -94,13 +120,19 @@ impl NavigationController {
     }
 
     /// Remove one command only when the host is ready to execute it.
-    pub fn pop_ready(&mut self, scope: NavigationScope) -> Option<NavigationIntent> {
+    pub fn pop_ready(&mut self, scope: NavigationScope) -> Option<ControllerCommand> {
         while let Some(command) = self.pending.pop_front() {
             if command.scope == scope && command.interaction == self.interaction {
-                return Some(command.intent);
+                return Some(command.command);
             }
         }
         None
+    }
+
+    /// Select the view that mirrors engine indices. Other views keep their
+    /// positions locally and never move the selected engine sheet.
+    pub fn set_primary_view(&mut self, scope: Option<NavigationScope>) {
+        self.primary = scope;
     }
 
     pub fn cancel(&mut self) -> Result<(), QueueError> {
@@ -228,10 +260,12 @@ mod tests {
         let mut controller = NavigationController::default();
         let a = NavigationScope {
             workbook_id: 1,
+            view_id: 0,
             sheet_id: 7,
         };
         let b = NavigationScope {
             workbook_id: 1,
+            view_id: 0,
             sheet_id: 8,
         };
         controller
@@ -245,11 +279,15 @@ mod tests {
             .unwrap();
         assert_eq!(
             controller.pop_ready(b),
-            Some(NavigationIntent::Step(Direction::Down))
+            Some(ControllerCommand::Navigation(NavigationIntent::Step(
+                Direction::Down
+            )))
         );
         assert_eq!(
             controller.pop_ready(b),
-            Some(NavigationIntent::Step(Direction::Left))
+            Some(ControllerCommand::Navigation(NavigationIntent::Step(
+                Direction::Left
+            )))
         );
         assert_eq!(controller.pop_ready(b), None);
         controller
@@ -264,6 +302,7 @@ mod tests {
         let mut controller = NavigationController::default();
         let scope = NavigationScope {
             workbook_id: 1,
+            view_id: 0,
             sheet_id: 1,
         };
         for _ in 0..QUEUE_LIMIT {
@@ -282,7 +321,9 @@ mod tests {
         for _ in 0..QUEUE_LIMIT {
             assert_eq!(
                 controller.pop_ready(scope),
-                Some(NavigationIntent::Step(Direction::Right))
+                Some(ControllerCommand::Navigation(NavigationIntent::Step(
+                    Direction::Right
+                )))
             );
         }
         assert_eq!(controller.pop_ready(scope), None);
