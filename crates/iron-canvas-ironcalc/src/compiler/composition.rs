@@ -21,6 +21,10 @@ const HEADER_LABEL_PADDING: i32 = 16;
 /// Floor for the row-header strip width.
 const MIN_HEADER_WIDTH: i32 = 48;
 
+/// Reserve room for the widest seven-digit row label. Continuous scrolling
+/// must not move columns when a visible label crosses a digit boundary.
+const HEADER_RESERVED_LABEL: &str = "8888888";
+
 pub(super) fn prepare(
     context: WorksheetContext<'_, '_>,
     viewport: WorksheetViewport,
@@ -136,15 +140,6 @@ fn read_structure(
             "invalid viewport bounds".into(),
         ));
     }
-    // Offset sampling arrives with the pane geometry change. Reject a
-    // nonzero offset instead of drawing the aligned cell silently.
-    if viewport.scroll.offset_x != 0 || viewport.scroll.offset_y != 0 {
-        return Err(attempt.error(
-            first,
-            CellReadOperation::Request,
-            "pixel scroll offsets are not sampled yet".into(),
-        ));
-    }
     let err = |op, e| attempt.error(first, op, e);
     let frozen_rows = workbook
         .get_frozen_rows_count(sheet)
@@ -188,6 +183,60 @@ fn read_structure(
     ))
 }
 
+/// Validate a submitted axis origin against the live dimensions.
+///
+/// A scrolling origin must name a cell with a positive extent and an offset
+/// inside that extent. An aligned origin inside the frozen band stays allowed
+/// for exports; a nonzero offset there is rejected.
+fn validate_scroll_axis(
+    attempt: &Attempt<'_, '_, '_>,
+    dimensions: &mut Dimensions<'_, '_>,
+    axis: Axis,
+    first: i32,
+    offset: i32,
+    frozen: i32,
+    last: i32,
+) -> Result<(), WorksheetCompileError> {
+    let cell = match axis {
+        Axis::Row => CellCoord { row: first, col: 1 },
+        Axis::Column => CellCoord { row: 1, col: first },
+    };
+    // A frozen band that consumes the axis preserves the last position,
+    // including its offset. No scrolling cell exists to invalidate it.
+    if frozen >= last {
+        return Ok(());
+    }
+    let extent = dimensions
+        .extent(axis, first)
+        .map_err(|error| attempt.error(cell, CellReadOperation::Request, error))?;
+    let extent = extent.round() as i32;
+    if first <= frozen {
+        if offset != 0 {
+            return Err(attempt.error(
+                cell,
+                CellReadOperation::Request,
+                "scroll offset starts inside the frozen band".into(),
+            ));
+        }
+        return Ok(());
+    }
+    if extent <= 0 {
+        return Err(attempt.error(
+            cell,
+            CellReadOperation::Request,
+            "scroll origin has no visible extent".into(),
+        ));
+    }
+    if offset >= extent {
+        return Err(attempt.error(
+            cell,
+            CellReadOperation::Request,
+            "scroll offset is outside the first cell".into(),
+        ));
+    }
+    Ok(())
+}
+
 fn prepare_geometry(
     attempt: &mut Attempt<'_, '_, '_>,
     viewport: WorksheetViewport,
@@ -196,38 +245,52 @@ fn prepare_geometry(
     previous: Option<&Rc<GridGeometry>>,
 ) -> Result<Rc<GridGeometry>, WorksheetCompileError> {
     let first = viewport.scroll.first_cell;
-    // Sample rows first. Their labels set the width of the row headers.
+    validate_scroll_axis(
+        attempt,
+        dimensions,
+        Axis::Row,
+        first.row,
+        viewport.scroll.offset_y,
+        frozen.rows,
+        LAST_ROW,
+    )?;
+    validate_scroll_axis(
+        attempt,
+        dimensions,
+        Axis::Column,
+        first.col,
+        viewport.scroll.offset_x,
+        frozen.cols,
+        LAST_COLUMN,
+    )?;
     let header_height = HEADER_STRIP_HEIGHT.min(viewport.height);
+    // Reserve one stable width for the largest row label. The old width
+    // depended on visible labels, so crossing a digit boundary moved columns.
+    let header_width = (attempt
+        .shaper
+        .metrics()
+        .measure_text_width(HEADER_RESERVED_LABEL, HEADER_FONT_CSS)
+        .ceil() as i32)
+        .saturating_add(HEADER_LABEL_PADDING)
+        .max(MIN_HEADER_WIDTH)
+        .min(viewport.width);
     let rows = sample_bands(
         first.row,
         LAST_ROW,
         frozen.rows,
         header_height,
         viewport.height - header_height,
+        viewport.scroll.offset_y,
         |i| dimensions.extent(Axis::Row, i),
     )
     .map_err(|e| axis_error(attempt.context.sheet, first, Axis::Row, e))?;
-    let label = rows
-        .iter()
-        .flat_map(|b| b.cells.iter())
-        .map(|c| c.index)
-        .max()
-        .unwrap_or(first.row)
-        .to_string();
-    let header_width = (attempt
-        .shaper
-        .metrics()
-        .measure_text_width(&label, HEADER_FONT_CSS)
-        .ceil() as i32)
-        .saturating_add(HEADER_LABEL_PADDING)
-        .max(MIN_HEADER_WIDTH)
-        .min(viewport.width);
     let columns = sample_bands(
         first.col,
         LAST_COLUMN,
         frozen.cols,
         header_width,
         viewport.width - header_width,
+        viewport.scroll.offset_x,
         |i| dimensions.extent(Axis::Column, i),
     )
     .map_err(|e| axis_error(attempt.context.sheet, first, Axis::Column, e))?;

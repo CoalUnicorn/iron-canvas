@@ -25,17 +25,22 @@ pub enum AxisError<E> {
 
 /// Sample only the visible window. Zero extents are skipped within `last`.
 /// The final cell keeps its full extent so text aligns before viewport clipping.
+///
+/// `offset` is the pixel distance removed from the start of `first`. The first
+/// slot can therefore start before zero. The caller normalizes `first` to a
+/// visible cell before sampling.
 pub fn sample_axis<E>(
     first: i32,
     last: i32,
     pixels: i32,
+    offset: i32,
     mut extent: impl FnMut(i32) -> Result<f64, E>,
 ) -> Result<Vec<AxisCell>, AxisError<E>> {
-    if first < 1 || first > last || pixels < 0 {
+    if first < 1 || first > last || pixels < 0 || offset < 0 {
         return Err(AxisError::Bounds);
     }
     let mut cells = Vec::new();
-    let mut cursor = 0_i32;
+    let mut cursor = offset.checked_neg().ok_or(AxisError::Bounds)?;
     for index in first..=last {
         if cursor >= pixels {
             break;
@@ -66,7 +71,7 @@ mod tests {
     #[test]
     fn sampling_is_bounded_and_preserves_the_final_full_cell() {
         let mut reads = Vec::new();
-        let slots = sample_axis(2, 100, 25, |i| {
+        let slots = sample_axis(2, 100, 25, 0, |i| {
             reads.push(i);
             Ok::<_, ()>(if i == 2 { 0.0 } else { 20.0 })
         })
@@ -82,7 +87,7 @@ mod tests {
         );
         let mut reads = 0;
         assert!(
-            sample_axis(1, 4, 20, |_| {
+            sample_axis(1, 4, 20, 0, |_| {
                 reads += 1;
                 Ok::<_, ()>(0.0)
             })
@@ -94,8 +99,9 @@ mod tests {
     #[test]
     fn invalid_extents_and_overflow_are_errors() {
         for extent in [-1.0, f64::NAN, f64::INFINITY, f64::from(i32::MAX) + 1.0] {
-            assert!(sample_axis(1, 2, 20, |_| Ok::<_, ()>(extent)).is_err());
+            assert!(sample_axis(1, 2, 20, 0, |_| Ok::<_, ()>(extent)).is_err());
         }
-        assert!(sample_axis(1, 2, i32::MAX, |_| Ok::<_, ()>(f64::from(i32::MAX - 1))).is_err());
+        assert!(sample_axis(1, 2, i32::MAX, 0, |_| Ok::<_, ()>(f64::from(i32::MAX - 1))).is_err());
+        assert!(sample_axis(1, 2, 20, -1, |_| Ok::<_, ()>(10.0)).is_err());
     }
 }

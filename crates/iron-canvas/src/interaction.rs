@@ -157,6 +157,11 @@ impl<B: RenderBackend> CanvasSession<B> {
                 .find(|l| l.row == range.first.row && l.column == range.first.col),
         })
     }
+    /// Visible pieces of a range, clipped to each pane. Use [`cell_rect`] for
+    /// an editor's full text box and these fragments to clip its surface.
+    /// An empty result hides the editor surface.
+    ///
+    /// [`cell_rect`]: Self::cell_rect
     pub fn visible_fragments(&self, range: GridRange) -> Vec<RangeFragment> {
         self.committed_frame()
             .and_then(|f| f.worksheet.geometry.as_ref())

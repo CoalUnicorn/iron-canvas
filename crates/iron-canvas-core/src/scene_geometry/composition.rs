@@ -52,10 +52,11 @@ fn sample_band_axis<E>(
     first: i32,
     last: i32,
     pixels: i32,
+    offset: i32,
     extent: &mut impl FnMut(i32) -> Result<f64, E>,
 ) -> Result<(Vec<AxisCell>, i32), AxisError<E>> {
     let mut last_index = first - 1;
-    let cells = sample_axis(first, last, pixels, |index| {
+    let cells = sample_axis(first, last, pixels, offset, |index| {
         let value = extent(index)?;
         last_index = index;
         Ok(value)
@@ -81,12 +82,15 @@ fn sample_band_axis<E>(
 
 /// Sample the frozen band first, then the scrolling band. Both are bounded by
 /// the viewport. A frozen band can consume the entire drawable extent.
+///
+/// `offset` applies only to the scrolling band. Frozen bands never move.
 pub fn sample_bands<E>(
     first: i32,
     last: i32,
     frozen: i32,
     origin: i32,
     pixels: i32,
+    offset: i32,
     mut extent: impl FnMut(i32) -> Result<f64, E>,
 ) -> Result<Vec<AxisBand>, AxisError<E>> {
     if first < 1
@@ -95,6 +99,7 @@ pub fn sample_bands<E>(
         || frozen > last
         || origin < 0
         || pixels < 0
+        || offset < 0
         || origin.checked_add(pixels).is_none()
     {
         return Err(AxisError::Bounds);
@@ -102,7 +107,7 @@ pub fn sample_bands<E>(
     let mut bands = Vec::new();
     let mut used = 0;
     if frozen > 0 && pixels > 0 {
-        let (mut cells, last_index) = sample_band_axis(1, frozen, pixels, &mut extent)?;
+        let (mut cells, last_index) = sample_band_axis(1, frozen, pixels, 0, &mut extent)?;
         used = cells.last().map_or(0, |c| c.start + c.extent).min(pixels);
         for cell in &mut cells {
             cell.start = cell
@@ -125,8 +130,13 @@ pub fn sample_bands<E>(
     if used < pixels && frozen < last {
         let start = origin + used;
         let scroll_extent = pixels - used;
-        let (mut cells, last_index) =
-            sample_band_axis(first.max(frozen + 1), last, scroll_extent, &mut extent)?;
+        let (mut cells, last_index) = sample_band_axis(
+            first.max(frozen + 1),
+            last,
+            scroll_extent,
+            offset,
+            &mut extent,
+        )?;
         for cell in &mut cells {
             cell.start = cell
                 .start
@@ -386,14 +396,26 @@ impl GridGeometry {
 }
 /// First slot whose trailing edge lies within `tolerance` of `pixel`.
 /// Frozen then scrolling, stopping once the edges pass the hot zone.
+/// The pointer and the edge must both lie in the same visible band clip, so
+/// an edge behind a frozen pane cannot win a resize hit.
 fn boundary(bands: &[AxisBand], pixel: i32, tolerance: i32) -> Option<i32> {
-    for cell in bands.iter().flat_map(|band| band.cells.iter()) {
-        let end = cell.start + cell.extent;
-        if (end - pixel).abs() <= tolerance {
-            return Some(cell.index);
+    let hot = pixel.saturating_add(tolerance);
+    for band in bands {
+        let band_end = band.start.checked_add(band.extent)?;
+        // The split pixel belongs to the trailing frozen edge. A point past it
+        // no longer sees the frozen band.
+        if pixel < band.start || pixel > band_end {
+            continue;
         }
-        if end > pixel + tolerance {
-            break;
+        for cell in band.cells.iter() {
+            let end = cell.start.checked_add(cell.extent)?;
+            let visible = end >= band.start && end <= band_end;
+            if visible && (end - pixel).abs() <= tolerance {
+                return Some(cell.index);
+            }
+            if end > hot {
+                break;
+            }
         }
     }
     None
@@ -427,7 +449,7 @@ mod tests {
     #[test]
     fn frozen_band_consumes_viewport_without_reading_scroll_window() {
         let mut reads = Vec::new();
-        let bands = sample_bands(90, 100, 5, 24, 25, |i| {
+        let bands = sample_bands(90, 100, 5, 24, 25, 0, |i| {
             reads.push(i);
             Ok::<_, ()>(20.0)
         })
@@ -439,19 +461,19 @@ mod tests {
     }
     #[test]
     fn hidden_frozen_axes_leave_room_for_scroll_and_bounds_are_checked() {
-        let bands = sample_bands(1, 10, 2, 24, 50, |i| {
+        let bands = sample_bands(1, 10, 2, 24, 50, 0, |i| {
             Ok::<_, ()>(if i <= 2 { 0.0 } else { 20.0 })
         })
         .unwrap();
         assert_eq!(bands[0].extent, 0);
         assert_eq!(bands[1].cells[0].index, 3);
-        assert!(sample_bands(1, 10, 11, 0, 10, |_| Ok::<_, ()>(20.0)).is_err());
-        assert!(sample_bands(1, 10, 0, i32::MAX, 10, |_| Ok::<_, ()>(20.0)).is_err());
+        assert!(sample_bands(1, 10, 11, 0, 10, 0, |_| Ok::<_, ()>(20.0)).is_err());
+        assert!(sample_bands(1, 10, 0, i32::MAX, 10, 0, |_| Ok::<_, ()>(20.0)).is_err());
     }
     #[test]
     fn fragments_do_not_invent_edges_at_freeze_or_viewport_clips() {
-        let rows = sample_bands(5, 100, 1, 24, 90, |_| Ok::<_, ()>(20.0)).unwrap();
-        let columns = sample_bands(5, 100, 1, 48, 90, |_| Ok::<_, ()>(20.0)).unwrap();
+        let rows = sample_bands(5, 100, 1, 24, 90, 0, |_| Ok::<_, ()>(20.0)).unwrap();
+        let columns = sample_bands(5, 100, 1, 48, 90, 0, |_| Ok::<_, ()>(20.0)).unwrap();
         let geometry = GridGeometry::new(
             PixelRect {
                 top_left: Point { x: 0, y: 0 },
@@ -482,7 +504,7 @@ mod tests {
     #[test]
     fn fragments_keep_edges_when_range_ends_in_hidden_row_and_column() {
         let sample_axis = || {
-            sample_bands(1, 3, 0, 0, 100, |index| {
+            sample_bands(1, 3, 0, 0, 100, 0, |index| {
                 Ok::<_, ()>(if index == 3 { 0.0 } else { 20.0 })
             })
             .unwrap()
@@ -513,7 +535,7 @@ mod tests {
     fn hidden_boundary_cells_keep_edges_and_handle_at_exact_viewport_extent() {
         for frozen in [0, 4] {
             let sample = || {
-                sample_bands(1, 4, frozen, 0, 40, |index| {
+                sample_bands(1, 4, frozen, 0, 40, 0, |index| {
                     Ok::<_, ()>(if index >= 3 { 0.0 } else { 20.0 })
                 })
                 .unwrap()
@@ -543,7 +565,7 @@ mod tests {
     #[test]
     fn exact_viewport_boundary_stops_before_the_next_visible_cell() {
         let mut reads = Vec::new();
-        let bands = sample_bands(1, 10, 0, 0, 40, |index| {
+        let bands = sample_bands(1, 10, 0, 0, 40, 0, |index| {
             reads.push(index);
             Ok::<_, ()>(if (3..=4).contains(&index) { 0.0 } else { 20.0 })
         })
@@ -556,7 +578,7 @@ mod tests {
     #[test]
     fn autofill_handle_uses_visible_corner_when_range_ends_in_hidden_row_and_column() {
         let sample_axis = || {
-            sample_bands(1, 3, 0, 0, 100, |index| {
+            sample_bands(1, 3, 0, 0, 100, 0, |index| {
                 Ok::<_, ()>(if index == 3 { 0.0 } else { 20.0 })
             })
             .unwrap()
@@ -584,7 +606,7 @@ mod tests {
     #[test]
     fn autofill_handle_is_absent_for_a_fully_hidden_range() {
         let sample_axis = || {
-            sample_bands(1, 3, 0, 0, 100, |index| {
+            sample_bands(1, 3, 0, 0, 100, 0, |index| {
                 Ok::<_, ()>(if index == 3 { 0.0 } else { 20.0 })
             })
             .unwrap()
@@ -611,8 +633,8 @@ mod tests {
 
     #[test]
     fn queries_resolve_frozen_scroll_cells_and_the_scroll_pane() {
-        let rows = sample_bands(5, 100, 1, 24, 80, |_| Ok::<_, ()>(20.0)).unwrap();
-        let columns = sample_bands(5, 100, 1, 48, 80, |_| Ok::<_, ()>(20.0)).unwrap();
+        let rows = sample_bands(5, 100, 1, 24, 80, 0, |_| Ok::<_, ()>(20.0)).unwrap();
+        let columns = sample_bands(5, 100, 1, 48, 80, 0, |_| Ok::<_, ()>(20.0)).unwrap();
         // Frozen row 1 / col 1 at the origin, then scrolling cells from id 5.
         assert!(rows[0].frozen);
         assert!(!rows[1].frozen);
@@ -688,9 +710,169 @@ mod tests {
     }
 
     #[test]
+    fn offset_sampling_keeps_partly_visible_first_and_last_cells() {
+        let mut reads = Vec::new();
+        let bands = sample_bands(10, 100, 0, 0, 25, 7, |index| {
+            reads.push(index);
+            Ok::<_, ()>(20.0)
+        })
+        .unwrap();
+        assert_eq!(reads, [10, 11]);
+        assert_eq!(
+            bands[0].cells.as_ref(),
+            [
+                AxisCell {
+                    index: 10,
+                    start: -7,
+                    extent: 20
+                },
+                AxisCell {
+                    index: 11,
+                    start: 13,
+                    extent: 20
+                },
+            ]
+        );
+        // Offset zero stops exactly at the band end; extent - 1 keeps the last
+        // visible cell and starts the next one at the far edge.
+        let exact = sample_bands(10, 100, 0, 0, 20, 0, |_| Ok::<_, ()>(20.0)).unwrap();
+        assert_eq!(exact[0].cells.len(), 1);
+        let edge = sample_bands(10, 100, 0, 0, 20, 19, |_| Ok::<_, ()>(20.0)).unwrap();
+        assert_eq!(edge[0].cells.len(), 2);
+        assert_eq!(edge[0].cells[0].start, -19);
+        assert_eq!(edge[0].cells[1].start, 1);
+        assert_eq!(edge[0].last_index, 11);
+    }
+
+    #[test]
+    fn offsets_apply_only_to_the_scrolling_band() {
+        let bands = sample_bands(5, 100, 1, 24, 60, 7, |index| {
+            Ok::<_, ()>(if index == 1 { 20.0 } else { 30.0 })
+        })
+        .unwrap();
+        assert_eq!(bands.len(), 2);
+        assert_eq!(bands[0].start, 24);
+        assert_eq!(bands[0].cells[0].start, 24);
+        assert_eq!(bands[1].start, 44);
+        assert_eq!(bands[1].cells[0].index, 5);
+        assert_eq!(bands[1].cells[0].start, 37);
+    }
+
+    #[test]
+    fn fragments_mark_clipped_lead_edges_as_false() {
+        let rows = sample_bands(5, 100, 0, 24, 20, 7, |_| Ok::<_, ()>(11.0)).unwrap();
+        let columns = sample_bands(5, 100, 0, 40, 20, 9, |_| Ok::<_, ()>(13.0)).unwrap();
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point::default(),
+                width: 80,
+                height: 60,
+            },
+            Point { x: 40, y: 24 },
+            rows,
+            columns,
+        );
+        let cell = CellCoord { row: 5, col: 5 };
+        assert_eq!(
+            geometry.cell_rect(5, 5),
+            Some(PixelRect {
+                top_left: Point { x: 31, y: 17 },
+                width: 13,
+                height: 11,
+            })
+        );
+        let fragment = geometry
+            .fragments(GridRange {
+                first: cell,
+                last: cell,
+            })
+            .into_iter()
+            .next()
+            .unwrap();
+        assert_eq!((fragment.rect.left(), fragment.rect.top()), (40, 24));
+        assert_eq!(
+            fragment.edges,
+            side_flags(|side| matches!(side, Side::Right | Side::Bottom))
+        );
+        assert_eq!(
+            geometry.hit_test(Point { x: 41, y: 25 }),
+            Some(GridHit::Cell(cell))
+        );
+    }
+
+    #[test]
+    fn offsets_keep_four_panes_and_hit_each_combination() {
+        let rows = sample_bands(5, 100, 2, 24, 80, 5, |index| {
+            Ok::<_, ()>(if index <= 2 { 20.0 } else { 22.0 })
+        })
+        .unwrap();
+        let columns = sample_bands(4, 100, 1, 40, 90, 7, |index| {
+            Ok::<_, ()>(if index == 1 { 30.0 } else { 25.0 })
+        })
+        .unwrap();
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point::default(),
+                width: 130,
+                height: 104,
+            },
+            Point { x: 40, y: 24 },
+            rows,
+            columns,
+        );
+        assert_eq!(geometry.panes.len(), 4);
+        for (point, cell) in [
+            (Point { x: 41, y: 25 }, CellCoord { row: 1, col: 1 }),
+            (Point { x: 71, y: 25 }, CellCoord { row: 1, col: 4 }),
+            (Point { x: 41, y: 65 }, CellCoord { row: 5, col: 1 }),
+            (Point { x: 71, y: 65 }, CellCoord { row: 5, col: 4 }),
+        ] {
+            assert_eq!(geometry.hit_test(point), Some(GridHit::Cell(cell)));
+        }
+        let fragments = geometry.fragments(GridRange {
+            first: CellCoord { row: 1, col: 1 },
+            last: CellCoord { row: 6, col: 6 },
+        });
+        assert_eq!(fragments.len(), 4);
+        assert!(fragments[0].edges[Side::Left.index()]);
+        assert!(fragments[0].edges[Side::Top.index()]);
+        assert!(!fragments[3].edges[Side::Left.index()]);
+        assert!(!fragments[3].edges[Side::Top.index()]);
+    }
+
+    #[test]
+    fn a_resize_edge_behind_the_frozen_pane_cannot_win() {
+        let columns = sample_bands(5, 100, 1, 20, 60, 10, |index| {
+            Ok::<_, ()>(if index == 1 { 20.0 } else { 11.0 })
+        })
+        .unwrap();
+        let rows = sample_bands(1, 100, 0, 24, 100, 0, |_| Ok::<_, ()>(20.0)).unwrap();
+        let geometry = GridGeometry::new(
+            PixelRect {
+                top_left: Point::default(),
+                width: 80,
+                height: 124,
+            },
+            Point { x: 20, y: 24 },
+            rows,
+            columns,
+        );
+        // The frozen column ends at 40, but the pointer at 41 belongs to the
+        // scrolling band. Its first cell ends at 41.
+        assert_eq!(
+            geometry.resize_target(Point { x: 41, y: 10 }, 1),
+            Some(GridResize::Column(5))
+        );
+        assert_eq!(
+            geometry.resize_target(Point { x: 40, y: 10 }, 1),
+            Some(GridResize::Column(1))
+        );
+    }
+
+    #[test]
     fn frozen_band_that_fills_the_viewport_leaves_no_scroll_pane() {
-        let rows = sample_bands(90, 100, 5, 24, 25, |_| Ok::<_, ()>(20.0)).unwrap();
-        let columns = sample_bands(90, 100, 5, 48, 25, |_| Ok::<_, ()>(20.0)).unwrap();
+        let rows = sample_bands(90, 100, 5, 24, 25, 0, |_| Ok::<_, ()>(20.0)).unwrap();
+        let columns = sample_bands(90, 100, 5, 48, 25, 0, |_| Ok::<_, ()>(20.0)).unwrap();
         assert!(rows.iter().all(|b| b.frozen));
         let geometry = GridGeometry::new(
             PixelRect {

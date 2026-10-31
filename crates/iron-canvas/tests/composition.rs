@@ -10,7 +10,11 @@ use iron_canvas_core::{
 };
 use iron_canvas_export::{PdfSceneBackend, SvgSceneBackend};
 use iron_canvas_ironcalc::WorksheetViewport;
-use ironcalc_base::{UserModel, expressions::types::Area, types::Link};
+use ironcalc_base::{
+    UserModel,
+    expressions::types::Area,
+    types::{BorderItem, BorderStyle, Color, Link},
+};
 fn coord(row: i32, col: i32) -> CellCoord {
     CellCoord { row, col }
 }
@@ -511,6 +515,76 @@ fn dragged_range_overlay_covers_both_corners_and_draws_its_handle() {
                 && color.as_ref() == request.theme.selection_color.as_ref()
     )));
 }
+#[test]
+fn offset_viewport_clips_merge_text_border_and_overlay_queries() {
+    let mut w = workbook();
+    w.set_user_input(0, 5, 5, "offset").unwrap();
+    w.merge_cells(&Area {
+        sheet: 0,
+        row: 5,
+        column: 5,
+        width: 2,
+        height: 2,
+    })
+    .unwrap();
+    let mut style = w.get_cell_style(0, 5, 5).unwrap();
+    style.border.top = Some(BorderItem {
+        style: BorderStyle::Thin,
+        color: Color::Rgb("#123456".into()),
+    });
+    w.set_selected_cell(5, 5).unwrap();
+    w.on_paste_styles(&[vec![style]]).unwrap();
+    let mut request = request();
+    request.viewport = WorksheetViewport::aligned(coord(5, 5), 400, 220);
+    request.viewport.scroll.offset_x = 7;
+    request.viewport.scroll.offset_y = 5;
+    request.overlays.selection = vec![range(5, 5, 6, 6)];
+    request.overlays.active_cell = Some(coord(5, 5));
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+
+    let full = session.cell_rect(5, 5).expect("full cell rect");
+    let pane = session.scroll_pane_rect().expect("scroll pane");
+    assert!(full.left() < pane.left());
+    assert!(full.top() < pane.top());
+
+    let fragments = session.visible_fragments(range(5, 5, 6, 6));
+    assert_eq!(fragments.len(), 1);
+    let fragment = fragments[0];
+    assert_eq!(
+        (fragment.rect.left(), fragment.rect.top()),
+        (pane.left(), pane.top())
+    );
+    assert!(!fragment.edges[Side::Left.index()]);
+    assert!(!fragment.edges[Side::Top.index()]);
+    assert!(fragment.edges[Side::Right.index()]);
+    assert!(fragment.edges[Side::Bottom.index()]);
+    assert_eq!(
+        session.hit_test(Point {
+            x: pane.left() + 1,
+            y: pane.top() + 1,
+        }),
+        Some(GridHit::Cell(coord(5, 5)))
+    );
+
+    let scene = &session.committed_frame().unwrap().worksheet.scene;
+    let primitives = scene.passes.iter().flat_map(|pass| pass.iter());
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::Text { text, .. } if text == "offset"
+    )));
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::Line { color, .. } if color.as_ref() == "#123456"
+    )));
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::RectFill { rect, color }
+            if *rect == fragment.rect
+                && color.as_ref() == request.theme.selection_fill.as_ref()
+    )));
+}
+
 #[test]
 fn active_cell_overlay_draws_an_autofill_handle() {
     let w = workbook();

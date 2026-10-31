@@ -61,6 +61,16 @@ fn border(model: &mut UserModel<'_>, row: i32, col: i32, side: Side) {
 }
 
 fn prepare(model: &UserModel<'_>, first: i32, width: i32) -> PreparedWorksheet {
+    prepare_at(model, 1, first, width, 120)
+}
+
+fn prepare_at(
+    model: &UserModel<'_>,
+    row: i32,
+    first: i32,
+    width: i32,
+    height: i32,
+) -> PreparedWorksheet {
     WorksheetCompiler::new()
         .prepare(
             WorksheetContext {
@@ -68,7 +78,7 @@ fn prepare(model: &UserModel<'_>, first: i32, width: i32) -> PreparedWorksheet {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport::aligned(CellCoord { row: 1, col: first }, width, 120),
+            WorksheetViewport::aligned(CellCoord { row, col: first }, width, height),
             &Metrics,
         )
         .unwrap()
@@ -111,10 +121,10 @@ fn text_paint(frame: &PreparedWorksheet, value: &str) -> Vec<(PixelRect, f64)> {
 #[test]
 fn left_right_and_center_keep_the_source_anchor_and_expand_only_the_clip() {
     for (alignment, left, right, x) in [
-        ("general", 148, 348, 152.0),
-        ("left", 148, 348, 152.0),
-        ("right", 48, 198, 194.0),
-        ("center", 48, 298, 173.0),
+        ("general", 186, 348, 190.0),
+        ("left", 186, 348, 190.0),
+        ("right", 86, 236, 232.0),
+        ("center", 86, 336, 211.0),
     ] {
         let mut model = model();
         model.set_user_input(0, 1, 3, TEXT).unwrap();
@@ -466,10 +476,11 @@ fn hidden_columns_stop_spill_and_hidden_sources_do_not_paint() {
         rect(&frame, 1, 2).right()
     );
     model.set_columns_hidden(0, 1, 1, true).unwrap();
-    assert!(text_paint(&prepare(&model, 1, 348), TEXT).is_empty());
+    // The host normalizes a hidden origin to the next visible column.
+    assert!(text_paint(&prepare(&model, 2, 348), TEXT).is_empty());
     model.set_columns_hidden(0, 1, 1, false).unwrap();
     model.set_rows_hidden(0, 1, 1, true).unwrap();
-    assert!(text_paint(&prepare(&model, 1, 348), TEXT).is_empty());
+    assert!(text_paint(&prepare_at(&model, 2, 1, 348, 120), TEXT).is_empty());
 }
 
 #[test]

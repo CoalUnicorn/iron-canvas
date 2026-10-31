@@ -851,7 +851,6 @@ fn cf_revisions_repaint_visible_results_of_offscreen_edits() {
 fn failed_partial_updates_keep_pixels_queries_and_fingerprints_until_retry() {
     use iron_canvas::{RenderBackend, RenderStrategy};
     use iron_canvas_core::{
-        Point,
         painter::TextMetrics,
         scene::{GridScene, retained::SceneUpdate},
     };
@@ -933,7 +932,7 @@ fn failed_partial_updates_keep_pixels_queries_and_fingerprints_until_retry() {
     session.render(&model, &request).unwrap();
     let old = pixels(&canvas);
     let frame = session.committed_frame().cloned();
-    let point = Point { x: 55, y: 30 };
+    let point = session.cell_rect(1, 1).expect("first cell rect").center();
     let link = session.link_at(point).cloned();
     model
         .set_cell_link(

@@ -23,6 +23,12 @@ pub(crate) fn scroll_plan(
         || previous.overlays != request.overlays
         || request.overlays != Default::default()
         || previous.viewport.scroll.first_cell.col != request.viewport.scroll.first_cell.col
+        // Pixel movement changes every placed slot. Until the translated-scene
+        // comparison covers offsets, only aligned whole-cell scrolls reuse pixels.
+        || request.viewport.scroll.offset_x != 0
+        || request.viewport.scroll.offset_y != 0
+        || previous.viewport.scroll.offset_x != request.viewport.scroll.offset_x
+        || previous.viewport.scroll.offset_y != request.viewport.scroll.offset_y
     {
         return None;
     }
@@ -69,14 +75,10 @@ pub(crate) fn scroll_plan(
     };
     // Retain an interior rectangle. Repaint boundary pixels, headers and exposed strips.
     let region = body.intersection(shifted)?.inset(4, 4);
-    if region.width <= 0
-        || region.height <= 0
-        || [region.left(), region.right(), region.top(), region.bottom()]
-            .iter()
-            .any(|v| (f64::from(*v) * scale).fract() != 0.0)
-    {
-        return None;
-    }
+    // The row header width comes from font metrics, so an inset edge is not
+    // always an integral device pixel. Move each edge inward to the nearest
+    // copyable coordinate before asking for a blit.
+    let region = integral_region(region, scale)?;
     if !translated_overlap_matches(
         &old.worksheet.scene,
         &new.scene,
@@ -98,6 +100,27 @@ pub(crate) fn scroll_plan(
         repaint: outside(&new.scene, region),
     })
 }
+/// Nearest coordinate inward from `edge` that lands on an integral device pixel.
+fn integral_edge(edge: i32, step: i32, scale: f64) -> Option<i32> {
+    (0..=64).find_map(|offset| {
+        let value = edge.checked_add(step.checked_mul(offset)?)?;
+        ((f64::from(value) * scale).fract() == 0.0).then_some(value)
+    })
+}
+
+/// Shrink a copy region so every edge is an integral device pixel.
+fn integral_region(region: PixelRect, scale: f64) -> Option<PixelRect> {
+    let left = integral_edge(region.left(), 1, scale)?;
+    let top = integral_edge(region.top(), 1, scale)?;
+    let right = integral_edge(region.right(), -1, scale)?;
+    let bottom = integral_edge(region.bottom(), -1, scale)?;
+    (right > left && bottom > top).then(|| PixelRect {
+        top_left: Point { x: left, y: top },
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
 fn outside(scene: &GridScene, r: PixelRect) -> Vec<PixelRect> {
     let b = scene.clip;
     [

@@ -163,7 +163,7 @@ fn compiler_suppresses_hidden_values_but_keeps_icon_primitives() {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport::aligned(CellCoord { row: 17, col: 2 }, 58, 34),
+            WorksheetViewport::aligned(CellCoord { row: 17, col: 2 }, 90, 34),
             backend.metrics(),
         )
         .unwrap();
