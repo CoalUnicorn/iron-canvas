@@ -21,6 +21,8 @@ declare module "*.js" {
 
   export class Workbook {
     activeCell(): string;
+    cellFragmentRects(row: number, col: number): Int32Array;
+    cellRect(row: number, col: number): Int32Array;
     enqueueNavigation(command: NavigationCommand, repeat: boolean): void;
     flushNavigation(): void;
     cancelNavigation(): void;

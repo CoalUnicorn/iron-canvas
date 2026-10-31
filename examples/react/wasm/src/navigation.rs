@@ -344,6 +344,39 @@ impl Workbook {
         Ok(())
     }
 
+    /// Full cell rectangle for an editor text box, `[x, y, width, height]`.
+    /// Empty when the cell is outside the committed panes.
+    #[wasm_bindgen(js_name = cellRect)]
+    pub fn cell_rect(&self, row: i32, col: i32) -> Vec<i32> {
+        self.session
+            .cell_rect(row, col)
+            .map_or_else(Vec::new, |rect| {
+                vec![rect.left(), rect.top(), rect.width, rect.height]
+            })
+    }
+
+    /// Pane-clipped rectangles for the same cell, four values per fragment.
+    /// Clip the editor surface with these; an empty list hides it.
+    #[wasm_bindgen(js_name = cellFragmentRects)]
+    pub fn cell_fragment_rects(&self, row: i32, col: i32) -> Vec<i32> {
+        let cell = CellCoord { row, col };
+        self.session
+            .visible_fragments(iron_canvas_core::scene_geometry::GridRange {
+                first: cell,
+                last: cell,
+            })
+            .into_iter()
+            .flat_map(|fragment| {
+                [
+                    fragment.rect.left(),
+                    fragment.rect.top(),
+                    fragment.rect.width,
+                    fragment.rect.height,
+                ]
+            })
+            .collect()
+    }
+
     #[wasm_bindgen(js_name = activeCell)]
     pub fn active_cell(&self) -> String {
         let view = self.workbook.get_selected_view();
@@ -695,6 +728,19 @@ mod browser_tests {
         assert!(host.scroll_pixels(1.0, 0.0).is_err());
         host.cancel_navigation().unwrap();
         assert!(host.navigation.commands.is_empty());
+    }
+
+    #[wasm_bindgen_test]
+    fn editor_rect_is_full_while_fragments_clip_at_the_pane() {
+        let mut host = crate::tests::host();
+        host.wheel(0.0, 15.0, 0, false).unwrap();
+        host.flush_navigation().unwrap();
+        let full = host.cell_rect(1, 1);
+        let fragments = host.cell_fragment_rects(1, 1);
+        assert_eq!(full.len(), 4);
+        assert_eq!(fragments.len(), 4);
+        assert!(full[1] < fragments[1], "editor box keeps the cell origin");
+        assert_eq!(full[1] + full[3], fragments[1] + fragments[3]);
     }
 
     #[wasm_bindgen_test]
