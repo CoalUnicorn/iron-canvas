@@ -135,7 +135,7 @@ impl Workbook {
             // geometry borrow before the engine changes its accepted view.
             self.workbook.set_window_width(f64::from(pane.width));
             self.workbook.set_window_height(f64::from(pane.height));
-            let origin = expected.viewport.first_cell;
+            let origin = expected.viewport.scroll.first_cell;
             let origin = CellCoord {
                 row: origin.row.max((frozen.rows + 1).min(LAST_ROW)),
                 col: origin.col.max((frozen.cols + 1).min(LAST_COLUMN)),

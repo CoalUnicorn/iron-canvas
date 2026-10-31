@@ -135,7 +135,7 @@ impl<B: RenderBackend> CanvasSession<B> {
         expected: &RenderRequest,
         target: CellCoord,
     ) -> Result<VisibilityAdjustment, NavigationQueryError> {
-        if !valid_cell(target) || !valid_cell(expected.viewport.first_cell) {
+        if !valid_cell(target) || !valid_cell(expected.viewport.scroll.first_cell) {
             return Err(NavigationQueryError::Bounds);
         }
         let ready = match self.navigation_geometry(expected) {
@@ -145,7 +145,7 @@ impl<B: RenderBackend> CanvasSession<B> {
             }
         };
         let pane = ready.geometry.scroll_pane_rect();
-        let requested = expected.viewport.first_cell;
+        let requested = expected.viewport.scroll.first_cell;
         let origin = CellCoord {
             row: requested.row.max((ready.frozen.rows + 1).min(LAST_ROW)),
             col: requested.col.max((ready.frozen.cols + 1).min(LAST_COLUMN)),

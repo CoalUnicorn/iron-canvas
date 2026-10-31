@@ -19,11 +19,7 @@ fn fixture() -> (UserModel<'static>, RenderRequest) {
             workbook_id: 1,
             revision: 0,
         },
-        viewport: WorksheetViewport {
-            first_cell: CellCoord { row: 1, col: 1 },
-            width: 640,
-            height: 400,
-        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
         theme: CanvasTheme::light(),
         overlays: Default::default(),
     };
@@ -70,7 +66,7 @@ fn native_spill_matches_fresh_after_offscreen_source_and_blocker_edits() {
             .unwrap();
         model.set_columns_width(0, 1, 20, 60.0).unwrap();
         model.set_columns_width(0, 1, 1, source_width).unwrap();
-        request.viewport.first_cell.col = 2;
+        request.viewport.scroll.first_cell.col = 2;
         model
             .set_user_input(0, 4, 1, "Offscreen text extends across empty cells")
             .unwrap();
@@ -156,7 +152,7 @@ fn native_reuses_stable_frames_and_falls_back_for_partial_work() {
             compare(&s, &model, &request, scale);
         }
         for row in [2, 3, 2, 1] {
-            request.viewport.first_cell.row = row;
+            request.viewport.scroll.first_cell.row = row;
             let result = s.render(&model, &request).unwrap();
             assert_eq!(result.strategy, RenderStrategy::Fresh);
             compare(&s, &model, &request, scale);

@@ -20,11 +20,7 @@ pub fn fixture() -> (UserModel<'static>, RenderRequest) {
             workbook_id: 72,
             revision: 0,
         },
-        viewport: WorksheetViewport {
-            first_cell: CellCoord { row: 1, col: 2 },
-            width: 348,
-            height: 180,
-        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 2 }, 348, 180),
         theme: CanvasTheme::light(),
         overlays: Default::default(),
     };

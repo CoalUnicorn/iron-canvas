@@ -268,11 +268,7 @@ fn block_frames_match_individual_frames_with_fallback_merges_and_hidden_gaps() {
     model.set_user_input(0, 6, 6, "=\"\"").unwrap();
     model.set_columns_hidden(0, 9, 10, true).unwrap();
     model.set_rows_hidden(0, 8, 9, true).unwrap();
-    let viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 3, col: 5 },
-        width: 500,
-        height: 300,
-    };
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 3, col: 5 }, 500, 300);
     compare_frames(&model, 0, viewport);
     model.set_frozen_rows_count(0, 1).unwrap();
     model.set_frozen_columns_count(0, 1).unwrap();
@@ -288,11 +284,7 @@ fn block_frames_match_individual_cf_frames() {
         compare_frames(
             &model,
             sheet,
-            WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 700,
-                height: 600,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 700, 600),
         );
     }
 }
@@ -301,11 +293,7 @@ fn block_frames_match_individual_cf_frames() {
 fn block_records_preserve_occupancy_and_count_styles_and_fallback_once() {
     let mut model = UserModel::new_empty("counts", "en", "UTC", "en").unwrap();
     model.set_user_input(0, 1, 1, "=\"\"").unwrap();
-    let viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 1, col: 1 },
-        width: 350,
-        height: 150,
-    };
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 350, 150);
     let prepared = compile_with_blocks(&model, 0, viewport, None);
     let theme = CanvasTheme::light();
     let mut cache = TextLayoutCache::default();
@@ -343,11 +331,7 @@ fn block_records_preserve_occupancy_and_count_styles_and_fallback_once() {
 #[test]
 fn failed_block_read_reports_bounds_and_does_not_retry_individual_cells() {
     let model = UserModel::new_empty("errors", "en", "UTC", "en").unwrap();
-    let viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 1, col: 1 },
-        width: 200,
-        height: 100,
-    };
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 200, 100);
     let prepared = compile_with_blocks(&model, 0, viewport, None);
     let theme = CanvasTheme::light();
     let mut cache = TextLayoutCache::default();

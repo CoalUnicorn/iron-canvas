@@ -45,11 +45,7 @@ fn request() -> RenderRequest {
             workbook_id: 1,
             revision: 1,
         },
-        viewport: WorksheetViewport {
-            first_cell: CellCoord { row: 1, col: 1 },
-            width: 200,
-            height: 80,
-        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 200, 80),
         theme: CanvasTheme::light(),
         overlays: Default::default(),
     }
@@ -140,11 +136,7 @@ fn committed_frame_exposes_cell_rects_scroll_pane_and_autofill_handle() {
     workbook.set_frozen_rows_count(0, 1).unwrap();
     workbook.set_frozen_columns_count(0, 1).unwrap();
     let mut request = request();
-    request.viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 4, col: 4 },
-        width: 400,
-        height: 300,
-    };
+    request.viewport = WorksheetViewport::aligned(CellCoord { row: 4, col: 4 }, 400, 300);
     let mut session = CanvasSession::new(SvgSceneBackend::new());
     // No committed frame: every geometry query is empty.
     assert!(session.cell_rect(1, 1).is_none());

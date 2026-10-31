@@ -199,7 +199,7 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// after freeze clamping. Falls back to the requested viewport on an axis
     /// with no scrolling band (a frozen band that consumed the extent).
     pub fn scroll_origin(&self) -> Option<CellCoord> {
-        let requested = self.committed.as_ref()?.request.viewport.first_cell;
+        let requested = self.committed.as_ref()?.request.viewport.scroll.first_cell;
         let geometry = self.committed_geometry();
         let row = geometry
             .and_then(|g| g.row_bands.iter().find(|b| !b.frozen))

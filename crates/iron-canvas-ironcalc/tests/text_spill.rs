@@ -68,11 +68,7 @@ fn prepare(model: &UserModel<'_>, first: i32, width: i32) -> PreparedWorksheet {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: first },
-                width,
-                height: 120,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 1, col: first }, width, 120),
             &Metrics,
         )
         .unwrap()
@@ -539,11 +535,7 @@ fn svg_and_pdf_emit_the_spill_clip_selected_with_their_own_metrics() {
     use iron_canvas_export::{PdfSceneBackend, SvgSceneBackend};
     let mut model = model();
     model.set_user_input(0, 1, 1, TEXT).unwrap();
-    let viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 1, col: 1 },
-        width: 348,
-        height: 120,
-    };
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 348, 120);
 
     let mut svg = SvgSceneBackend::new();
     let frame = WorksheetCompiler::new()

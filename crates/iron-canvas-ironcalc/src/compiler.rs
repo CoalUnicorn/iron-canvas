@@ -18,6 +18,7 @@ pub(crate) use text::font_css;
 
 pub use cf::{CfDataBarPaint, CfDecorationPaint, CfIconPaint, CfRatingPaint};
 
+pub use iron_canvas_core::scroll::ScrollPosition;
 use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect};
 use iron_canvas_core::{
     painter::{PaintColor, TextMetrics},
@@ -59,9 +60,22 @@ pub struct CellPlacement {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WorksheetViewport {
-    pub first_cell: CellCoord,
+    pub scroll: ScrollPosition,
     pub width: i32,
     pub height: i32,
+}
+
+impl WorksheetViewport {
+    /// Align the first visible cell with the pane corner.
+    /// The host normalizes the cell against frozen and hidden dimensions
+    /// before it submits the viewport.
+    pub const fn aligned(first_cell: CellCoord, width: i32, height: i32) -> Self {
+        Self {
+            scroll: ScrollPosition::aligned(first_cell),
+            width,
+            height,
+        }
+    }
 }
 
 /// Frozen row and column counts of the compiled viewport. Query paths use

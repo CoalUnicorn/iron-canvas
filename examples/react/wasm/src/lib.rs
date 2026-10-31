@@ -246,14 +246,14 @@ impl Workbook {
                 workbook_id: self.workbook_id,
                 revision: self.revision,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord {
+            viewport: WorksheetViewport::aligned(
+                CellCoord {
                     row: view.top_row.max(1),
                     col: view.left_column.max(1),
                 },
                 width,
                 height,
-            },
+            ),
             theme: CanvasTheme::light(),
             overlays: OverlayState {
                 selection: vec![iron_canvas_core::scene_geometry::GridRange {

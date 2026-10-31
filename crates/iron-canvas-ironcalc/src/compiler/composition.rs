@@ -122,16 +122,27 @@ fn read_structure(
 ) -> Result<(FrozenAxes, Rc<[MergedCell]>), WorksheetCompileError> {
     let workbook = attempt.context.workbook;
     let sheet = attempt.context.sheet;
-    let first = viewport.first_cell;
+    let first = viewport.scroll.first_cell;
     if !(1..=LAST_ROW).contains(&first.row)
         || !(1..=LAST_COLUMN).contains(&first.col)
         || viewport.width < 0
         || viewport.height < 0
+        || viewport.scroll.offset_x < 0
+        || viewport.scroll.offset_y < 0
     {
         return Err(attempt.error(
             first,
             CellReadOperation::Request,
             "invalid viewport bounds".into(),
+        ));
+    }
+    // Offset sampling arrives with the pane geometry change. Reject a
+    // nonzero offset instead of drawing the aligned cell silently.
+    if viewport.scroll.offset_x != 0 || viewport.scroll.offset_y != 0 {
+        return Err(attempt.error(
+            first,
+            CellReadOperation::Request,
+            "pixel scroll offsets are not sampled yet".into(),
         ));
     }
     let err = |op, e| attempt.error(first, op, e);
@@ -184,7 +195,7 @@ fn prepare_geometry(
     dimensions: &mut Dimensions<'_, '_>,
     previous: Option<&Rc<GridGeometry>>,
 ) -> Result<Rc<GridGeometry>, WorksheetCompileError> {
-    let first = viewport.first_cell;
+    let first = viewport.scroll.first_cell;
     // Sample rows first. Their labels set the width of the row headers.
     let header_height = HEADER_STRIP_HEIGHT.min(viewport.height);
     let rows = sample_bands(

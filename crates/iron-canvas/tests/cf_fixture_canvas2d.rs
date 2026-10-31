@@ -127,11 +127,7 @@ fn cf_fixture_session_paints_colored_primitives_and_preserves_pixels_on_failure(
                 workbook_id: 1,
                 revision: 1,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 1100,
-                height: 700,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 1100, 700),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -217,11 +213,7 @@ fn composed_merge_overlay_restores_candidate_pixels_at_both_scales() {
                 workbook_id: 5,
                 revision: 1,
             },
-            viewport: WorksheetViewport {
-                first_cell: coord(4, 4),
-                width: 500,
-                height: 300,
-            },
+            viewport: WorksheetViewport::aligned(coord(4, 4), 500, 300),
             theme: CanvasTheme::light(),
             overlays: OverlayState::default(),
         };
@@ -346,11 +338,7 @@ fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 2 },
-                width: 348,
-                height: 280,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 2 }, 348, 280),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -380,14 +368,14 @@ fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
                 }
                 5 => {
                     request.overlays = Default::default();
-                    request.viewport.first_cell.row = 2;
+                    request.viewport.scroll.first_cell.row = 2;
                 }
                 6 => model.set_columns_hidden(0, 3, 3, true).unwrap(),
                 7 => model.set_columns_hidden(0, 3, 3, false).unwrap(),
                 8 => {
                     model.set_frozen_columns_count(0, 2).unwrap();
                     model.set_frozen_rows_count(0, 2).unwrap();
-                    request.viewport.first_cell.col = 4;
+                    request.viewport.scroll.first_cell.col = 4;
                 }
                 _ => model
                     .merge_cells(&Area {
@@ -496,11 +484,7 @@ fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 400,
-                height: 300,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 300),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -512,7 +496,7 @@ fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
         for step in 0..6 {
             match step {
                 0 => {} // Equal text with a new revision exercises warm layout.
-                1 => request.viewport.first_cell.row = 2,
+                1 => request.viewport.scroll.first_cell.row = 2,
                 2 => model.set_columns_width(0, 1, 3, 65.0).unwrap(),
                 3 => model.update_range_style(&area, "font.b", "true").unwrap(),
                 4 => key = TextMetricsKey::new(1, 1),
@@ -577,11 +561,7 @@ fn selection_union_headers_freeze_and_removal_match_fresh_at_four_scales() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: cell(3, 3),
-                width: 640,
-                height: 400,
-            },
+            viewport: WorksheetViewport::aligned(cell(3, 3), 640, 400),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -626,7 +606,7 @@ fn selection_union_headers_freeze_and_removal_match_fresh_at_four_scales() {
         assert_eq!(session.interaction_frame(), old_stamp);
         assert_eq!(pixels(&canvas), union);
         request.revision.workbook_id = 1;
-        request.viewport.first_cell = cell(4, 4);
+        request.viewport.scroll.first_cell = cell(4, 4);
         session.render(&model, &request).unwrap();
         assert_fresh(&session, &model, &request, dpr);
         request.overlays.selection_snapshot = None;
@@ -662,11 +642,7 @@ fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 640,
-                height: 400,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -707,7 +683,7 @@ fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
             .render_cached(&mut cache, &model, &request, key)
             .unwrap();
         assert_fresh(&first, &model, &request, dpr);
-        request.viewport.first_cell.row = 2;
+        request.viewport.scroll.first_cell.row = 2;
         assert!(
             !first
                 .render_cached(&mut cache, &model, &request, key)
@@ -753,11 +729,7 @@ fn retained_damage_scroll_overlay_and_revert_match_fresh() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 640,
-                height: 400,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -777,7 +749,7 @@ fn retained_damage_scroll_overlay_and_revert_match_fresh() {
             assert_fresh(&s, &model, &request, dpr);
         }
         for row in [2, 3, 2, 1] {
-            request.viewport.first_cell.row = row;
+            request.viewport.scroll.first_cell.row = row;
             assert_eq!(
                 s.render(&model, &request).unwrap().strategy,
                 if dpr == 1.3 {
@@ -853,11 +825,7 @@ fn cf_revisions_repaint_visible_results_of_offscreen_edits() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 400,
-                height: 160,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 160),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -958,11 +926,7 @@ fn failed_partial_updates_keep_pixels_queries_and_fingerprints_until_retry() {
             workbook_id: 1,
             revision: 0,
         },
-        viewport: WorksheetViewport {
-            first_cell: CellCoord { row: 1, col: 1 },
-            width: 400,
-            height: 200,
-        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 200),
         theme: CanvasTheme::light(),
         overlays: Default::default(),
     };
@@ -1029,11 +993,7 @@ fn fixture_cf_edits_match_fresh_with_translucent_background() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 1100,
-                height: 700,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 1100, 700),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };

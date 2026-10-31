@@ -34,11 +34,7 @@ fn prepared(workbook: &UserModel<'_>) -> PreparedWorksheet {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 100,
-                height: 30,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 100, 30),
             &Metrics,
         )
         .unwrap()
@@ -92,11 +88,7 @@ fn geometry_and_metadata_reuse_remain_independent() {
                         sheet: 0,
                         theme: &theme,
                     },
-                    WorksheetViewport {
-                        first_cell: CellCoord { row: 1, col: 1 },
-                        width: 100,
-                        height: 30,
-                    },
+                    WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 100, 30),
                     &mut shaper,
                     reuse,
                 )
@@ -131,11 +123,7 @@ fn viewport_placements_keep_pane_order_and_full_bounds() {
     workbook.set_frozen_columns_count(0, 2).unwrap();
     workbook.set_rows_hidden(0, 2, 2, true).unwrap();
     workbook.set_columns_hidden(0, 2, 2, true).unwrap();
-    let viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 5, col: 5 },
-        width: 180,
-        height: 82,
-    };
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 5, col: 5 }, 180, 82);
     let prepared = WorksheetCompiler::new()
         .prepare(
             WorksheetContext {
@@ -246,11 +234,7 @@ fn empty_viewports_and_explicit_input_have_no_placements() {
                     sheet: 0,
                     theme: &CanvasTheme::light(),
                 },
-                WorksheetViewport {
-                    first_cell: CellCoord { row: 1, col: 1 },
-                    width,
-                    height,
-                },
+                WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, width, height),
                 &Metrics,
             )
             .unwrap();
@@ -382,11 +366,7 @@ fn invalid_sheet_is_rejected_even_without_cells() {
                     sheet: u32::MAX,
                     theme: &CanvasTheme::light()
                 },
-                WorksheetViewport {
-                    first_cell: CellCoord { row: 1, col: 1 },
-                    width: 0,
-                    height: 0
-                },
+                WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 0, 0),
                 &Metrics,
             )
             .is_err()
@@ -500,11 +480,7 @@ fn explicit_sheet_does_not_change_selection() {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 100,
-                height: 30,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 100, 30),
             &Metrics,
         )
         .unwrap();
@@ -730,4 +706,30 @@ fn linked_cells_paint_the_link_color_and_an_underline() {
     assert_eq!(static_color, formula_color);
     assert_ne!(static_color, plain_color);
     assert_eq!(plain_color, theme.default_text_color.as_ref());
+}
+
+#[test]
+fn pixel_offsets_are_rejected_before_the_offset_sampler_runs() {
+    let workbook = UserModel::new_empty("offsets", "en", "UTC", "en").unwrap();
+    let compile = |viewport| {
+        WorksheetCompiler::new().prepare(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            &Metrics,
+        )
+    };
+    let mut viewport = WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 100, 30);
+    assert_eq!(viewport.scroll.offset_x, 0);
+    assert_eq!(viewport.scroll.offset_y, 0);
+    viewport.scroll.offset_x = 1;
+    assert!(compile(viewport).is_err());
+    viewport.scroll.offset_x = 0;
+    viewport.scroll.offset_y = 1;
+    assert!(compile(viewport).is_err());
+    viewport.scroll.offset_y = -1;
+    assert!(compile(viewport).is_err());
 }

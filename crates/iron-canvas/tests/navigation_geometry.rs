@@ -16,11 +16,7 @@ fn fixture() -> (UserModel<'static>, RenderRequest) {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 400,
-                height: 200,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 200),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         },
@@ -62,7 +58,7 @@ fn readiness_rejects_stale_content_size_theme_and_invalidation_but_accepts_live_
         pending(&session, &expected, reason);
     }
     let mut live = request.clone();
-    live.viewport.first_cell = CellCoord { row: 30, col: 20 };
+    live.viewport.scroll.first_cell = CellCoord { row: 30, col: 20 };
     live.overlays.active_cell = Some(CellCoord { row: 30, col: 20 });
     assert!(matches!(
         session.navigation_geometry(&live),
@@ -93,7 +89,7 @@ fn visibility_uses_each_live_origin_without_mutating_model_or_committed_frame() 
         CellCoord { row: 40, col: 20 },
         CellCoord { row: 60, col: 30 },
     ] {
-        request.viewport.first_cell = origin;
+        request.viewport.scroll.first_cell = origin;
         assert_eq!(
             session
                 .scroll_to_show_checked(&model, &request, origin)
@@ -125,7 +121,7 @@ fn freeze_edits_wait_for_commit_and_zero_panes_do_not_scroll() {
     request.revision.revision += 1;
     pending(&session, &request, NavigationPending::Revision);
     session.render(&model, &request).unwrap();
-    request.viewport.first_cell = CellCoord { row: 21, col: 21 };
+    request.viewport.scroll.first_cell = CellCoord { row: 21, col: 21 };
     assert_eq!(
         session
             .scroll_to_show_checked(&model, &request, CellCoord { row: 80, col: 80 })

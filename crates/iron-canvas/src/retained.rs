@@ -22,7 +22,7 @@ pub(crate) fn scroll_plan(
         || previous.theme != request.theme
         || previous.overlays != request.overlays
         || request.overlays != Default::default()
-        || previous.viewport.first_cell.col != request.viewport.first_cell.col
+        || previous.viewport.scroll.first_cell.col != request.viewport.scroll.first_cell.col
     {
         return None;
     }
@@ -39,8 +39,8 @@ pub(crate) fn scroll_plan(
         return None;
     }
     // A single band can also mean a frozen band consumes the entire viewport.
-    if a.row_bands[0].first_index != previous.viewport.first_cell.row
-        || b.row_bands[0].first_index != request.viewport.first_cell.row
+    if a.row_bands[0].first_index != previous.viewport.scroll.first_cell.row
+        || b.row_bands[0].first_index != request.viewport.scroll.first_cell.row
     {
         return None;
     }

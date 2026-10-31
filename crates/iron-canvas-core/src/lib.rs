@@ -8,6 +8,7 @@ pub mod geometry;
 pub mod painter;
 pub mod scene;
 pub mod scene_geometry;
+pub mod scroll;
 pub mod shape;
 pub mod text_layout;
 pub mod text_shaper;
@@ -25,3 +26,6 @@ pub use text_layout::{
 pub use theme::{CanvasTheme, ThemeVariables};
 
 pub use scene_geometry::CellCoord;
+pub use scroll::{
+    AxisExtents, AxisScroll, ScrollAxisWindow, ScrollPosition, move_position, normalize_position,
+};

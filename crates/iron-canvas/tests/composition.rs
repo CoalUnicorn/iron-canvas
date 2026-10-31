@@ -27,11 +27,7 @@ fn request() -> RenderRequest {
             workbook_id: 1,
             revision: 1,
         },
-        viewport: WorksheetViewport {
-            first_cell: coord(5, 5),
-            width: 400,
-            height: 220,
-        },
+        viewport: WorksheetViewport::aligned(coord(5, 5), 400, 220),
         theme: CanvasTheme::light(),
         overlays: OverlayState::default(),
     }
@@ -323,7 +319,7 @@ fn failed_commit_keeps_old_merge_link_and_geometry_queries() {
         height: 4,
     })
     .unwrap();
-    req.viewport.first_cell = coord(7, 7);
+    req.viewport.scroll.first_cell = coord(7, 7);
     req.revision.revision += 1;
     session.backend_mut().fail = true;
     assert!(session.render(&w, &req).is_err());
