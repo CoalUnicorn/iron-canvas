@@ -6,7 +6,9 @@ use iron_canvas::{
     NavigationReadiness, VisibilityAdjustment, classify_navigation,
 };
 use iron_canvas_core::{CellCoord, Point};
-use iron_canvas_navigation::{NavigationController as SharedController, NavigationScope};
+use iron_canvas_navigation::{
+    ControllerCommand, NavigationController as SharedController, NavigationScope,
+};
 use ironcalc_base::UserModel;
 use wasm_bindgen::prelude::*;
 
@@ -65,6 +67,7 @@ impl Workbook {
             .sheet_id;
         Ok(NavigationScope {
             workbook_id: self.workbook_id,
+            view_id: 0,
             sheet_id,
         })
     }
@@ -120,8 +123,14 @@ impl Workbook {
                 NavigationReadiness::Pending(_) => break,
             };
             let scope = self.navigation_scope()?;
-            let Some(intent) = self.navigation.commands.pop_ready(scope) else {
+            let Some(command) = self.navigation.commands.pop_ready(scope) else {
                 break;
+            };
+            // The host scroll path consumes pixel commands in a later stage.
+            let ControllerCommand::Navigation(intent) = command else {
+                return Err(JsValue::from_str(
+                    "scroll commands are not accepted by the navigation route",
+                ));
             };
             if matches!(intent, NavigationIntent::Page(_)) && pane.height == 0 {
                 continue;
