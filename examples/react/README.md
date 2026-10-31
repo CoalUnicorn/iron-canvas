@@ -1,11 +1,11 @@
 # React grid example
 
-This example hosts the `iron-canvas` renderer in React, with a worksheet
-tab bar and browser-side `.xlsx` loading.
+This example hosts IronCalc's WebAssembly `Model` in React and paints its
+committed view with `iron-canvas`.
 
 ## Run
 
-Install the WebAssembly target and `wasm-pack`, then run:
+The example uses the sibling IronCalc checkout for the engine binding:
 
 ```sh
 cd examples/react
@@ -13,51 +13,52 @@ npm install
 npm run dev
 ```
 
+The local `wasm/` crate re-exports IronCalc's `Model` and adds
+`CanvasRenderer`. The renderer reads the model; IronCalc owns the workbook,
+the selected view, and navigation state.
+
+> The example depends on the `IronCalc` checkout next to this repository and
+> patches IronCalc to that local path. Update the paths in
+> `wasm/Cargo.toml` when the checkout moves.
+
 The demo opens with a small sample workbook. Use **Load workbook** to choose an
 `.xlsx` file; visible worksheets are shown as tabs along the bottom. Scroll over
 the grid to browse a sheet, and use `+` to add a worksheet.
 
-`npm run build` builds the example-local workbook integration before producing
-the Vite bundle. It uses the shared Canvas-only renderer from `bindings/wasm`;
-the local adapter supplies IronCalc workbook data and rendering requests.
+`npm run build` builds the example-local WebAssembly module before producing
+the Vite bundle. The shared Canvas-only renderer in `bindings/wasm` is not
+involved.
 
-## Basic navigation
+## Navigation
 
-Click the grid to give it keyboard focus. A plain click selects a cell.
-The host consumes supported keys before it applies the command.
+Navigation mirrors
+[`Workbook/useKeyboardNavigation.ts`](https://github.com/ironcalc/IronCalc/blob/main/webapp/IronCalc/src/components/Workbook/useKeyboardNavigation.ts)
+in the IronCalc webapp. The React host calls `Model` methods directly. The
+renderer paints one animation frame for the latest view.
 
 | Key | Action |
 | --- | --- |
-| Arrow | Collapse the selection and move one logical cell |
-| Shift+Arrow | Extend or contract from the fixed anchor |
+| Arrow | Move one logical cell |
+| Tab | Move right |
+| Enter | Move down |
+| Shift+Arrow | Extend or contract the selection |
+| Shift+Tab | Move left |
 | Control+Arrow, or Command+Arrow on macOS | Move to the data edge |
-| Tab / Shift+Tab | Collapse a larger range and move right / left |
-| Enter / Shift+Enter | Collapse a larger range and move down / up |
-| PageUp / PageDown | Move by the scrolling pane height |
-| Home / End | Move to column 1 / the right data edge |
-| Control+Home / Control+End | Move to A1 / the used extent's bottom-right cell |
-| Control+A | Select the used extent |
-| Escape | Cancel pending navigation |
+| Control+Home | Select A1 |
+| Home / End | Move to column 1 / column 16,384 |
+| PageUp / PageDown | Move by the engine's window height |
+| Control+Space | Select the active column |
+| Shift+Space | Select the active row |
+| Alt+ArrowDown / Alt+ArrowUp | Select the next / previous sheet |
+| Escape | No grid binding |
 
-Use Command for Control shortcuts on macOS.
-The engine skips hidden cells and resolves merged cells during movement.
-A page command in a zero-height scrolling pane changes no view state.
-Navigation changes no cell content and adds no content undo entry.
-IME composition and unrelated input retain their keys.
+Shift+Enter is unbound, matching the webapp. Control+End is unbound because
+the webapp asks the engine for an unsupported edge direction.
 
-This is the P3a Basic stage. Tab and Enter do not retain a multi-cell range.
-Extended shortcuts, multi-area pointer selection, retained-set traversal,
-range-border dragging, and move/copy transfers remain disabled for P3b.
-
-The host queues up to 64 keys for the next animation frame.
-`iron-canvas-navigation` stores this queue and applies Basic commands through
-a short mutable borrow of the host's `UserModel`.
-The React adapter owns browser focus and frame presentation.
-Focus loss, composition entry, sheet change, and workbook replacement cancel
-pending keys. A failed frame leaves unstarted commands pending without a busy
-retry loop. A later key, resize, or font event can request another attempt.
-An executed command never runs twice after a presentation failure.
-Pointer selection waits for a successfully presented frame.
+The engine moves the active cell, extends merged ranges, skips hidden cells,
+and adjusts the scroll origin. A navigation command changes no cell content.
+Wheel input keeps the continuous pixel scroll position and shares the same
+frame scheduler as navigation.
 
 ## Browser checks
 
@@ -69,9 +70,6 @@ npm run build
 node tests/navigation.mjs
 ```
 
-The test starts local Vite and ChromeDriver servers.
-It checks key order, reverse Enter, unsupported modifiers, IME, input focus,
-and cancellation on blur. The Wasm host tests also check engine movement,
-queue limits, and failed preparation and presentation.
-The workspace rendering test compares retained selection pixels with Fresh
-pixels at device pixel ratios 1, 1.25, 1.5, and 2.
+The test starts local Vite and ChromeDriver servers. It checks engine
+navigation keys, modifiers, sheet switching, IME, focus, pointer selection, and
+wheel repaint.

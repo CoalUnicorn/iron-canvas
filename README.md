@@ -14,7 +14,9 @@ cargo run -r --example linux_xlsx_viewer_gtk4 <file.xlsx>
 ```
 
 React workbook viewer.
-*Note:* Example includes wasm adapter for IronCalc to update workbook model view.  
+*Note:* The example embeds IronCalc's WebAssembly `Model` and paints its view
+with Iron Canvas. It uses the sibling `IronCalc` checkout for the engine
+binding.
 ```sh
 cd examples/react
 npm install

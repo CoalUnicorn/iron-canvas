@@ -1,290 +1,307 @@
-//! React example adapter that connects its workbook UI to Iron Canvas.
+//! React example canvas renderer for IronCalc's WebAssembly model.
 //!
-//! This app-specific glue lives under `examples/react`; the reusable
-//! WebAssembly binding in `bindings/wasm` only accepts Iron Canvas scenes.
+//! IronCalc owns the workbook, the selected view, and navigation. This crate
+//! only paints the committed model view with Iron Canvas. The React host calls
+//! `Model` methods directly and asks this renderer for a frame.
 
-mod navigation;
-pub use navigation::{NavigationCommand, classify_key};
+pub use wasm::Model;
 
 use iron_canvas::{
-    CanvasSession, OverlayState, RenderRequest, RevisionToken, TextMetricsKey, WorksheetCache,
+    CanvasSession, HostIntent, OverlayState, PointerAction, RenderRequest, RevisionToken,
+    TextMetricsKey, WorksheetCache,
 };
 use iron_canvas_canvas2d::Canvas2dSceneBackend;
-use iron_canvas_core::{CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, ScrollPosition};
-use iron_canvas_ironcalc::WorksheetViewport;
-use ironcalc::import::load_from_xlsx_bytes;
-use ironcalc_base::{Model, UserModel};
+use iron_canvas_core::{
+    CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, Point, ScrollPosition,
+    scene_geometry::GridRange,
+};
+use iron_canvas_ironcalc::{WorksheetAxes, WorksheetViewport, get_column_sizes, get_row_sizes};
+use iron_canvas_navigation::{
+    NavigationController, NavigationScope, ScrollCommand, ScrollViewport,
+};
+use ironcalc_base::UserModel;
 use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
-const LAST_ROW: i32 = 1_048_576;
-const LAST_COLUMN: i32 = 16_384;
+/// Logical pixels for one wheel line in line mode.
+const LINE_STEP: f64 = 24.0;
 
+/// Paints one IronCalc model into a canvas.
 #[wasm_bindgen]
-pub struct SheetTab {
-    index: u32,
-    name: String,
-}
-
-#[wasm_bindgen]
-impl SheetTab {
-    #[wasm_bindgen(getter)]
-    pub fn index(&self) -> u32 {
-        self.index
-    }
-
-    #[wasm_bindgen(getter)]
-    pub fn name(&self) -> String {
-        self.name.clone()
-    }
-}
-
-#[wasm_bindgen]
-pub struct Workbook {
-    workbook: UserModel<'static>,
-    metrics: CanvasMetrics,
+pub struct CanvasRenderer {
     canvas: HtmlCanvasElement,
+    metrics: CanvasMetrics,
     session: CanvasSession<Canvas2dSceneBackend>,
-    workbook_id: u64,
-    revision: u64,
     cache: WorksheetCache,
-    /// Keyed by workbook, stable sheet ID, content revision, and metrics.
-    axes: HashMap<(u64, u32, u64, u64), Rc<iron_canvas_ironcalc::WorksheetAxes>>,
+    /// Keyed by workbook, stable sheet ID, and text metric generation.
+    axes: HashMap<(u64, u32, u64), Rc<WorksheetAxes>>,
+    scroll: NavigationController,
     metrics_generation: u64,
-    navigation: navigation::NavigationController,
-    #[cfg(test)]
-    fail_presentation: bool,
+    workbook_id: u64,
 }
 
 #[wasm_bindgen]
-impl Workbook {
+impl CanvasRenderer {
     #[wasm_bindgen(constructor)]
-    pub fn new(canvas: HtmlCanvasElement) -> Result<Workbook, JsValue> {
+    pub fn new(canvas: HtmlCanvasElement) -> Result<CanvasRenderer, JsValue> {
         let metrics = metrics_for(0.0, 0.0, 1.0)?;
         let session = new_session(canvas.clone(), metrics)?;
-        let workbook = sample_workbook()?;
-        let cache = WorksheetCache::new(visible_sheet_count(&workbook));
-        Ok(Workbook {
-            workbook,
-            cache,
-            axes: HashMap::new(),
-            metrics_generation: 0,
-            navigation: Default::default(),
-            #[cfg(test)]
-            fail_presentation: false,
-            metrics,
+        Ok(CanvasRenderer {
             canvas,
+            metrics,
             session,
+            cache: WorksheetCache::new(1),
+            axes: HashMap::new(),
+            scroll: NavigationController::default(),
+            metrics_generation: 0,
             workbook_id: 1,
-            revision: 0,
         })
     }
 
+    /// Forget prepared content and view state after a workbook replacement.
+    #[wasm_bindgen(js_name = reset)]
+    pub fn reset(&mut self) -> Result<(), JsValue> {
+        let workbook_id = self
+            .workbook_id
+            .checked_add(1)
+            .ok_or_else(|| JsValue::from_str("workbook identity exhausted"))?;
+        self.workbook_id = workbook_id;
+        self.cache.clear();
+        self.axes.clear();
+        self.scroll
+            .reset()
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Resize the paint target. The new target starts with one fresh frame.
     #[wasm_bindgen(js_name = resize)]
-    pub fn resize(&mut self, width: f64, height: f64, dpr: f64) -> Result<(), JsValue> {
+    pub fn resize(
+        &mut self,
+        model: &mut Model,
+        width: f64,
+        height: f64,
+        dpr: f64,
+    ) -> Result<(), JsValue> {
         let metrics = metrics_for(width, height, dpr)?;
         if metrics != self.metrics {
             let generation = self
                 .metrics_generation
                 .checked_add(1)
                 .ok_or_else(|| JsValue::from_str("text metric generation exhausted"))?;
-            self.navigation.presented = None;
             // Target size and scale are fixed per session. Construction also
-            // clears the canvas, so pointers stay suspended until the frame.
+            // clears the canvas, so the next frame repaints every pixel.
             self.session = new_session(self.canvas.clone(), metrics)?;
             self.metrics = metrics;
             self.metrics_generation = generation;
             self.cache.clear();
+            self.axes.clear();
         }
-        self.render()?;
+        self.paint(model)?;
         // Validate a saved position against the new pane only after the new
         // target has its first frame.
-        if let Ok(scope) = self.navigation_scope()
-            && self.navigation.commands.view_position(scope).is_some()
-        {
-            let axes = self.axes_for_selected_sheet()?;
-            let viewport = self.viewport_context()?;
-            let update = self
-                .navigation
-                .commands
-                .resize_view(&mut self.workbook, scope, &axes, viewport)
-                .map_err(|error| JsValue::from_str(&error.to_string()))?;
-            if update.changed {
-                self.render()?;
+        if self.render_request(model).is_some() {
+            let scope = self.scope(model)?;
+            if self.scroll.view_position(scope).is_some() {
+                let axes = self.axes_for_selected_sheet(model)?;
+                let viewport = self.viewport_context()?;
+                let update = self
+                    .scroll
+                    .resize_view(model.user_model_mut(), scope, &axes, viewport)
+                    .map_err(|error| JsValue::from_str(&error.to_string()))?;
+                if update.changed {
+                    self.paint(model)?;
+                }
             }
         }
+        self.update_window(model);
         Ok(())
     }
 
     /// Refresh metric-dependent content after browser fonts change.
     #[wasm_bindgen(js_name = invalidateFonts)]
-    pub fn invalidate_fonts(&mut self) -> Result<(), JsValue> {
+    pub fn invalidate_fonts(&mut self, model: &Model) -> Result<(), JsValue> {
         self.metrics_generation = self
             .metrics_generation
             .checked_add(1)
             .ok_or_else(|| JsValue::from_str("text metric generation exhausted"))?;
         self.cache.clear();
         self.session.invalidate();
-        self.render()
+        self.paint(model)
     }
 
-    #[wasm_bindgen(js_name = getSheets)]
-    pub fn get_sheets(&self) -> Vec<SheetTab> {
-        self.workbook
-            .get_worksheets_properties()
-            .into_iter()
-            .enumerate()
-            .filter(|(_, sheet)| sheet.state == "visible")
-            .map(|(index, sheet)| SheetTab {
-                index: index as u32,
-                name: sheet.name,
-            })
-            .collect()
-    }
-
-    #[wasm_bindgen(js_name = selectedSheet)]
-    pub fn selected_sheet(&self) -> u32 {
-        self.workbook.get_selected_sheet()
-    }
-
-    #[wasm_bindgen(js_name = workbookName)]
-    pub fn workbook_name(&self) -> String {
-        self.workbook.get_name()
-    }
-
-    #[wasm_bindgen(js_name = selectSheet)]
-    pub fn select_sheet(&mut self, index: u32) -> Result<(), JsValue> {
-        self.cancel_navigation()?;
-        self.workbook
-            .set_selected_sheet(index)
-            .map_err(|error| JsValue::from_str(&error))?;
-        self.render()
-    }
-
-    #[wasm_bindgen(js_name = scrollBy)]
-    pub fn scroll_by(&mut self, row_delta: i32, column_delta: i32) -> Result<(), JsValue> {
-        self.ensure_view_imported()?;
-        let scope = self.navigation_scope()?;
-        let axes = self.axes_for_selected_sheet()?;
-        let viewport = self.viewport_context()?;
-        let position = self
-            .navigation
-            .commands
-            .view_position(scope)
-            .ok_or_else(|| JsValue::from_str("view scroll state is not imported"))?;
-        let target = CellCoord {
-            row: position
-                .first_cell
-                .row
-                .saturating_add(row_delta)
-                .clamp(1, LAST_ROW),
-            col: position
-                .first_cell
-                .col
-                .saturating_add(column_delta)
-                .clamp(1, LAST_COLUMN),
-        };
-        if target == position.first_cell {
+    /// Paint the current model view.
+    ///
+    /// Set `reveal_active` after a navigation command. The renderer then
+    /// reveals the new selection and keeps the model's scroll origin. Wheel
+    /// input and pointer selection pass `false` and keep the pixel position.
+    #[wasm_bindgen(js_name = render)]
+    pub fn render(&mut self, model: &mut Model, reveal_active: bool) -> Result<(), JsValue> {
+        let (width, height) = self.metrics.size().to_logical_extent();
+        if width == 0 || height == 0 {
             return Ok(());
         }
-        self.navigation
-            .commands
+        if reveal_active {
+            self.ensure_view_imported(model)?;
+            let scope = self.scope(model)?;
+            let axes = self.axes_for_selected_sheet(model)?;
+            let viewport = self.viewport_context()?;
+            if let Err(error) =
+                self.scroll
+                    .navigation_applied(model.user_model_mut(), scope, &axes, viewport)
+            {
+                // An engine write can fail after it moves the view. Present
+                // the actual view and report the failure once.
+                let presentation = self.paint(model);
+                return Err(presentation
+                    .err()
+                    .unwrap_or_else(|| JsValue::from_str(&error.to_string())));
+            }
+        }
+        self.paint(model)?;
+        self.update_window(model);
+        Ok(())
+    }
+
+    /// Wheel input in browser units. `mode` is 0 for pixels, 1 for lines,
+    /// and 2 for pages. Shift maps vertical movement to horizontal only when
+    /// the device supplied no horizontal movement.
+    #[wasm_bindgen(js_name = wheel)]
+    pub fn wheel(
+        &mut self,
+        model: &mut Model,
+        delta_x: f64,
+        delta_y: f64,
+        mode: u32,
+        shift: bool,
+    ) -> Result<(), JsValue> {
+        if !delta_x.is_finite() || !delta_y.is_finite() {
+            return Err(JsValue::from_str("wheel delta must be finite"));
+        }
+        let (width, height) = self.metrics.size().to_logical_extent();
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        let (mut dx, mut dy) = (delta_x, delta_y);
+        if shift && dx == 0.0 {
+            dx = dy;
+            dy = 0.0;
+        }
+        match mode {
+            0 => {}
+            1 => {
+                dx *= LINE_STEP;
+                dy *= LINE_STEP;
+            }
+            2 => {
+                let Some((pane_width, pane_height)) = self.committed_pane_extent() else {
+                    return Ok(());
+                };
+                dx *= f64::from(pane_width);
+                dy *= f64::from(pane_height);
+            }
+            _ => return Err(JsValue::from_str("unknown wheel mode")),
+        }
+        if dx == 0.0 && dy == 0.0 {
+            return Ok(());
+        }
+        self.ensure_view_imported(model)?;
+        if self.session.committed_frame().is_none() {
+            return Ok(());
+        }
+        let scope = self.scope(model)?;
+        let axes = self.axes_for_selected_sheet(model)?;
+        let viewport = self.viewport_context()?;
+        self.scroll
             .apply_scroll(
-                &mut self.workbook,
+                model.user_model_mut(),
                 scope,
-                iron_canvas_navigation::ScrollCommand::SetOrigin(target),
+                ScrollCommand::Pixels { dx, dy },
                 &axes,
                 viewport,
             )
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        self.render()
+        Ok(())
     }
 
-    #[wasm_bindgen(js_name = addSheet)]
-    pub fn add_sheet(&mut self) -> Result<(), JsValue> {
-        let revision = self
-            .revision
-            .checked_add(1)
-            .ok_or_else(|| JsValue::from_str("workbook revision exhausted"))?;
-        self.cancel_navigation()?;
-        self.workbook
-            .new_sheet()
-            .map_err(|error| JsValue::from_str(&error))?;
-        self.revision = revision;
-        self.cache.set_capacity(visible_sheet_count(&self.workbook));
-        self.render()
+    /// Select the cell under a pointer position in the committed frame.
+    #[wasm_bindgen(js_name = selectAt)]
+    pub fn select_at(&mut self, model: &mut Model, x: i32, y: i32) -> Result<(), JsValue> {
+        if let Some(HostIntent::Select { anchor, .. }) = self
+            .session
+            .pointer_intent(Point { x, y }, PointerAction::Select)
+        {
+            model
+                .user_model_mut()
+                .set_selected_cell(anchor.row, anchor.col)
+                .map_err(|error| JsValue::from_str(&error))?;
+        }
+        Ok(())
     }
 
-    #[wasm_bindgen(js_name = loadXlsx)]
-    pub fn load_xlsx(&mut self, bytes: &[u8], file_name: &str) -> Result<(), JsValue> {
-        let workbook = load_from_xlsx_bytes(bytes, file_name, "en", "UTC")
-            .map_err(|error| JsValue::from_str(&error.to_string()))?;
-        let model =
-            Model::from_workbook(workbook, "en").map_err(|error| JsValue::from_str(&error))?;
+    /// Full cell rectangle for an editor text box, `[x, y, width, height]`.
+    /// Empty when the cell is outside the committed panes.
+    #[wasm_bindgen(js_name = cellRect)]
+    pub fn cell_rect(&self, row: i32, col: i32) -> Vec<i32> {
+        self.session
+            .cell_rect(row, col)
+            .map_or_else(Vec::new, |rect| {
+                vec![rect.left(), rect.top(), rect.width, rect.height]
+            })
+    }
 
-        let workbook_id = self
-            .workbook_id
-            .checked_add(1)
-            .ok_or_else(|| JsValue::from_str("workbook identity exhausted"))?;
-        self.cancel_navigation()?;
-        self.navigation.commands.reset().ok();
-        self.axes.clear();
-        self.workbook = UserModel::from_model(model);
-        self.workbook_id = workbook_id;
-        self.cache.clear();
-        self.cache.set_capacity(visible_sheet_count(&self.workbook));
-        self.revision = 0;
-        self.render()
+    /// Pane-clipped rectangles for the same cell, four values per fragment.
+    #[wasm_bindgen(js_name = cellFragmentRects)]
+    pub fn cell_fragment_rects(&self, row: i32, col: i32) -> Vec<i32> {
+        let cell = CellCoord { row, col };
+        self.session
+            .visible_fragments(GridRange {
+                first: cell,
+                last: cell,
+            })
+            .into_iter()
+            .flat_map(|fragment| {
+                [
+                    fragment.rect.left(),
+                    fragment.rect.top(),
+                    fragment.rect.width,
+                    fragment.rect.height,
+                ]
+            })
+            .collect()
     }
 }
 
-impl Workbook {
-    fn render(&mut self) -> Result<(), JsValue> {
-        self.navigation.presented = None;
-        let Some(request) = self.render_request() else {
+impl CanvasRenderer {
+    fn paint(&mut self, model: &Model) -> Result<(), JsValue> {
+        let Some(request) = self.render_request(model) else {
             return Ok(());
         };
-
+        self.cache
+            .set_capacity(visible_sheet_count(model.user_model()));
         self.session
             .render_cached(
                 &mut self.cache,
-                &self.workbook,
+                model.user_model(),
                 &request,
                 TextMetricsKey::new(1, self.metrics_generation),
             )
             .map_err(|error| JsValue::from_str(&format!("{error:?}")))?;
-        #[cfg(test)]
-        if self.fail_presentation {
-            return Err(JsValue::from_str("injected presentation failure"));
-        }
-        // The backend committed the canvas before the session published its
-        // query state. Record that same frame as presented.
-        let generation = self
-            .navigation_scope()
-            .ok()
-            .and_then(|scope| self.navigation.commands.view_generation(scope));
-        self.navigation.presented = self.session.interaction_frame().map(|stamp| {
-            (
-                stamp,
-                self.navigation.commands.selection_revision(),
-                generation,
-            )
-        });
         Ok(())
     }
-    fn render_request(&self) -> Option<RenderRequest> {
+
+    fn render_request(&self, model: &Model) -> Option<RenderRequest> {
         let (width, height) = self.metrics.size().to_logical_extent();
         if width == 0 || height == 0 {
             return None;
         }
 
-        let view = self.workbook.get_selected_view();
+        let view = model.user_model().get_selected_view();
         let scroll = self
-            .navigation_scope()
+            .scope(model)
             .ok()
-            .and_then(|scope| self.navigation.commands.view_position(scope))
+            .and_then(|scope| self.scroll.view_position(scope))
             .unwrap_or_else(|| {
                 ScrollPosition::aligned(CellCoord {
                     row: view.top_row.max(1),
@@ -295,7 +312,7 @@ impl Workbook {
             sheet: view.sheet,
             revision: RevisionToken {
                 workbook_id: self.workbook_id,
-                revision: self.revision,
+                revision: 0,
             },
             viewport: WorksheetViewport {
                 scroll,
@@ -304,7 +321,7 @@ impl Workbook {
             },
             theme: CanvasTheme::light(),
             overlays: OverlayState {
-                selection: vec![iron_canvas_core::scene_geometry::GridRange {
+                selection: vec![GridRange {
                     first: CellCoord {
                         row: view.range[0],
                         col: view.range[1],
@@ -320,6 +337,103 @@ impl Workbook {
                 }),
                 ..OverlayState::default()
             },
+        })
+    }
+
+    /// Engine navigation uses the pane size to scroll and page.
+    fn update_window(&self, model: &mut Model) {
+        if let Some((width, height)) = self.committed_pane_extent() {
+            let workbook = model.user_model_mut();
+            workbook.set_window_width(f64::from(width));
+            workbook.set_window_height(f64::from(height));
+        }
+    }
+
+    fn scope(&self, model: &Model) -> Result<NavigationScope, JsValue> {
+        let workbook = model.user_model();
+        let sheet = workbook.get_selected_sheet();
+        let sheet_id = workbook
+            .get_model()
+            .workbook
+            .worksheet(sheet)
+            .map_err(|error| JsValue::from_str(&error))?
+            .sheet_id;
+        Ok(NavigationScope {
+            workbook_id: self.workbook_id,
+            view_id: 0,
+            sheet_id,
+        })
+    }
+
+    fn axes_for_selected_sheet(&mut self, model: &Model) -> Result<Rc<WorksheetAxes>, JsValue> {
+        let workbook = model.user_model();
+        let sheet = workbook.get_selected_sheet();
+        let sheet_id = workbook
+            .get_model()
+            .workbook
+            .worksheet(sheet)
+            .map_err(|error| JsValue::from_str(&error))?
+            .sheet_id;
+        let key = (self.workbook_id, sheet_id, self.metrics_generation);
+        if let Some(axes) = self.axes.get(&key) {
+            return Ok(Rc::clone(axes));
+        }
+        let rows = get_row_sizes(workbook, sheet)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let columns = get_column_sizes(workbook, sheet)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let axes = Rc::new(
+            WorksheetAxes::from_sizes(&rows, &columns)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?,
+        );
+        if self.axes.len() >= 8 {
+            self.axes.clear();
+        }
+        self.axes.insert(key, Rc::clone(&axes));
+        Ok(axes)
+    }
+
+    fn ensure_view_imported(&mut self, model: &mut Model) -> Result<(), JsValue> {
+        let (width, height) = self.metrics.size().to_logical_extent();
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        if self.session.committed_frame().is_none() {
+            self.paint(model)?;
+        }
+        let scope = self.scope(model)?;
+        self.scroll.set_primary_view(Some(scope));
+        let axes = self.axes_for_selected_sheet(model)?;
+        let viewport = self.viewport_context()?;
+        self.scroll
+            .import_view(model.user_model_mut(), scope, &axes, viewport)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Ok(())
+    }
+
+    fn committed_pane_extent(&self) -> Option<(i32, i32)> {
+        let frame = self.session.committed_frame()?;
+        let geometry = frame.worksheet.geometry.as_ref()?;
+        let pane = geometry.scroll_pane_rect();
+        Some((pane.width, pane.height))
+    }
+
+    fn viewport_context(&self) -> Result<ScrollViewport, JsValue> {
+        let frame = self
+            .session
+            .committed_frame()
+            .ok_or_else(|| JsValue::from_str("wait for worksheet geometry"))?;
+        let geometry = frame
+            .worksheet
+            .geometry
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("wait for worksheet geometry"))?;
+        let pane = geometry.scroll_pane_rect();
+        Ok(ScrollViewport {
+            pane_width: pane.width,
+            pane_height: pane.height,
+            frozen_rows: frame.worksheet.frozen.rows,
+            frozen_columns: frame.worksheet.frozen.cols,
         })
     }
 }
@@ -350,185 +464,4 @@ fn new_session(
     Ok(CanvasSession::new(Canvas2dSceneBackend::new(
         canvas, metrics,
     )?))
-}
-
-fn sample_workbook() -> Result<UserModel<'static>, JsValue> {
-    let mut workbook = UserModel::new_empty("Example workbook", "en", "UTC", "en")
-        .map_err(|error| JsValue::from_str(&error))?;
-    let first_sheet = [
-        (1, 1, "Quarter"),
-        (1, 2, "Revenue"),
-        (1, 3, "Status"),
-        (2, 1, "Q1"),
-        (2, 2, "128"),
-        (2, 3, "On track"),
-        (3, 1, "Q2"),
-        (3, 2, "146"),
-        (3, 3, "On track"),
-        (4, 1, "Q3"),
-        (4, 2, "139"),
-        (4, 3, "Review"),
-        (5, 1, "Q4"),
-        (5, 2, "171"),
-        (5, 3, "On track"),
-    ];
-    for (row, column, value) in first_sheet {
-        workbook
-            .set_user_input(0, row, column, value)
-            .map_err(|error| JsValue::from_str(&error))?;
-    }
-
-    workbook
-        .new_sheet()
-        .map_err(|error| JsValue::from_str(&error))?;
-    workbook
-        .set_user_input(1, 1, 1, "Load an .xlsx workbook to view its sheets.")
-        .map_err(|error| JsValue::from_str(&error))?;
-    workbook
-        .set_selected_sheet(0)
-        .map_err(|error| JsValue::from_str(&error))?;
-    Ok(workbook)
-}
-
-#[cfg(all(test, target_arch = "wasm32"))]
-mod tests {
-    use super::*;
-    use wasm_bindgen_test::*;
-
-    wasm_bindgen_test_configure!(run_in_browser);
-
-    pub(crate) fn host() -> Workbook {
-        let canvas = web_sys::window()
-            .unwrap()
-            .document()
-            .unwrap()
-            .create_element("canvas")
-            .unwrap()
-            .dyn_into()
-            .unwrap();
-        let mut host = Workbook::new(canvas).unwrap();
-        host.resize(640.0, 400.0, 1.0).unwrap();
-        host
-    }
-
-    #[wasm_bindgen_test]
-    fn view_changes_keep_revision_and_tab_return_hits_cache() {
-        let mut host = host();
-        let revision = host.revision;
-        host.select_sheet(1).unwrap();
-        host.select_sheet(0).unwrap();
-        assert_eq!(host.revision, revision);
-        assert_eq!(
-            host.session
-                .committed_frame()
-                .unwrap()
-                .worksheet
-                .extended_style_reads,
-            0
-        );
-        host.scroll_by(2, 1).unwrap();
-        assert_eq!(host.revision, revision);
-        assert!(
-            host.session
-                .committed_frame()
-                .unwrap()
-                .worksheet
-                .extended_style_reads
-                > 0
-        );
-        assert_eq!(host.cache.len(), 2);
-        host.select_sheet(1).unwrap();
-        host.select_sheet(0).unwrap();
-        assert_eq!(
-            host.session
-                .committed_frame()
-                .unwrap()
-                .worksheet
-                .extended_style_reads,
-            0
-        );
-        host.add_sheet().unwrap();
-        assert_eq!(host.revision, revision + 1);
-        assert_eq!(host.cache.capacity(), 3);
-        host.select_sheet(0).unwrap();
-        assert!(
-            host.session
-                .committed_frame()
-                .unwrap()
-                .worksheet
-                .extended_style_reads
-                > 0
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn font_changes_refresh_generation_and_recompile_content() {
-        let mut host = host();
-        host.select_sheet(1).unwrap();
-        let revision = host.revision;
-        host.invalidate_fonts().unwrap();
-        assert_eq!(host.metrics_generation, 2);
-        assert_eq!(host.revision, revision);
-        assert_eq!(host.cache.len(), 1);
-        assert!(
-            host.session
-                .committed_frame()
-                .unwrap()
-                .worksheet
-                .extended_style_reads
-                > 0
-        );
-        host.select_sheet(0).unwrap();
-        assert!(
-            host.session
-                .committed_frame()
-                .unwrap()
-                .worksheet
-                .extended_style_reads
-                > 0
-        );
-    }
-
-    #[wasm_bindgen_test]
-    fn exhausted_counters_reject_changes_before_model_or_metric_state_changes() {
-        let mut host = host();
-        host.revision = u64::MAX;
-        let sheets = host.get_sheets().len();
-        assert!(host.add_sheet().is_err());
-        assert_eq!(host.get_sheets().len(), sheets);
-        host.metrics_generation = u64::MAX;
-        let frame = host.session.committed_frame().cloned();
-        assert!(host.invalidate_fonts().is_err());
-        assert!(host.resize(800.0, 600.0, 1.0).is_err());
-        assert_eq!(host.session.committed_frame(), frame.as_ref());
-    }
-
-    #[wasm_bindgen_test]
-    fn workbook_replacement_changes_identity_and_clears_old_entries() {
-        const XLSX: &[u8] =
-            include_bytes!("../../../../crates/iron-canvas-ironcalc/tests/fixtures/cf_tests.xlsx");
-        let mut host = host();
-        host.select_sheet(1).unwrap();
-        assert_eq!(host.cache.len(), 2);
-        host.load_xlsx(XLSX, "replacement").unwrap();
-        assert_eq!(host.workbook_id, 2);
-        assert_eq!(host.revision, 0);
-        assert_eq!(host.cache.len(), 1);
-        assert!(
-            host.session
-                .committed_frame()
-                .unwrap()
-                .worksheet
-                .extended_style_reads
-                > 0
-        );
-
-        host.workbook_id = u64::MAX;
-        let before = host.workbook.to_bytes();
-        let frame = host.session.committed_frame().cloned();
-        assert!(host.load_xlsx(XLSX, "rejected").is_err());
-        assert_eq!(host.workbook.to_bytes(), before);
-        assert_eq!(host.session.committed_frame(), frame.as_ref());
-        assert_eq!(host.cache.len(), 1);
-    }
 }
