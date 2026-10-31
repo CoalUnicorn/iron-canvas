@@ -10,10 +10,12 @@ use iron_canvas::{
     CanvasSession, OverlayState, RenderRequest, RevisionToken, TextMetricsKey, WorksheetCache,
 };
 use iron_canvas_canvas2d::Canvas2dSceneBackend;
-use iron_canvas_core::{CanvasMetrics, CanvasSize, CanvasTheme, CellCoord};
+use iron_canvas_core::{CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, ScrollPosition};
 use iron_canvas_ironcalc::WorksheetViewport;
 use ironcalc::import::load_from_xlsx_bytes;
 use ironcalc_base::{Model, UserModel};
+use std::collections::HashMap;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
 
@@ -48,6 +50,8 @@ pub struct Workbook {
     workbook_id: u64,
     revision: u64,
     cache: WorksheetCache,
+    /// Keyed by workbook, stable sheet ID, content revision, and metrics.
+    axes: HashMap<(u64, u32, u64, u64), Rc<iron_canvas_ironcalc::WorksheetAxes>>,
     metrics_generation: u64,
     navigation: navigation::NavigationController,
     #[cfg(test)]
@@ -65,6 +69,7 @@ impl Workbook {
         Ok(Workbook {
             workbook,
             cache,
+            axes: HashMap::new(),
             metrics_generation: 0,
             navigation: Default::default(),
             #[cfg(test)]
@@ -143,19 +148,40 @@ impl Workbook {
 
     #[wasm_bindgen(js_name = scrollBy)]
     pub fn scroll_by(&mut self, row_delta: i32, column_delta: i32) -> Result<(), JsValue> {
-        let view = self.workbook.get_selected_view();
-        let top_row = view.top_row.saturating_add(row_delta).clamp(1, LAST_ROW);
-        let left_column = view
-            .left_column
-            .saturating_add(column_delta)
-            .clamp(1, LAST_COLUMN);
-        if top_row == view.top_row && left_column == view.left_column {
+        self.ensure_view_imported()?;
+        let scope = self.navigation_scope()?;
+        let axes = self.axes_for_selected_sheet()?;
+        let viewport = self.viewport_context()?;
+        let position = self
+            .navigation
+            .commands
+            .view_position(scope)
+            .ok_or_else(|| JsValue::from_str("view scroll state is not imported"))?;
+        let target = CellCoord {
+            row: position
+                .first_cell
+                .row
+                .saturating_add(row_delta)
+                .clamp(1, LAST_ROW),
+            col: position
+                .first_cell
+                .col
+                .saturating_add(column_delta)
+                .clamp(1, LAST_COLUMN),
+        };
+        if target == position.first_cell {
             return Ok(());
         }
-
-        self.workbook
-            .set_top_left_visible_cell(top_row, left_column)
-            .map_err(|error| JsValue::from_str(&error))?;
+        self.navigation
+            .commands
+            .apply_scroll(
+                &mut self.workbook,
+                scope,
+                iron_canvas_navigation::ScrollCommand::SetOrigin(target),
+                &axes,
+                viewport,
+            )
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
         self.render()
     }
 
@@ -186,6 +212,8 @@ impl Workbook {
             .checked_add(1)
             .ok_or_else(|| JsValue::from_str("workbook identity exhausted"))?;
         self.cancel_navigation()?;
+        self.navigation.commands.reset().ok();
+        self.axes.clear();
         self.workbook = UserModel::from_model(model);
         self.workbook_id = workbook_id;
         self.cache.clear();
@@ -236,20 +264,27 @@ impl Workbook {
         }
 
         let view = self.workbook.get_selected_view();
+        let scroll = self
+            .navigation_scope()
+            .ok()
+            .and_then(|scope| self.navigation.commands.view_position(scope))
+            .unwrap_or_else(|| {
+                ScrollPosition::aligned(CellCoord {
+                    row: view.top_row.max(1),
+                    col: view.left_column.max(1),
+                })
+            });
         Some(RenderRequest {
             sheet: view.sheet,
             revision: RevisionToken {
                 workbook_id: self.workbook_id,
                 revision: self.revision,
             },
-            viewport: WorksheetViewport::aligned(
-                CellCoord {
-                    row: view.top_row.max(1),
-                    col: view.left_column.max(1),
-                },
+            viewport: WorksheetViewport {
+                scroll,
                 width,
                 height,
-            ),
+            },
             theme: CanvasTheme::light(),
             overlays: OverlayState {
                 selection: vec![iron_canvas_core::scene_geometry::GridRange {

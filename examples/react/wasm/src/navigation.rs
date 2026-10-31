@@ -3,17 +3,23 @@
 use super::{LAST_COLUMN, LAST_ROW, Workbook};
 use iron_canvas::{
     BindingProfile, InteractionFrame, NavigationIntent, NavigationKey, NavigationModifiers,
-    NavigationReadiness, VisibilityAdjustment, classify_navigation,
+    NavigationReadiness, classify_navigation,
 };
 use iron_canvas_core::{CellCoord, Point};
+use iron_canvas_ironcalc::{WorksheetAxes, get_column_sizes, get_row_sizes};
 use iron_canvas_navigation::{
     ControllerCommand, NavigationController as SharedController, NavigationScope, QueueError,
+    ScrollCommand, ScrollViewport,
 };
 use ironcalc_base::UserModel;
+use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 
 #[cfg(all(test, target_arch = "wasm32"))]
 const QUEUE_LIMIT: usize = 64;
+
+/// Logical pixels for one wheel line in line mode.
+const LINE_STEP: f64 = 24.0;
 
 #[wasm_bindgen]
 pub struct NavigationCommand {
@@ -102,6 +108,49 @@ impl Workbook {
         self.navigation.cancel()
     }
 
+    /// Wheel input in browser units. `mode` is 0 for pixels, 1 for lines,
+    /// and 2 for pages. Shift maps vertical movement to horizontal only when
+    /// the device supplied no horizontal movement.
+    #[wasm_bindgen(js_name = wheel)]
+    pub fn wheel(
+        &mut self,
+        delta_x: f64,
+        delta_y: f64,
+        mode: u32,
+        shift: bool,
+    ) -> Result<(), JsValue> {
+        if !delta_x.is_finite() || !delta_y.is_finite() {
+            return Err(JsValue::from_str("wheel delta must be finite"));
+        }
+        let (mut dx, mut dy) = (delta_x, delta_y);
+        if shift && dx == 0.0 {
+            dx = dy;
+            dy = 0.0;
+        }
+        match mode {
+            0 => {}
+            1 => {
+                dx *= LINE_STEP;
+                dy *= LINE_STEP;
+            }
+            2 => {
+                let (width, height) = self
+                    .committed_pane_extent()
+                    .ok_or_else(|| JsValue::from_str("wait for worksheet geometry"))?;
+                dx *= f64::from(width);
+                dy *= f64::from(height);
+            }
+            _ => return Err(JsValue::from_str("unknown wheel mode")),
+        }
+        self.enqueue_pixels(dx, dy)
+    }
+
+    /// Explicit pixel scroll input from the host.
+    #[wasm_bindgen(js_name = scrollPixels)]
+    pub fn scroll_pixels(&mut self, dx: f64, dy: f64) -> Result<(), JsValue> {
+        self.enqueue_pixels(dx, dy)
+    }
+
     /// Wait for valid geometry, then consume each command once in FIFO order.
     #[wasm_bindgen(js_name = flushNavigation)]
     pub fn flush_navigation(&mut self) -> Result<(), JsValue> {
@@ -117,6 +166,7 @@ impl Workbook {
         ) {
             self.render()?;
         }
+        self.ensure_view_imported()?;
         while !self.navigation.commands.is_empty() {
             let Some(expected) = self.render_request() else {
                 break;
@@ -131,71 +181,167 @@ impl Workbook {
             let Some(command) = self.navigation.commands.pop_ready(scope) else {
                 break;
             };
-            // The host scroll path consumes pixel commands in a later stage.
-            let ControllerCommand::Navigation(intent) = command else {
-                return Err(JsValue::from_str(
-                    "scroll commands are not accepted by the navigation route",
-                ));
+            let axes = self.axes_for_selected_sheet()?;
+            let viewport = ScrollViewport {
+                pane_width: pane.width,
+                pane_height: pane.height,
+                frozen_rows: frozen.rows,
+                frozen_columns: frozen.cols,
             };
-            if matches!(intent, NavigationIntent::Page(_)) && pane.height == 0 {
-                continue;
-            }
-            let next_revision = self
-                .navigation
-                .commands
-                .next_revision()
-                .ok_or_else(|| JsValue::from_str("selection revision exhausted"))?;
-            // Engine movement consumes logical pane dimensions. Release the
-            // geometry borrow before the engine changes its accepted view.
-            self.workbook.set_window_width(f64::from(pane.width));
-            self.workbook.set_window_height(f64::from(pane.height));
-            let origin = expected.viewport.scroll.first_cell;
-            let origin = CellCoord {
-                row: origin.row.max((frozen.rows + 1).min(LAST_ROW)),
-                col: origin.col.max((frozen.cols + 1).min(LAST_COLUMN)),
-            };
-            let execution = self
-                .workbook
-                .set_top_left_visible_cell(origin.row, origin.col)
-                .and_then(|()| execute(&mut self.workbook, intent, pane.height));
-            self.navigation.commands.accept_revision(next_revision);
-            if let Err(error) = execution {
-                // A multi-step engine operation can change the view before an
-                // error. Present the actual view and never replay that command.
-                let presentation = self.render();
-                return Err(presentation
-                    .err()
-                    .unwrap_or_else(|| JsValue::from_str(&error)));
-            }
-            let current = self.workbook.get_selected_view();
-            let live = self
-                .render_request()
-                .ok_or_else(|| JsValue::from_str("viewport unavailable"))?;
-            match self.session.scroll_to_show_checked(
-                &self.workbook,
-                &live,
-                CellCoord {
-                    row: current.row,
-                    col: current.column,
-                },
-            ) {
-                Ok(VisibilityAdjustment::Unchanged) => {}
-                Ok(VisibilityAdjustment::ScrollTo(origin)) => {
-                    if let Err(error) = self
-                        .workbook
-                        .set_top_left_visible_cell(origin.row, origin.col)
-                    {
-                        let _ = self.render();
-                        return Err(JsValue::from_str(&error));
+            match command {
+                ControllerCommand::Scroll(command) => {
+                    if let Err(error) = self.navigation.commands.apply_scroll(
+                        &mut self.workbook,
+                        scope,
+                        command,
+                        &axes,
+                        viewport,
+                    ) {
+                        // Present the actual engine view after a failed write.
+                        let presentation = self.render();
+                        return Err(presentation
+                            .err()
+                            .unwrap_or_else(|| JsValue::from_str(&error.to_string())));
                     }
                 }
-                Err(error) => {
-                    let _ = self.render();
-                    return Err(JsValue::from_str(&error.to_string()));
+                ControllerCommand::Navigation(intent) => {
+                    if matches!(intent, NavigationIntent::Page(_)) && pane.height == 0 {
+                        continue;
+                    }
+                    let next_revision = self
+                        .navigation
+                        .commands
+                        .next_revision()
+                        .ok_or_else(|| JsValue::from_str("selection revision exhausted"))?;
+                    // Engine movement consumes logical pane dimensions. Release
+                    // the geometry borrow before the engine changes its view.
+                    self.workbook.set_window_width(f64::from(pane.width));
+                    self.workbook.set_window_height(f64::from(pane.height));
+                    let origin = expected.viewport.scroll.first_cell;
+                    let origin = CellCoord {
+                        row: origin.row.max((frozen.rows + 1).min(LAST_ROW)),
+                        col: origin.col.max((frozen.cols + 1).min(LAST_COLUMN)),
+                    };
+                    let execution = self
+                        .workbook
+                        .set_top_left_visible_cell(origin.row, origin.col)
+                        .and_then(|()| execute(&mut self.workbook, intent, pane.height));
+                    self.navigation.commands.accept_revision(next_revision);
+                    if let Err(error) = execution {
+                        // A multi-step operation can change the view before an
+                        // error. Present the actual view; never replay it.
+                        let presentation = self.render();
+                        return Err(presentation
+                            .err()
+                            .unwrap_or_else(|| JsValue::from_str(&error)));
+                    }
+                    if let Err(error) = self.navigation.commands.navigation_applied(
+                        &mut self.workbook,
+                        scope,
+                        &axes,
+                        viewport,
+                    ) {
+                        let presentation = self.render();
+                        return Err(presentation
+                            .err()
+                            .unwrap_or_else(|| JsValue::from_str(&error.to_string())));
+                    }
                 }
             }
         }
         self.render()
+    }
+
+    fn enqueue_pixels(&mut self, dx: f64, dy: f64) -> Result<(), JsValue> {
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err(JsValue::from_str("wheel delta must be finite"));
+        }
+        if dx == 0.0 && dy == 0.0 {
+            return Ok(());
+        }
+        let scope = self.navigation_scope()?;
+        self.navigation
+            .commands
+            .enqueue_scroll(ScrollCommand::Pixels { dx, dy }, scope, false)
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    fn committed_pane_extent(&self) -> Option<(i32, i32)> {
+        let frame = self.session.committed_frame()?;
+        let geometry = frame.worksheet.geometry.as_ref()?;
+        let pane = geometry.scroll_pane_rect();
+        Some((pane.width, pane.height))
+    }
+
+    pub(super) fn viewport_context(&self) -> Result<ScrollViewport, JsValue> {
+        let frame = self
+            .session
+            .committed_frame()
+            .ok_or_else(|| JsValue::from_str("wait for worksheet geometry"))?;
+        let geometry = frame
+            .worksheet
+            .geometry
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("wait for worksheet geometry"))?;
+        let pane = geometry.scroll_pane_rect();
+        Ok(ScrollViewport {
+            pane_width: pane.width,
+            pane_height: pane.height,
+            frozen_rows: frame.worksheet.frozen.rows,
+            frozen_columns: frame.worksheet.frozen.cols,
+        })
+    }
+
+    pub(super) fn axes_for_selected_sheet(&mut self) -> Result<Rc<WorksheetAxes>, JsValue> {
+        let sheet = self.workbook.get_selected_sheet();
+        let sheet_id = self
+            .workbook
+            .get_model()
+            .workbook
+            .worksheet(sheet)
+            .map_err(|error| JsValue::from_str(&error))?
+            .sheet_id;
+        let key = (
+            self.workbook_id,
+            sheet_id,
+            self.revision,
+            self.metrics_generation,
+        );
+        if let Some(axes) = self.axes.get(&key) {
+            return Ok(Rc::clone(axes));
+        }
+        let rows = get_row_sizes(&self.workbook, sheet)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let columns = get_column_sizes(&self.workbook, sheet)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        let axes = Rc::new(
+            WorksheetAxes::from_sizes(&rows, &columns)
+                .map_err(|error| JsValue::from_str(&error.to_string()))?,
+        );
+        if self.axes.len() >= 8 {
+            self.axes.clear();
+        }
+        self.axes.insert(key, Rc::clone(&axes));
+        Ok(axes)
+    }
+
+    pub(super) fn ensure_view_imported(&mut self) -> Result<(), JsValue> {
+        let (width, height) = self.metrics.size().to_logical_extent();
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        if self.session.committed_frame().is_none() {
+            self.render()?;
+        }
+        let scope = self.navigation_scope()?;
+        self.navigation.commands.set_primary_view(Some(scope));
+        let axes = self.axes_for_selected_sheet()?;
+        let viewport = self.viewport_context()?;
+        self.navigation
+            .commands
+            .import_view(&mut self.workbook, scope, &axes, viewport)
+            .map_err(|error| JsValue::from_str(&error.to_string()))?;
+        Ok(())
     }
 
     #[wasm_bindgen(js_name = activeCell)]
@@ -408,7 +554,9 @@ mod browser_tests {
         assert!(host.navigation.commands.is_empty());
         assert_eq!(
             host.navigation.presented,
-            host.session.interaction_frame().map(|stamp| (stamp, 2))
+            host.session
+                .interaction_frame()
+                .map(|stamp| (stamp, 2, Some(0)))
         );
         queue(&mut host, "ArrowDown", false);
         queue(&mut host, "Enter", true);
