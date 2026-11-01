@@ -1,10 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type {
-  ChangeEvent,
-  KeyboardEvent,
-  PointerEvent,
-  WheelEvent,
-} from "react";
+import type { ChangeEvent, KeyboardEvent, PointerEvent } from "react";
 import { createRoot } from "react-dom/client";
 import init, {
   CanvasRenderer,
@@ -225,6 +220,39 @@ function App() {
     };
   }, []);
 
+  // React attaches wheel listeners to its root container as passive listeners.
+  // A preventDefault call inside onWheel cannot stop the page scroll there.
+  // Register a native listener with passive: false so the grid consumes the
+  // gesture, and leave browser zoom gestures on the existing browser path.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const scrollGrid = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return;
+      event.preventDefault();
+      const renderer = rendererRef.current;
+      const model = modelRef.current;
+      if (!renderer || !model) return;
+
+      try {
+        renderer.wheel(
+          model,
+          event.deltaX,
+          event.deltaY,
+          event.deltaMode,
+          event.shiftKey,
+        );
+        scheduleRender(false);
+      } catch (scrollError) {
+        setError(messageFromError(scrollError));
+      }
+    };
+
+    canvas.addEventListener("wheel", scrollGrid, { passive: false });
+    return () => canvas.removeEventListener("wheel", scrollGrid);
+  }, []);
+
   const openWorkbook = async (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const file = input.files?.[0];
@@ -429,28 +457,6 @@ function App() {
     }
   };
 
-  const scrollGrid = (event: WheelEvent<HTMLCanvasElement>) => {
-    // Leave browser zoom gestures on the existing browser path.
-    if (event.ctrlKey || event.metaKey) return;
-    event.preventDefault();
-    const renderer = rendererRef.current;
-    const model = modelRef.current;
-    if (!renderer || !model) return;
-
-    try {
-      renderer.wheel(
-        model,
-        event.deltaX,
-        event.deltaY,
-        event.deltaMode,
-        event.shiftKey,
-      );
-      scheduleRender(false);
-    } catch (scrollError) {
-      setError(messageFromError(scrollError));
-    }
-  };
-
   return (
     <main className="app-shell">
       <header className="app-header">
@@ -506,7 +512,6 @@ function App() {
           onCompositionEnd={() => {
             composing.current = false;
           }}
-          onWheel={scrollGrid}
         />
       </section>
 

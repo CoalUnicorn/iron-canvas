@@ -154,13 +154,18 @@ try {
   await delay(50);
   assert.doesNotMatch(await painted(), /, A1$/);
 
-  // Wheel input applies a pixel scroll and repaints the grid.
+  // Wheel input applies a pixel scroll and repaints the grid. The listener
+  // must be non-passive so preventDefault stops the page scroll.
   const canvasState = async () => command(`/session/${session}/execute/async`, {
     script: "const done = arguments[0]; requestAnimationFrame(() => requestAnimationFrame(() => done(document.querySelector('canvas').toDataURL())));",
     args: [],
   });
   const beforeWheel = await canvasState();
-  await execute(`${keyScript} canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, deltaMode: 0, bubbles: true, cancelable: true })); return true;`);
+  assert.equal(
+    await execute(`${keyScript} return canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, deltaMode: 0, bubbles: true, cancelable: true }));`),
+    false,
+    "wheel input must be canceled so the page does not scroll",
+  );
   await delay(100);
   assert.notEqual(await canvasState(), beforeWheel, "wheel input must repaint the grid");
 
