@@ -168,11 +168,12 @@ impl NavigationController {
             return Err(ScrollError::SheetMismatch);
         }
         let view = model.get_selected_view();
+        let engine_position = ScrollPosition::aligned(CellCoord {
+            row: view.top_row.max(1),
+            col: view.left_column.max(1),
+        });
         let position = normalize_position(
-            ScrollPosition::aligned(CellCoord {
-                row: view.top_row.max(1),
-                col: view.left_column.max(1),
-            }),
+            engine_position,
             &axes.rows,
             row_window(axes, viewport.frozen_rows),
             &axes.cols,
@@ -180,12 +181,15 @@ impl NavigationController {
         );
         let state = ViewState::new(position, viewport);
         let mirrored = self.mirror(model, scope, position)?;
+        // Normalization can move a hidden engine origin to a visible cell.
+        // The frame that prompted the import still used the engine origin.
+        let changed = position != engine_position;
         self.views.insert(scope, state);
         Ok(ScrollUpdate {
             position,
             generation: 0,
             mirrored,
-            changed: false,
+            changed,
         })
     }
 
@@ -1194,6 +1198,27 @@ mod tests {
             .unwrap();
         assert!(update.position.first_cell.row <= 30);
         assert!(update.position.first_cell.col <= 30);
+    }
+
+    #[test]
+    fn import_view_reports_a_normalized_origin_change() {
+        let mut model = model();
+        model.set_rows_hidden(0, 2, 2, true).unwrap();
+        model.set_top_left_visible_cell(2, 1).unwrap();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+        controller.set_primary_view(Some(scope));
+
+        let update = controller
+            .import_view(&mut model, scope, &axes, viewport)
+            .unwrap();
+
+        assert_eq!(update.position.first_cell.row, 3);
+        assert!(update.mirrored);
+        assert!(update.changed);
+        assert_eq!(model.get_selected_view().top_row, 3);
     }
 
     #[test]
