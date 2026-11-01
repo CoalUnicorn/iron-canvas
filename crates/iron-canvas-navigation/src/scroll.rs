@@ -53,6 +53,8 @@ pub enum ScrollError {
     UnknownView,
     /// The selected engine sheet does not match this view's sheet.
     SheetMismatch,
+    /// Cached axis sizes belong to another workbook or sheet.
+    AxesMismatch,
     /// The view generation is exhausted. It never wraps.
     GenerationExhausted,
     InvalidDelta,
@@ -66,6 +68,7 @@ impl std::fmt::Display for ScrollError {
         match self {
             Self::UnknownView => f.write_str("view scroll state is not imported"),
             Self::SheetMismatch => f.write_str("selected engine sheet does not match the view"),
+            Self::AxesMismatch => f.write_str("axis sizes do not match the view identity"),
             Self::GenerationExhausted => f.write_str("view generation is exhausted"),
             Self::InvalidDelta => f.write_str("scroll delta is not finite"),
             Self::NotVisible => f.write_str("reveal target has no visible extent"),
@@ -104,6 +107,17 @@ impl ViewState {
 }
 
 pub(crate) type ViewMap = HashMap<NavigationScope, ViewState>;
+
+/// Reject cached axes with a different source identity. Unscoped axes stay
+/// available for tests and exports.
+fn validate_axes(axes: &WorksheetAxes, scope: NavigationScope) -> Result<(), ScrollError> {
+    if let Some(axes_scope) = axes.scope
+        && (axes_scope.workbook_id != scope.workbook_id || axes_scope.sheet_id != scope.sheet_id)
+    {
+        return Err(ScrollError::AxesMismatch);
+    }
+    Ok(())
+}
 
 fn row_window(axes: &WorksheetAxes, frozen: i32) -> ScrollAxisWindow {
     ScrollAxisWindow::after_frozen(frozen, axes.rows.last_index())
@@ -158,6 +172,7 @@ impl NavigationController {
         axes: &WorksheetAxes,
         viewport: ScrollViewport,
     ) -> Result<ScrollUpdate, ScrollError> {
+        validate_axes(axes, scope)?;
         if let Some(state) = self.views.get(&scope).copied() {
             let position = self.normalize(state.position, axes, viewport, true);
             let changed = position != state.position;
@@ -202,6 +217,7 @@ impl NavigationController {
         axes: &WorksheetAxes,
         viewport: ScrollViewport,
     ) -> Result<ScrollUpdate, ScrollError> {
+        validate_axes(axes, scope)?;
         let Some(mut state) = self.views.get(&scope).copied() else {
             return Err(ScrollError::UnknownView);
         };
@@ -366,6 +382,7 @@ impl NavigationController {
         axes: &WorksheetAxes,
         viewport: ScrollViewport,
     ) -> Result<ScrollUpdate, ScrollError> {
+        validate_axes(axes, scope)?;
         let Some(mut state) = self.views.get(&scope).copied() else {
             return Err(ScrollError::UnknownView);
         };
@@ -461,6 +478,7 @@ impl NavigationController {
         axes: &WorksheetAxes,
         viewport: ScrollViewport,
     ) -> Result<ScrollUpdate, ScrollError> {
+        validate_axes(axes, scope)?;
         let Some(mut state) = self.views.get(&scope).copied() else {
             return Err(ScrollError::UnknownView);
         };
@@ -831,7 +849,7 @@ mod tests {
     use super::*;
     use crate::ControllerCommand;
     use iron_canvas_ironcalc::{
-        AxisSizes, SizeRun, WorksheetAxis, get_column_sizes, get_row_sizes,
+        AxesScope, AxisSizes, SizeRun, WorksheetAxis, get_column_sizes, get_row_sizes,
     };
     use ironcalc_base::expressions::types::Area;
 
@@ -950,6 +968,7 @@ mod tests {
         let axes = WorksheetAxes {
             rows,
             cols: columns,
+            scope: None,
         };
         let scope = scope(&model, 0);
         let viewport = pane(100, 100);
@@ -1219,6 +1238,39 @@ mod tests {
         assert!(update.mirrored);
         assert!(update.changed);
         assert_eq!(model.get_selected_view().top_row, 3);
+    }
+
+    #[test]
+    fn scoped_axes_reject_another_workbook_or_sheet() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let wrong = axes.clone().with_scope(AxesScope {
+            workbook_id: scope.workbook_id + 1,
+            sheet_id: scope.sheet_id + 1,
+            revision: 0,
+        });
+        let mut controller = NavigationController::default();
+        controller.set_primary_view(Some(scope));
+
+        assert!(matches!(
+            controller.import_view(&mut model, scope, &wrong, viewport),
+            Err(ScrollError::AxesMismatch)
+        ));
+        controller
+            .import_view(&mut model, scope, &axes, viewport)
+            .unwrap();
+        assert!(matches!(
+            controller.apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::Pixels { dx: 0.0, dy: 1.0 },
+                &wrong,
+                viewport,
+            ),
+            Err(ScrollError::AxesMismatch)
+        ));
     }
 
     #[test]

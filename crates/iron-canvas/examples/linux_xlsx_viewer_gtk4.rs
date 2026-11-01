@@ -21,7 +21,9 @@ use iron_canvas_core::{
 };
 
 #[cfg(target_os = "linux")]
-use iron_canvas_ironcalc::{WorksheetAxes, WorksheetViewport, get_column_sizes, get_row_sizes};
+use iron_canvas_ironcalc::{
+    AxesScope, WorksheetAxes, WorksheetViewport, get_column_sizes, get_row_sizes,
+};
 
 #[cfg(target_os = "linux")]
 use iron_canvas_native::NativeSceneBackend;
@@ -59,7 +61,7 @@ struct ViewerState {
     /// Owns the accepted view positions and the ordered command queue.
     navigation: NavigationController,
     /// Axis extents per sheet. The example uses one fixed metric environment.
-    axes: HashMap<u32, Rc<WorksheetAxes>>,
+    axes: HashMap<AxesScope, Rc<WorksheetAxes>>,
     /// Fixed cell of the last pointer selection, used by Shift+click.
     anchor: CellCoord,
     /// The last host error, or `None` after a successful input.
@@ -127,14 +129,29 @@ impl ViewerState {
     }
 
     fn axes_for(&mut self, sheet: u32) -> Result<Rc<WorksheetAxes>, String> {
-        if let Some(axes) = self.axes.get(&sheet) {
+        let sheet_id = self
+            .workbook
+            .get_model()
+            .workbook
+            .worksheet(sheet)
+            .map_err(|error| error.to_string())?
+            .sheet_id;
+        let scope = AxesScope {
+            workbook_id: 1,
+            sheet_id,
+            revision: self.request.revision.revision,
+        };
+        if let Some(axes) = self.axes.get(&scope) {
             return Ok(Rc::clone(axes));
         }
         let rows = get_row_sizes(&self.workbook, sheet).map_err(|error| error.to_string())?;
         let columns = get_column_sizes(&self.workbook, sheet).map_err(|error| error.to_string())?;
-        let axes =
-            Rc::new(WorksheetAxes::from_sizes(&rows, &columns).map_err(|error| error.to_string())?);
-        self.axes.insert(sheet, Rc::clone(&axes));
+        let axes = Rc::new(
+            WorksheetAxes::from_sizes(&rows, &columns)
+                .map_err(|error| error.to_string())?
+                .with_scope(scope),
+        );
+        self.axes.insert(scope, Rc::clone(&axes));
         Ok(axes)
     }
 

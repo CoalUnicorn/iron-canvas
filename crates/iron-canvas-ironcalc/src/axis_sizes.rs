@@ -715,11 +715,24 @@ impl AxisExtents for WorksheetAxis {
     }
 }
 
+/// Identity of the worksheet and content that produced axis sizes.
+///
+/// A host stores one value with each cached [`WorksheetAxes`]. Navigation
+/// rejects axes for another workbook or sheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AxesScope {
+    pub workbook_id: u64,
+    pub sheet_id: u32,
+    pub revision: u64,
+}
+
 /// Rounded runs for both worksheet axes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorksheetAxes {
     pub rows: WorksheetAxis,
     pub cols: WorksheetAxis,
+    /// Source identity. `None` accepts unscoped axes for tests and exports.
+    pub scope: Option<AxesScope>,
 }
 
 impl WorksheetAxes {
@@ -727,7 +740,14 @@ impl WorksheetAxes {
         Ok(Self {
             rows: WorksheetAxis::from_sizes(rows, LAST_ROW)?,
             cols: WorksheetAxis::from_sizes(cols, LAST_COLUMN)?,
+            scope: None,
         })
+    }
+
+    /// Attach the source identity used by host caches and navigation checks.
+    pub fn with_scope(mut self, scope: AxesScope) -> Self {
+        self.scope = Some(scope);
+        self
     }
 
     /// Scrolling extent for the row axis.

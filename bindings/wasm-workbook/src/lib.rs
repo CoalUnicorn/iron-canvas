@@ -15,7 +15,9 @@ use iron_canvas_core::{
     CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, Point, ScrollPosition,
     scene_geometry::GridRange,
 };
-use iron_canvas_ironcalc::{WorksheetAxes, WorksheetViewport, get_column_sizes, get_row_sizes};
+use iron_canvas_ironcalc::{
+    AxesScope, WorksheetAxes, WorksheetViewport, get_column_sizes, get_row_sizes,
+};
 use iron_canvas_navigation::{
     NavigationController, NavigationScope, ScrollCommand, ScrollViewport,
 };
@@ -37,10 +39,11 @@ pub struct CanvasRenderer {
     session: CanvasSession<SceneTarget>,
     cache: WorksheetCache,
     /// Keyed by workbook, stable sheet ID, and text metric generation.
-    axes: HashMap<(u64, u32, u64), Rc<WorksheetAxes>>,
+    axes: HashMap<AxesScope, Rc<WorksheetAxes>>,
     scroll: NavigationController,
     metrics_generation: u64,
     workbook_id: u64,
+    revision: u64,
 }
 
 #[wasm_bindgen]
@@ -58,6 +61,7 @@ impl CanvasRenderer {
             scroll: NavigationController::default(),
             metrics_generation: 0,
             workbook_id: 1,
+            revision: 0,
         })
     }
 
@@ -69,6 +73,7 @@ impl CanvasRenderer {
             .checked_add(1)
             .ok_or_else(|| JsValue::from_str("workbook identity exhausted"))?;
         self.workbook_id = workbook_id;
+        self.revision = 0;
         self.cache.clear();
         self.axes.clear();
         self.scroll
@@ -97,7 +102,6 @@ impl CanvasRenderer {
             self.metrics = metrics;
             self.metrics_generation = generation;
             self.cache.clear();
-            self.axes.clear();
         }
         self.paint(model)?;
         // Validate a saved position against the new pane only after the new
@@ -322,7 +326,7 @@ impl CanvasRenderer {
             sheet: view.sheet,
             revision: RevisionToken {
                 workbook_id: self.workbook_id,
-                revision: 0,
+                revision: self.revision,
             },
             viewport: WorksheetViewport {
                 scroll,
@@ -384,7 +388,11 @@ impl CanvasRenderer {
             .worksheet(sheet)
             .map_err(|error| JsValue::from_str(&error))?
             .sheet_id;
-        let key = (self.workbook_id, sheet_id, self.metrics_generation);
+        let key = AxesScope {
+            workbook_id: self.workbook_id,
+            sheet_id,
+            revision: self.revision,
+        };
         if let Some(axes) = self.axes.get(&key) {
             return Ok(Rc::clone(axes));
         }
@@ -394,7 +402,8 @@ impl CanvasRenderer {
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
         let axes = Rc::new(
             WorksheetAxes::from_sizes(&rows, &columns)
-                .map_err(|error| JsValue::from_str(&error.to_string()))?,
+                .map_err(|error| JsValue::from_str(&error.to_string()))?
+                .with_scope(key),
         );
         if self.axes.len() >= 8 {
             self.axes.clear();

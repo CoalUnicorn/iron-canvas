@@ -10,8 +10,8 @@ pub mod axis_sizes;
 pub mod compiler;
 
 pub use axis_sizes::{
-    Axis, AxisRun, AxisSizeBuilder, AxisSizeError, AxisSizeProgress, AxisSizes, AxisSource,
-    SizeRun, WorksheetAxes, WorksheetAxis, get_column_sizes, get_row_sizes,
+    AxesScope, Axis, AxisRun, AxisSizeBuilder, AxisSizeError, AxisSizeProgress, AxisSizes,
+    AxisSource, SizeRun, WorksheetAxes, WorksheetAxis, get_column_sizes, get_row_sizes,
 };
 
 pub use compiler::{
