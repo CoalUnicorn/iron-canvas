@@ -760,6 +760,7 @@ dependencies = [
  "iron-canvas-export",
  "iron-canvas-ironcalc",
  "iron-canvas-native",
+ "iron-canvas-navigation",
  "ironcalc",
  "ironcalc_base",
  "wasm-bindgen",
