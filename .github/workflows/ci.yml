@@ -91,3 +91,18 @@ jobs:
         env:
           CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
         run: cargo +stable test -p iron-canvas --target wasm32-unknown-unknown --test cf_fixture_canvas2d --locked
+
+      - name: Install wasm-pack
+        run: cargo +stable install wasm-pack --version 0.15.0 --locked
+
+      - name: Install React dependencies
+        working-directory: examples/react
+        run: npm ci
+
+      - name: Build React workbook host
+        working-directory: examples/react
+        run: npm run build
+
+      - name: Run React browser route
+        working-directory: examples/react
+        run: node tests/navigation.mjs
