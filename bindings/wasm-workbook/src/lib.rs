@@ -5,7 +5,8 @@
 //! `Model` methods directly and asks this renderer for a frame. The React
 //! example consumes this crate; it holds no wasm adapter of its own.
 
-pub use wasm::Model;
+mod model;
+pub use model::Model;
 
 use iron_canvas::{
     CanvasSession, HostIntent, OverlayState, PointerAction, RenderRequest, RevisionToken,
@@ -28,6 +29,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use wasm_bindgen::prelude::*;
 use web_sys::HtmlCanvasElement;
+
+/// Convert a column number to its spreadsheet name.
+#[wasm_bindgen(js_name = "columnNameFromNumber")]
+pub fn column_name_from_number(column: i32) -> Result<String, JsError> {
+    ironcalc_base::expressions::utils::number_to_column(column)
+        .ok_or_else(|| JsError::new("Invalid column number"))
+}
 
 /// Logical pixels for one wheel line in line mode.
 const LINE_STEP: f64 = 24.0;

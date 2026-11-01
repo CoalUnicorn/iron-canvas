@@ -846,9 +846,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "iron-canvas-wasm-workbook"
+version = "0.1.0-beta.2"
+dependencies = [
+ "iron-canvas",
+ "iron-canvas-core",
+ "iron-canvas-ironcalc",
+ "iron-canvas-navigation",
+ "iron-canvas-wasm",
+ "ironcalc",
+ "ironcalc_base",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
+ "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
 name = "ironcalc"
 version = "0.9.1"
-source = "git+https://github.com/CoalUnicorn/IronCalc#0be0ff0c6d49e5f2b7df7b06b1b536d39b52fbc4"
+source = "git+https://github.com/ironcalc/IronCalc?rev=b063c523df47413fbb26070545912485d9116e80#b063c523df47413fbb26070545912485d9116e80"
 dependencies = [
  "bitcode",
  "chrono",
@@ -864,7 +882,7 @@ dependencies = [
 [[package]]
 name = "ironcalc_base"
 version = "0.9.1"
-source = "git+https://github.com/CoalUnicorn/IronCalc#0be0ff0c6d49e5f2b7df7b06b1b536d39b52fbc4"
+source = "git+https://github.com/ironcalc/IronCalc?rev=b063c523df47413fbb26070545912485d9116e80#b063c523df47413fbb26070545912485d9116e80"
 dependencies = [
  "bitcode",
  "chrono",
