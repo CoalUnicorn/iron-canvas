@@ -329,8 +329,8 @@ and invalidate the session.
 
 `classify_navigation` maps a normalized key and modifiers to a typed
 `NavigationIntent`. `HostIntent::Navigate` carries this intent to a host.
-The classifier reads no workbook. Both binding profiles expose Basic commands.
-Extended commands stay unhandled until P3b passes its engine gate.
+The classifier reads no workbook. Basic is the only active profile. Extended
+returns no intent until its engine support gate passes.
 
 `NavigationController` owns checked reveal. It resolves merges, hidden axes,
 frozen panes, and pixel offsets before it writes the engine view. The host
@@ -362,13 +362,13 @@ Several areas produce no autofill handle. One finite area, or a legacy active
 cell without a range, retains the existing handle and sheet-limit rules.
 Selection-only changes reuse prepared content without a content revision bump.
 
-React owns a queue with at most 64 pending commands. It consumes recognized
-keys before execution. Repeat events beyond the limit are dropped. Other
-excess commands report an error. Commands bind to workbook, sheet, and grid
-interaction identity. Focus loss, composition entry, disposal, sheet changes,
-and workbook replacement cancel the queue. Failed preparation retains
-unstarted commands. Execution removes each command before engine movement,
-so a failed execution or presentation cannot replay it.
+The navigation controller provides a queue with at most 64 pending commands.
+Repeat events beyond the limit are dropped. Other excess commands report an
+error. Commands bind to workbook, sheet, and grid interaction identity.
+`pop_ready` removes the first command for one view and keeps commands for other
+views in order. `cancel` clears the queue and advances the interaction identity.
+A host that needs deferred execution can drain the queue. The current GTK and
+React hosts apply navigation synchronously and use controller reveal directly.
 
 The host uses the pinned engine's movement methods. Basic Shift+Arrow passes
 real-engine merge extend/contract tests in both horizontal directions.
