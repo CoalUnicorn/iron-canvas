@@ -215,8 +215,10 @@ impl NavigationController {
                     + i64::from(viewport.pane_height.max(0));
                 let column_limit = scrolling_extent(&axes.cols, column_window)
                     + i64::from(viewport.pane_width.max(0));
-                let (whole_y, remainder_y) = split_delta(state.fractional_y + dy, row_limit);
-                let (whole_x, remainder_x) = split_delta(state.fractional_x + dx, column_limit);
+                let total_y = state.fractional_y + dy;
+                let total_x = state.fractional_x + dx;
+                let (whole_y, remainder_y) = split_delta(total_y, row_limit);
+                let (whole_x, remainder_x) = split_delta(total_x, column_limit);
                 state.fractional_y = remainder_y;
                 state.fractional_x = remainder_x;
                 let next = move_position(
@@ -230,22 +232,26 @@ impl NavigationController {
                     viewport.pane_width,
                     viewport.pane_height,
                 );
-                // Input beyond a clamped boundary cannot accumulate.
-                if at_boundary(
+                // Clear only input that pushes outward from a boundary. A
+                // half-pixel event that moves away from the boundary must stay
+                // for the next event.
+                if clears_fraction(
                     &axes.rows,
                     row_window,
                     next.first_cell.row,
                     next.offset_y,
                     viewport.pane_height,
+                    total_y,
                 ) {
                     state.fractional_y = 0.0;
                 }
-                if at_boundary(
+                if clears_fraction(
                     &axes.cols,
                     column_window,
                     next.first_cell.col,
                     next.offset_x,
                     viewport.pane_width,
+                    total_x,
                 ) {
                     state.fractional_x = 0.0;
                 }
@@ -632,12 +638,18 @@ fn sheet_index(model: &UserModel<'_>, sheet_id: u32) -> Result<u32, ScrollError>
         .ok_or(ScrollError::SheetMismatch)
 }
 
-fn at_boundary(
+/// True when the axis cannot move in the input direction.
+///
+/// The fraction is discarded only when the input pushes past the start or end.
+/// A zero delta keeps an existing remainder. A pane that cannot scroll has no
+/// reachable boundary, so its fraction is always discarded.
+fn clears_fraction(
     axis: &WorksheetAxis,
     window: ScrollAxisWindow,
     first: i32,
     offset: i32,
     pane: i32,
+    delta: f64,
 ) -> bool {
     if pane <= 0 || window.is_empty() {
         return true;
@@ -645,7 +657,7 @@ fn at_boundary(
     let total = scrolling_extent(axis, window);
     let max = (total - i64::from(pane)).max(0);
     let current = distance(axis, window, first, offset);
-    current <= 0 || current >= max
+    (current <= 0 && delta < 0.0) || (current >= max && delta > 0.0)
 }
 
 fn clamp_end_position(
@@ -1233,6 +1245,121 @@ mod tests {
             .unwrap();
         assert_eq!(update.position.first_cell.col, 16_384);
         assert_eq!(update.position.offset_x, 0);
+    }
+
+    #[test]
+    fn fractional_pixels_accumulate_away_from_the_top_boundary() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+        controller.set_primary_view(Some(scope));
+        controller
+            .import_view(&mut model, scope, &axes, viewport)
+            .unwrap();
+
+        for _ in 0..2 {
+            let update = controller
+                .apply_scroll(
+                    &mut model,
+                    scope,
+                    ScrollCommand::Pixels { dx: 0.0, dy: 0.5 },
+                    &axes,
+                    viewport,
+                )
+                .unwrap();
+            assert_eq!(update.position.first_cell.row, 1);
+        }
+
+        assert_eq!(
+            controller.view_position(scope).unwrap().offset_y,
+            1,
+            "two half-pixel events at the top must move one pixel"
+        );
+    }
+
+    #[test]
+    fn fractional_pixels_clear_only_the_outward_direction() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+        controller.set_primary_view(Some(scope));
+        controller
+            .import_view(&mut model, scope, &axes, viewport)
+            .unwrap();
+
+        // A negative fraction at the top is outward and is discarded.
+        controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::Pixels { dx: 0.0, dy: -0.5 },
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        let down = controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::Pixels { dx: 0.0, dy: 1.0 },
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        assert_eq!(down.position.offset_y, 1);
+
+        // The same rule applies at the end of the axis. Use zero default
+        // extents so row 196 is the last reachable cell.
+        let rows = AxisSizes {
+            default_size: 0.0,
+            runs: vec![SizeRun {
+                first: 1,
+                last: 200,
+                size: 20.0,
+            }],
+        };
+        let columns = AxisSizes {
+            default_size: 0.0,
+            runs: vec![SizeRun {
+                first: 1,
+                last: 200,
+                size: 30.0,
+            }],
+        };
+        let axes = WorksheetAxes::from_sizes(&rows, &columns).unwrap();
+        controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::SetOrigin(CellCoord { row: 196, col: 1 }),
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::Pixels { dx: 0.0, dy: 0.5 },
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        let up = controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::Pixels { dx: 0.0, dy: -1.0 },
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        assert_eq!(up.position.first_cell.row, 195);
+        assert_eq!(up.position.offset_y, 19);
     }
 
     #[test]
