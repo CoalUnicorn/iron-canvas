@@ -42,6 +42,13 @@ use ironcalc_base::UserModel;
 #[cfg(target_os = "linux")]
 const LINE_STEP: f64 = 24.0;
 
+/// Worksheet limits; the crate keeps these private.
+#[cfg(target_os = "linux")]
+const LAST_ROW: i32 = 1_048_576;
+
+#[cfg(target_os = "linux")]
+const LAST_COLUMN: i32 = 16_384;
+
 #[cfg(target_os = "linux")]
 struct ViewerState {
     workbook: UserModel<'static>,
@@ -274,32 +281,87 @@ impl ViewerState {
     }
 
     /// Select the cell or header under a committed-frame point.
+    ///
+    /// Cell hits use the engine area selection, which moves the view to reveal
+    /// the pointer target. Header hits set the full row or column with
+    /// `set_selected_range`, which does not scroll. The follow-up reveal then
+    /// shows the selected row or column without crossing the sheet, because a
+    /// full-axis range already covers the pane on its long axis.
     fn select(&mut self, point: Point, extend: bool) -> Result<(), String> {
         let action = if extend {
             PointerAction::ExtendSelection
         } else {
             PointerAction::Select
         };
-        let Some(HostIntent::Select { anchor, range, .. }) =
-            self.session.pointer_intent(point, action)
+        let Some(HostIntent::Select { anchor, .. }) = self.session.pointer_intent(point, action)
         else {
             return Ok(());
         };
-        let anchor_cell = if extend { self.anchor } else { anchor };
-        // A cell hit focuses that cell. A header hit extends to its far edge.
-        let focus = match self.session.hit_test(point) {
-            Some(GridHit::Cell(_)) => anchor,
-            Some(_) => range.last,
+        match self.session.hit_test(point) {
+            Some(GridHit::Cell(_)) => {
+                let anchor_cell = if extend { self.anchor } else { anchor };
+                select_anchor_and_focus(
+                    &mut self.workbook,
+                    anchor_cell.row,
+                    anchor_cell.col,
+                    anchor.row,
+                    anchor.col,
+                )?;
+                self.anchor = anchor_cell;
+            }
+            Some(GridHit::RowHeader(row)) => {
+                let (first, last) = if extend {
+                    ordered(self.anchor.row, row)
+                } else {
+                    (row, row)
+                };
+                let (active_row, active_column) = if extend {
+                    (self.anchor.row, self.anchor.col)
+                } else {
+                    (row, 1)
+                };
+                self.workbook.set_selected_cell(active_row, active_column)?;
+                self.workbook
+                    .set_selected_range(first, 1, last, LAST_COLUMN)?;
+                if !extend {
+                    self.anchor = CellCoord { row, col: 1 };
+                }
+            }
+            Some(GridHit::ColumnHeader(column)) => {
+                let (first, last) = if extend {
+                    ordered(self.anchor.col, column)
+                } else {
+                    (column, column)
+                };
+                let (active_row, active_column) = if extend {
+                    (self.anchor.row, self.anchor.col)
+                } else {
+                    (1, column)
+                };
+                self.workbook.set_selected_cell(active_row, active_column)?;
+                self.workbook.set_selected_range(1, first, LAST_ROW, last)?;
+                if !extend {
+                    self.anchor = CellCoord {
+                        row: 1,
+                        col: column,
+                    };
+                }
+            }
+            Some(GridHit::Corner) => {
+                let (active_row, active_column) = if extend {
+                    (self.anchor.row, self.anchor.col)
+                } else {
+                    (1, 1)
+                };
+                self.workbook.set_selected_cell(active_row, active_column)?;
+                self.workbook
+                    .set_selected_range(1, 1, LAST_ROW, LAST_COLUMN)?;
+                if !extend {
+                    self.anchor = CellCoord { row: 1, col: 1 };
+                }
+            }
             None => return Ok(()),
-        };
-        select_anchor_and_focus(
-            &mut self.workbook,
-            anchor_cell.row,
-            anchor_cell.col,
-            focus.row,
-            focus.col,
-        )?;
-        self.anchor = anchor_cell;
+        }
         let sheet = self.workbook.get_selected_sheet();
         self.sync_view(sheet)?;
         Ok(())
@@ -731,6 +793,11 @@ fn draw_message(context: &gtk4::cairo::Context, message: &str) {
 }
 
 #[cfg(target_os = "linux")]
+fn ordered(first: i32, last: i32) -> (i32, i32) {
+    (first.min(last), first.max(last))
+}
+
+#[cfg(target_os = "linux")]
 fn column_name(mut column: i32) -> String {
     let mut name = String::new();
     while column > 0 {
@@ -846,6 +913,71 @@ mod tests {
                 last: CellCoord { row, col: column },
             }]
         );
+    }
+
+    /// A header click selects the full row or column without scrolling the
+    /// other axis to the worksheet limit.
+    #[test]
+    fn header_selection_keeps_the_orthogonal_origin() {
+        let mut workbook = UserModel::new_empty("headers", "en", "UTC", "en").unwrap();
+        workbook.set_user_input(0, 1, 1, "origin").unwrap();
+        let mut state = ViewerState::new(workbook).unwrap();
+        let (_surface, context) = surface(900, 620);
+        draw_frame(&mut state, 0, &context, 900, 620);
+
+        let scope = state.scope(0).unwrap();
+        state.scroll(0, 600.0, 400.0).unwrap();
+        draw_frame(&mut state, 0, &context, 900, 620);
+        let pane = state
+            .session
+            .committed_frame()
+            .unwrap()
+            .worksheet
+            .geometry
+            .as_ref()
+            .unwrap()
+            .scroll_pane_rect();
+        let before = state.navigation.view_position(scope).unwrap();
+
+        let row_header = Point {
+            x: pane.left() / 2,
+            y: pane.top() + 30,
+        };
+        assert!(
+            matches!(
+                state.session.hit_test(row_header),
+                Some(GridHit::RowHeader(_))
+            ),
+            "test point must hit the row header"
+        );
+        state.select(row_header, false).unwrap();
+        let after_row = state.navigation.view_position(scope).unwrap();
+        assert_eq!(
+            after_row.first_cell.col, before.first_cell.col,
+            "row header must not scroll to the last column"
+        );
+        let view = state.workbook.get_selected_view();
+        assert_eq!((view.range[1], view.range[3]), (1, LAST_COLUMN));
+
+        let column_header = Point {
+            x: pane.left() + 40,
+            y: pane.top() / 2,
+        };
+        assert!(
+            matches!(
+                state.session.hit_test(column_header),
+                Some(GridHit::ColumnHeader(_))
+            ),
+            "test point must hit the column header"
+        );
+        state.select(column_header, false).unwrap();
+        let after_column = state.navigation.view_position(scope).unwrap();
+        assert_eq!(
+            after_column.first_cell.row, after_row.first_cell.row,
+            "column header must not scroll to the last row"
+        );
+        let view = state.workbook.get_selected_view();
+        assert_eq!((view.range[0], view.range[2]), (1, LAST_ROW));
     }
 }
 
