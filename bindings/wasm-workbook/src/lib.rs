@@ -13,13 +13,14 @@ use iron_canvas::{
 };
 use iron_canvas_core::{
     CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, Point, ScrollPosition,
+    navigation::{BindingProfile, NavigationKey, NavigationModifiers, classify_navigation},
     scene_geometry::GridRange,
 };
 use iron_canvas_ironcalc::{
     AxesScope, WorksheetAxes, WorksheetViewport, get_column_sizes, get_row_sizes,
 };
 use iron_canvas_navigation::{
-    NavigationController, NavigationScope, ScrollCommand, ScrollViewport,
+    NavigationController, NavigationScope, ScrollCommand, ScrollViewport, apply_navigation,
 };
 use iron_canvas_wasm::SceneTarget;
 use ironcalc_base::UserModel;
@@ -175,6 +176,40 @@ impl CanvasRenderer {
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
 
+    /// Apply one grid key through the shared classifier and engine adapter.
+    ///
+    /// Returns false when the key or modifier combination has no binding.
+    /// The caller reconciles the controller after a true result.
+    #[wasm_bindgen(js_name = navigate)]
+    pub fn navigate(
+        &mut self,
+        model: &mut Model,
+        key: &str,
+        primary: bool,
+        shift: bool,
+        alt: bool,
+        alt_graph: bool,
+    ) -> Result<bool, JsValue> {
+        let Some(key) = NavigationKey::from_key(key) else {
+            return Ok(false);
+        };
+        let modifiers = NavigationModifiers {
+            primary,
+            shift,
+            alt,
+            alt_graph,
+        };
+        let Some(intent) = classify_navigation(key, modifiers, BindingProfile::Basic) else {
+            return Ok(false);
+        };
+        let pane_height = self
+            .committed_pane_extent()
+            .map_or(0, |(_, pane_height)| pane_height);
+        apply_navigation(model.user_model_mut(), intent, pane_height)
+            .map_err(|error| JsValue::from_str(&error))?;
+        Ok(true)
+    }
+
     /// Clamp the saved position against the selected sheet before a paint.
     ///
     /// The committed frame can describe the previous sheet. Read frozen counts
@@ -282,14 +317,24 @@ impl CanvasRenderer {
     /// Select the cell under a pointer position in the committed frame.
     #[wasm_bindgen(js_name = selectAt)]
     pub fn select_at(&mut self, model: &mut Model, x: i32, y: i32) -> Result<(), JsValue> {
-        if let Some(HostIntent::Select { anchor, .. }) = self
+        if let Some(HostIntent::Select { anchor, range, .. }) = self
             .session
             .pointer_intent(Point { x, y }, PointerAction::Select)
         {
-            model
-                .user_model_mut()
+            let workbook = model.user_model_mut();
+            workbook
                 .set_selected_cell(anchor.row, anchor.col)
                 .map_err(|error| JsValue::from_str(&error))?;
+            if range.first != range.last {
+                workbook
+                    .set_selected_range(
+                        range.first.row,
+                        range.first.col,
+                        range.last.row,
+                        range.last.col,
+                    )
+                    .map_err(|error| JsValue::from_str(&error))?;
+            }
         }
         Ok(())
     }

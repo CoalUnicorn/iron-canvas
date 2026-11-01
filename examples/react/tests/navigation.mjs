@@ -94,13 +94,13 @@ try {
   // Shift+Arrow extends the range, but the active cell does not move.
   assert.equal(await execute(`${keyScript} return key('ArrowRight', { shiftKey: true });`), true);
   assert.match(await painted(), /, D3$/);
-  // Shift+Enter is not a webapp navigation binding.
-  assert.equal(await execute(`${keyScript} return key('Enter', { shiftKey: true });`), false);
-  assert.match(await painted(), /, D3$/);
+  // Shift+Enter traverses the column backward, so the active cell moves up.
+  assert.equal(await execute(`${keyScript} return key('Enter', { shiftKey: true });`), true);
+  assert.match(await painted(), /, D2$/);
 
   // Ctrl+Arrow moves to a data edge; Ctrl+Home returns to A1.
   assert.equal(await execute(`${keyScript} ${primary} return key('ArrowRight', primary);`), true);
-  assert.match(await painted(), /, XFD3$/);
+  assert.match(await painted(), /, XFD2$/);
   assert.equal(await execute(`${keyScript} ${primary} return key('ArrowDown', primary);`), true);
   assert.match(await painted(), /, XFD1048576$/);
   assert.equal(await execute(`${keyScript} ${primary} return key('Home', primary);`), true);
@@ -109,10 +109,13 @@ try {
   assert.equal(await execute(`${keyScript} ${primary} return key('Home', primary);`), true);
   assert.match(await painted(), /, A1$/);
 
-  // Plain Home and End move to the row edges.
+  // Plain End moves to the used edge of the row. Ctrl+End moves to the used
+  // range corner.
   assert.equal(await execute(`${keyScript} return key('End');`), true);
-  assert.match(await painted(), /, XFD1$/);
-  assert.equal(await execute(`${keyScript} return key('Home');`), true);
+  assert.match(await painted(), /, C1$/);
+  assert.equal(await execute(`${keyScript} ${primary} return key('End', primary);`), true);
+  assert.match(await painted(), /, C5$/);
+  assert.equal(await execute(`${keyScript} ${primary} return key('Home', primary);`), true);
   assert.match(await painted(), /, A1$/);
 
   // Alt+Arrow selects the next and previous sheet.

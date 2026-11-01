@@ -38,6 +38,7 @@ new CanvasRenderer(canvas: HTMLCanvasElement);
 resize(model: Model, width: number, height: number, dpr: number): void;
 reset(): void;
 setRevision(revision: number): void;
+navigate(model: Model, key: string, primary: boolean, shift: boolean, alt: boolean, altGraph: boolean): boolean;
 syncNavigation(model: Model): void;
 render(model: Model, revealActive: boolean): void;
 invalidateFonts(model: Model): void;
@@ -46,6 +47,9 @@ selectAt(model: Model, x: number, y: number): void;
 cellRect(row: number, column: number): number[];
 cellFragmentRects(row: number, column: number): number[];
 ```
+
+Call `navigate` for a grid key. It applies the shared classifier and engine
+adapter, and returns false for an unbound key or modifier combination.
 
 Call `setRevision` with a higher number after any cell or dimension edit.
 The revision keys the worksheet and axis caches. Revisions must not decrease;

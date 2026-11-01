@@ -31,25 +31,6 @@ interface WorksheetProperties {
 const LAST_ROW = 1_048_576;
 const LAST_COLUMN = 16_384;
 
-const ARROW_KEYS = [
-  "ArrowRight",
-  "ArrowLeft",
-  "ArrowDown",
-  "ArrowUp",
-] as const;
-
-const NAVIGATION_KEYS = [...ARROW_KEYS, "Home", "End"] as const;
-
-type ArrowKey = (typeof ARROW_KEYS)[number];
-
-function isArrowKey(key: string): key is ArrowKey {
-  return (ARROW_KEYS as readonly string[]).includes(key);
-}
-
-function isNavigationKey(key: string): boolean {
-  return (NAVIGATION_KEYS as readonly string[]).includes(key);
-}
-
 function messageFromError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -316,7 +297,7 @@ function App() {
     setSelectedSheet(next);
   };
 
-  // Mirror the IronCalc webapp keyboard precedence. Editing keys are ignored
+  // Use the shared classifier for grid keys. Editing keys are ignored
   // because this example is read-only.
   const navigateGrid = (event: KeyboardEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget;
@@ -338,6 +319,7 @@ function App() {
     const { key } = event;
     const primary = event.ctrlKey || event.metaKey;
     const { shiftKey: shift, altKey: alt } = event;
+    const altGraph = event.getModifierState("AltGraph");
 
     const consume = () => {
       event.preventDefault();
@@ -350,84 +332,38 @@ function App() {
       scheduleRender();
     };
 
-    if (primary && !shift && !alt) {
-      if (isNavigationKey(key)) {
-        if (key === "Home") {
-          model.setSelectedCell(1, 1);
-        } else if (key === "End") {
-          // The webapp requests an unsupported edge direction for End.
-          return;
-        } else {
-          model.onNavigateToEdgeInDirection(key);
-        }
-        consume();
-      } else if (key === " ") {
-        const { column } = selectedView(model);
-        model.setSelectedRange(1, column, LAST_ROW, column);
-        consume();
-      }
-      return;
-    }
-    if (primary && shift && !alt) return;
-    if (shift && !alt && !primary) {
-      if (key === " ") {
-        const { row } = selectedView(model);
-        model.setSelectedRange(row, 1, row, LAST_COLUMN);
-        consume();
-      } else if (isArrowKey(key)) {
-        model.onExpandSelectedRange(key);
-        consume();
-      } else if (key === "Tab") {
-        model.onArrowLeft();
-        consume();
-      }
-      return;
-    }
-    if (alt && !primary && !shift) {
+    if (alt && !primary && !shift && !altGraph) {
       if (key === "ArrowDown") {
         selectAdjacentSheet(1);
         consume();
-      } else if (key === "ArrowUp") {
+        return;
+      }
+      if (key === "ArrowUp") {
         selectAdjacentSheet(-1);
         consume();
-      }
-      return;
-    }
-    if (primary || alt || shift) return;
-
-    switch (key) {
-      case "ArrowRight":
-      case "Tab":
-        model.onArrowRight();
-        break;
-      case "ArrowLeft":
-        model.onArrowLeft();
-        break;
-      case "ArrowDown":
-      case "Enter":
-        model.onArrowDown();
-        break;
-      case "ArrowUp":
-        model.onArrowUp();
-        break;
-      case "Home": {
-        const cell = model.getSelectedCell();
-        model.setSelectedCell(cell[1], 1);
-        break;
-      }
-      case "End": {
-        const cell = model.getSelectedCell();
-        model.setSelectedCell(cell[1], LAST_COLUMN);
-        break;
-      }
-      case "PageDown":
-        model.onPageDown();
-        break;
-      case "PageUp":
-        model.onPageUp();
-        break;
-      default:
         return;
+      }
+    }
+
+    // Ctrl+Space selects the active column. Shift+Space selects the active row.
+    // The shared classifier has no selection-only Space binding.
+    if (!alt && !altGraph && key === " ") {
+      if (primary && !shift) {
+        const { column } = selectedView(model);
+        model.setSelectedRange(1, column, LAST_ROW, column);
+        consume();
+        return;
+      }
+      if (shift && !primary) {
+        const { row } = selectedView(model);
+        model.setSelectedRange(row, 1, row, LAST_COLUMN);
+        consume();
+        return;
+      }
+    }
+
+    if (!renderer.navigate(model, key, primary, shift, alt, altGraph)) {
+      return;
     }
     consume();
   };
