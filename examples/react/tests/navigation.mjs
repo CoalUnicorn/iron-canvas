@@ -169,6 +169,26 @@ try {
   await delay(100);
   assert.notEqual(await canvasState(), beforeWheel, "wheel input must repaint the grid");
 
+  // A wheel event after a key command must keep that order. The key handler
+  // reconciles navigation before the wheel changes the pixel position.
+  await execute(`${keyScript} ${primary} return key('Home', primary);`);
+  await painted();
+  await execute(`${keyScript} return key('ArrowRight');`);
+  await painted();
+  const b1 = await canvasState();
+  await execute(`${keyScript} ${primary} return key('Home', primary);`);
+  await painted();
+  await execute(`${keyScript}
+    const consumed = key('ArrowRight');
+    canvas.dispatchEvent(new WheelEvent('wheel', { deltaY: 30, deltaMode: 0, bubbles: true, cancelable: true }));
+    return consumed;`);
+  await delay(100);
+  assert.notEqual(
+    await canvasState(),
+    b1,
+    "a wheel after navigation must not be replaced by the reveal",
+  );
+
   // Replacing the model frees the old one. Resize listeners must use the
   // current model, not the one captured when the host started.
   await executeWithArgs(`

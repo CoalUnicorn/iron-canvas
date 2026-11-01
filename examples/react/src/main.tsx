@@ -106,7 +106,6 @@ function App() {
   const rendererRef = useRef<CanvasRenderer | null>(null);
   const modelRef = useRef<Model | null>(null);
   const frameRef = useRef<number | null>(null);
-  const revealRef = useRef(false);
   const composing = useRef(false);
   const [activeCell, setActiveCell] = useState("A1");
   const [ready, setReady] = useState(false);
@@ -123,21 +122,18 @@ function App() {
     setWorkbookName(model.getName());
   };
 
-  // Navigation and wheel input share one paint per animation frame. A frame
-  // after navigation reveals the active cell; a frame after wheel input keeps
-  // the pixel scroll position.
-  const scheduleRender = (revealActive: boolean) => {
-    revealRef.current ||= revealActive;
+  // Navigation and wheel input share one paint per animation frame. The key
+  // handler reconciles navigation before a following wheel event, so the
+  // frame only paints the accepted position.
+  const scheduleRender = () => {
     if (frameRef.current !== null) return;
     frameRef.current = requestAnimationFrame(() => {
       frameRef.current = null;
       const renderer = rendererRef.current;
       const model = modelRef.current;
       if (!renderer || !model) return;
-      const reveal = revealRef.current;
-      revealRef.current = false;
       try {
-        renderer.render(model, reveal);
+        renderer.render(model, false);
         setError(null);
       } catch (renderError) {
         setError(messageFromError(renderError));
@@ -243,7 +239,7 @@ function App() {
           event.deltaMode,
           event.shiftKey,
         );
-        scheduleRender(false);
+        scheduleRender();
       } catch (scrollError) {
         setError(messageFromError(scrollError));
       }
@@ -284,7 +280,7 @@ function App() {
     try {
       model.setSelectedSheet(index);
       setSelectedSheet(model.getSelectedSheet());
-      scheduleRender(false);
+      scheduleRender();
       setError(null);
     } catch (selectionError) {
       setError(messageFromError(selectionError));
@@ -298,7 +294,7 @@ function App() {
     try {
       model.newSheet();
       refreshWorkbook(model);
-      scheduleRender(false);
+      scheduleRender();
       setError(null);
     } catch (sheetError) {
       setError(messageFromError(sheetError));
@@ -324,8 +320,10 @@ function App() {
   // because this example is read-only.
   const navigateGrid = (event: KeyboardEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget;
+    const renderer = rendererRef.current;
     const model = modelRef.current;
     if (
+      !renderer ||
       !model ||
       event.target !== canvas ||
       document.activeElement !== canvas ||
@@ -343,7 +341,13 @@ function App() {
 
     const consume = () => {
       event.preventDefault();
-      scheduleRender(true);
+      try {
+        renderer.syncNavigation(model);
+        setError(null);
+      } catch (navigationError) {
+        setError(messageFromError(navigationError));
+      }
+      scheduleRender();
     };
 
     if (primary && !shift && !alt) {
@@ -450,7 +454,7 @@ function App() {
         Math.floor(event.clientX - rect.left),
         Math.floor(event.clientY - rect.top),
       );
-      scheduleRender(false);
+      scheduleRender();
       setError(null);
     } catch (selectionError) {
       setError(messageFromError(selectionError));

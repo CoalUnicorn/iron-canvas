@@ -132,6 +132,26 @@ impl CanvasRenderer {
         self.paint(model)
     }
 
+    /// Reconcile the controller after the host changes the selection directly.
+    ///
+    /// Call this before a following wheel event. The controller then reveals
+    /// the engine selection before the wheel changes the pixel position.
+    #[wasm_bindgen(js_name = syncNavigation)]
+    pub fn sync_navigation(&mut self, model: &mut Model) -> Result<(), JsValue> {
+        let (width, height) = self.metrics.size().to_logical_extent();
+        if width == 0 || height == 0 {
+            return Ok(());
+        }
+        self.ensure_view_imported(model)?;
+        let scope = self.scope(model)?;
+        let axes = self.axes_for_selected_sheet(model)?;
+        let viewport = self.viewport_context()?;
+        self.scroll
+            .navigation_applied(model.user_model_mut(), scope, &axes, viewport)
+            .map(|_| ())
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
     /// Paint the current model view.
     ///
     /// Set `reveal_active` after a navigation command. The renderer then
@@ -143,22 +163,11 @@ impl CanvasRenderer {
         if width == 0 || height == 0 {
             return Ok(());
         }
-        if reveal_active {
-            self.ensure_view_imported(model)?;
-            let scope = self.scope(model)?;
-            let axes = self.axes_for_selected_sheet(model)?;
-            let viewport = self.viewport_context()?;
-            if let Err(error) =
-                self.scroll
-                    .navigation_applied(model.user_model_mut(), scope, &axes, viewport)
-            {
-                // An engine write can fail after it moves the view. Present
-                // the actual view and report the failure once.
-                let presentation = self.paint(model);
-                return Err(presentation
-                    .err()
-                    .unwrap_or_else(|| JsValue::from_str(&error.to_string())));
-            }
+        if reveal_active && let Err(error) = self.sync_navigation(model) {
+            // An engine write can fail after it moves the view. Present the
+            // actual view and report the failure once.
+            let presentation = self.paint(model);
+            return Err(presentation.err().unwrap_or(error));
         }
         self.paint(model)?;
         self.update_window(model);
