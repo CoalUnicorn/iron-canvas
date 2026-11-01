@@ -37,6 +37,7 @@ The module exports `CanvasRenderer` and `Model`. The renderer methods are:
 new CanvasRenderer(canvas: HTMLCanvasElement);
 resize(model: Model, width: number, height: number, dpr: number): void;
 reset(): void;
+setRevision(revision: number): void;
 syncNavigation(model: Model): void;
 render(model: Model, revealActive: boolean): void;
 invalidateFonts(model: Model): void;
@@ -45,6 +46,10 @@ selectAt(model: Model, x: number, y: number): void;
 cellRect(row: number, column: number): number[];
 cellFragmentRects(row: number, column: number): number[];
 ```
+
+Call `setRevision` with a higher number after any cell or dimension edit.
+The revision keys the worksheet and axis caches. Revisions must not decrease;
+call `reset` to start a new workbook.
 
 Call `syncNavigation` after the host changes the selection directly. It
 reconciles the controller before a following wheel event, so the event order

@@ -136,6 +136,25 @@ impl CanvasRenderer {
         self.paint(model)
     }
 
+    /// Set the content revision after a workbook edit.
+    ///
+    /// The revision feeds the worksheet cache and the axis cache. Call this
+    /// before the next render after any cell or dimension change. Revisions
+    /// must not decrease; use `reset` for a new workbook.
+    #[wasm_bindgen(js_name = setRevision)]
+    pub fn set_revision(&mut self, revision: u64) -> Result<(), JsValue> {
+        if revision < self.revision {
+            return Err(JsValue::from_str("content revision must not decrease"));
+        }
+        if revision == self.revision {
+            return Ok(());
+        }
+        self.revision = revision;
+        self.cache.clear();
+        self.axes.clear();
+        Ok(())
+    }
+
     /// Reconcile the controller after the host changes the selection directly.
     ///
     /// Call this before a following wheel event. The controller then reveals
