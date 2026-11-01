@@ -127,11 +127,7 @@ fn cf_fixture_session_paints_colored_primitives_and_preserves_pixels_on_failure(
                 workbook_id: 1,
                 revision: 1,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 1100,
-                height: 700,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 1100, 700),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -217,11 +213,7 @@ fn composed_merge_overlay_restores_candidate_pixels_at_both_scales() {
                 workbook_id: 5,
                 revision: 1,
             },
-            viewport: WorksheetViewport {
-                first_cell: coord(4, 4),
-                width: 500,
-                height: 300,
-            },
+            viewport: WorksheetViewport::aligned(coord(4, 4), 500, 300),
             theme: CanvasTheme::light(),
             overlays: OverlayState::default(),
         };
@@ -346,11 +338,7 @@ fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 2 },
-                width: 348,
-                height: 280,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 2 }, 348, 280),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -380,14 +368,14 @@ fn text_spill_edits_offscreen_sources_and_overlays_match_fresh() {
                 }
                 5 => {
                     request.overlays = Default::default();
-                    request.viewport.first_cell.row = 2;
+                    request.viewport.scroll.first_cell.row = 2;
                 }
                 6 => model.set_columns_hidden(0, 3, 3, true).unwrap(),
                 7 => model.set_columns_hidden(0, 3, 3, false).unwrap(),
                 8 => {
                     model.set_frozen_columns_count(0, 2).unwrap();
                     model.set_frozen_rows_count(0, 2).unwrap();
-                    request.viewport.first_cell.col = 4;
+                    request.viewport.scroll.first_cell.col = 4;
                 }
                 _ => model
                     .merge_cells(&Area {
@@ -496,11 +484,7 @@ fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 400,
-                height: 300,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 300),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -512,7 +496,7 @@ fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
         for step in 0..6 {
             match step {
                 0 => {} // Equal text with a new revision exercises warm layout.
-                1 => request.viewport.first_cell.row = 2,
+                1 => request.viewport.scroll.first_cell.row = 2,
                 2 => model.set_columns_width(0, 1, 3, 65.0).unwrap(),
                 3 => model.update_range_style(&area, "font.b", "true").unwrap(),
                 4 => key = TextMetricsKey::new(1, 1),
@@ -526,6 +510,199 @@ fn warm_text_layout_matches_fresh_after_wrap_style_and_metric_changes() {
             assert!(outcome.extended_style_reads > 0);
             assert_fresh(&session, &model, &request, dpr);
         }
+    }
+}
+
+#[wasm_bindgen_test]
+fn offset_viewports_miss_content_cache_keep_metadata_and_match_fresh() {
+    use iron_canvas::{RenderStrategy, TextMetricsKey, WorksheetCache};
+    use ironcalc_base::types::Link;
+
+    let mut model = UserModel::new_empty("offset cache", "en", "UTC", "en").unwrap();
+    model.set_rows_height(0, 1, 20, 24.0).unwrap();
+    model.set_columns_width(0, 1, 20, 60.0).unwrap();
+    model.set_user_input(0, 5, 5, "offset cache").unwrap();
+    model
+        .set_cell_link(
+            0,
+            5,
+            5,
+            Link::External {
+                target: "https://example.test".into(),
+                tooltip: None,
+            },
+            None,
+        )
+        .unwrap();
+    let mut request = RenderRequest {
+        sheet: 0,
+        revision: RevisionToken {
+            workbook_id: 1,
+            revision: 0,
+        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 5, col: 5 }, 400, 300),
+        theme: CanvasTheme::light(),
+        overlays: Default::default(),
+    };
+    let dpr = 1.25;
+    let canvas = make_canvas();
+    let metrics = CanvasMetrics::new(CanvasSize { w: 400.0, h: 300.0 }, dpr).unwrap();
+    let mut session =
+        CanvasSession::new(Canvas2dSceneBackend::new(canvas.clone(), metrics).unwrap());
+    let mut cache = WorksheetCache::new(2);
+    let key = TextMetricsKey::new(1, 0);
+
+    let first = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(!first.content_cached);
+    let same = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(same.content_cached);
+    assert_eq!(same.strategy, RenderStrategy::Reuse);
+
+    request.viewport.scroll.offset_x = 7;
+    request.viewport.scroll.offset_y = 5;
+    let moved = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(
+        !moved.content_cached,
+        "an offset-only change is a content miss"
+    );
+    assert!(
+        moved.metadata_reused,
+        "link and merge metadata survive the move"
+    );
+    assert_eq!(moved.strategy, RenderStrategy::Fresh);
+    assert!(moved.extended_style_reads > 0);
+    assert_fresh(&session, &model, &request, dpr);
+    let repeat = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(repeat.content_cached);
+    assert_eq!(repeat.strategy, RenderStrategy::Reuse);
+
+    // A failed preparation keeps the committed frame and the cache entry.
+    let frame = session.committed_frame().cloned();
+    let before = pixels(&canvas);
+    let mut invalid = request.clone();
+    invalid.viewport.scroll.offset_x = 10_000;
+    assert!(
+        session
+            .render_cached(&mut cache, &model, &invalid, key)
+            .is_err()
+    );
+    assert_eq!(session.committed_frame(), frame.as_ref());
+    assert_eq!(pixels(&canvas), before);
+    let retry = session
+        .render_cached(&mut cache, &model, &request, key)
+        .unwrap();
+    assert!(retry.content_cached);
+    assert_eq!(retry.strategy, RenderStrategy::Reuse);
+    assert_eq!(pixels(&canvas), before);
+}
+
+#[wasm_bindgen_test]
+fn selection_union_headers_freeze_and_removal_match_fresh_at_four_scales() {
+    use iron_canvas::{
+        AreaId, SelectionArea, SelectionKind, SelectionMode, SelectionSnapshot, SelectionTarget,
+    };
+    use iron_canvas_core::{Point, scene_geometry::GridRange};
+    use ironcalc_base::expressions::types::Area;
+    let mut model = UserModel::new_empty("selection union", "en", "UTC", "en").unwrap();
+    model.set_rows_height(0, 1, 50, 24.0).unwrap();
+    model.set_columns_width(0, 1, 20, 60.0).unwrap();
+    model.set_frozen_rows_count(0, 2).unwrap();
+    model.set_frozen_columns_count(0, 2).unwrap();
+    model.set_rows_hidden(0, 2, 2, true).unwrap();
+    model.set_columns_hidden(0, 2, 2, true).unwrap();
+    model
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 5,
+            column: 5,
+            width: 2,
+            height: 2,
+        })
+        .unwrap();
+    let cell = |row, col| CellCoord { row, col };
+    let area = |id, first, last| {
+        SelectionArea::new(
+            AreaId(id),
+            SelectionTarget::new(SelectionKind::Cells, first, last, GridRange { first, last })
+                .unwrap(),
+        )
+    };
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let canvas = make_canvas();
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(canvas.clone(), metrics).unwrap());
+        let first = area(1, cell(1, 1), cell(6, 6));
+        let second = area(2, cell(3, 3), cell(8, 8));
+        let snapshot = |areas| {
+            SelectionSnapshot::new(1, 0, 1, areas, AreaId(1), cell(5, 5), SelectionMode::Normal)
+                .unwrap()
+        };
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport::aligned(cell(3, 3), 640, 400),
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        request.overlays.selection_snapshot = Some(snapshot(vec![first]));
+        session.render(&model, &request).unwrap();
+        let base = pixels(&canvas);
+        let rect = session.cell_rect(4, 4).unwrap();
+        let points = [
+            rect.center(),
+            Point {
+                x: 1,
+                y: rect.center().y,
+            },
+            Point {
+                x: rect.center().x,
+                y: 1,
+            },
+        ];
+        request.overlays.selection_snapshot = Some(snapshot(vec![first, second]));
+        assert_eq!(
+            session
+                .render(&model, &request)
+                .unwrap()
+                .extended_style_reads,
+            0
+        );
+        let union = pixels(&canvas);
+        for point in points {
+            let x = (f64::from(point.x) * dpr).floor() as usize;
+            let y = (f64::from(point.y) * dpr).floor() as usize;
+            let offset = (y * canvas.width() as usize + x) * 4;
+            assert_eq!(
+                &union[offset..offset + 4],
+                &base[offset..offset + 4],
+                "one fill at {point:?}, scale {dpr}"
+            );
+        }
+        assert_fresh(&session, &model, &request, dpr);
+        let old_frame = session.committed_frame().cloned();
+        request.revision.workbook_id = 2;
+        assert!(session.render(&model, &request).is_err());
+        assert_eq!(session.committed_frame(), old_frame.as_ref());
+        assert_eq!(pixels(&canvas), union);
+        request.revision.workbook_id = 1;
+        request.viewport.scroll.first_cell = cell(4, 4);
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
+        request.overlays.selection_snapshot = None;
+        session.render(&model, &request).unwrap();
+        assert_fresh(&session, &model, &request, dpr);
     }
 }
 
@@ -556,11 +733,7 @@ fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 640,
-                height: 400,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -601,7 +774,7 @@ fn shared_cache_tab_returns_and_pane_overlays_match_fresh() {
             .render_cached(&mut cache, &model, &request, key)
             .unwrap();
         assert_fresh(&first, &model, &request, dpr);
-        request.viewport.first_cell.row = 2;
+        request.viewport.scroll.first_cell.row = 2;
         assert!(
             !first
                 .render_cached(&mut cache, &model, &request, key)
@@ -647,11 +820,7 @@ fn retained_damage_scroll_overlay_and_revert_match_fresh() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 640,
-                height: 400,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -671,7 +840,7 @@ fn retained_damage_scroll_overlay_and_revert_match_fresh() {
             assert_fresh(&s, &model, &request, dpr);
         }
         for row in [2, 3, 2, 1] {
-            request.viewport.first_cell.row = row;
+            request.viewport.scroll.first_cell.row = row;
             assert_eq!(
                 s.render(&model, &request).unwrap().strategy,
                 if dpr == 1.3 {
@@ -747,11 +916,7 @@ fn cf_revisions_repaint_visible_results_of_offscreen_edits() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 400,
-                height: 160,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 160),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };
@@ -774,10 +939,77 @@ fn cf_revisions_repaint_visible_results_of_offscreen_edits() {
 }
 
 #[wasm_bindgen_test]
+fn vertical_pixel_blit_matches_fresh_at_four_scales() {
+    use iron_canvas::RenderStrategy;
+
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let mut model = UserModel::new_empty("pixel blit", "en", "UTC", "en").unwrap();
+        model.set_rows_height(0, 1, 80, 24.0).unwrap();
+        model.set_columns_width(0, 1, 20, 80.0).unwrap();
+        for row in 1..40 {
+            for col in 1..8 {
+                model
+                    .set_user_input(0, row, col, &format!("{row}-{col}"))
+                    .unwrap();
+            }
+        }
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
+            theme: CanvasTheme::light(),
+            overlays: Default::default(),
+        };
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        session.render(&model, &request).unwrap();
+        for offset in [4, 8, 4, 0] {
+            request.viewport.scroll.offset_y = offset;
+            let outcome = session.render(&model, &request).unwrap();
+            assert_eq!(
+                outcome.strategy,
+                RenderStrategy::Blit,
+                "offset {offset} at scale {dpr}"
+            );
+            assert_fresh(&session, &model, &request, dpr);
+        }
+        // Horizontal pixel movement stays on the Fresh path.
+        request.viewport.scroll.offset_x = 4;
+        assert_eq!(
+            session.render(&model, &request).unwrap().strategy,
+            RenderStrategy::Fresh
+        );
+        request.viewport.scroll.offset_x = 0;
+        session.render(&model, &request).unwrap();
+        if dpr == 1.25 {
+            // One logical pixel is not an integral device pixel at 1.25.
+            request.viewport.scroll.offset_y = 3;
+            assert_eq!(
+                session.render(&model, &request).unwrap().strategy,
+                RenderStrategy::Fresh
+            );
+            request.viewport.scroll.offset_y = 4;
+            session.render(&model, &request).unwrap();
+        }
+        // Frozen panes remain outside this optimization.
+        model.set_frozen_rows_count(0, 1).unwrap();
+        request.viewport.scroll.first_cell.row = 2;
+        request.viewport.scroll.offset_y = 0;
+        assert_eq!(
+            session.render(&model, &request).unwrap().strategy,
+            RenderStrategy::Fresh
+        );
+    }
+}
+
+#[wasm_bindgen_test]
 fn failed_partial_updates_keep_pixels_queries_and_fingerprints_until_retry() {
     use iron_canvas::{RenderBackend, RenderStrategy};
     use iron_canvas_core::{
-        Point,
         painter::TextMetrics,
         scene::{GridScene, retained::SceneUpdate},
     };
@@ -852,18 +1084,14 @@ fn failed_partial_updates_keep_pixels_queries_and_fingerprints_until_retry() {
             workbook_id: 1,
             revision: 0,
         },
-        viewport: WorksheetViewport {
-            first_cell: CellCoord { row: 1, col: 1 },
-            width: 400,
-            height: 200,
-        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 200),
         theme: CanvasTheme::light(),
         overlays: Default::default(),
     };
     session.render(&model, &request).unwrap();
     let old = pixels(&canvas);
     let frame = session.committed_frame().cloned();
-    let point = Point { x: 55, y: 30 };
+    let point = session.cell_rect(1, 1).expect("first cell rect").center();
     let link = session.link_at(point).cloned();
     model
         .set_cell_link(
@@ -923,11 +1151,7 @@ fn fixture_cf_edits_match_fresh_with_translucent_background() {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 1100,
-                height: 700,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 1100, 700),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         };

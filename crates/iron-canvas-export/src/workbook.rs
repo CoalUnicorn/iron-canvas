@@ -345,11 +345,7 @@ fn viewport_for_range(
         ));
     }
 
-    Ok(WorksheetViewport {
-        first_cell: range.first,
-        width,
-        height,
-    })
+    Ok(WorksheetViewport::aligned(range.first, width, height))
 }
 
 #[cfg(any(feature = "svg", feature = "pdf"))]

@@ -1,6 +1,7 @@
 use iron_canvas::{
-    CanvasSession, FormulaOverlay, FormulaRefHit, HostIntent, OverlayState, PointerAction,
-    RefCorner, RefZone, RenderBackend, RenderRequest, RevisionToken,
+    CanvasSession, FormulaOverlay, FormulaRefHit, HostIntent, OverlayError, OverlayState,
+    PointerAction, RefCorner, RefZone, RenderBackend, RenderError, RenderRequest, RevisionToken,
+    SELECTION_LIMIT,
 };
 use iron_canvas_core::{
     CanvasTheme, CellCoord, Point, Side,
@@ -10,7 +11,11 @@ use iron_canvas_core::{
 };
 use iron_canvas_export::{PdfSceneBackend, SvgSceneBackend};
 use iron_canvas_ironcalc::WorksheetViewport;
-use ironcalc_base::{UserModel, expressions::types::Area, types::Link};
+use ironcalc_base::{
+    UserModel,
+    expressions::types::Area,
+    types::{BorderItem, BorderStyle, Color, Link},
+};
 fn coord(row: i32, col: i32) -> CellCoord {
     CellCoord { row, col }
 }
@@ -27,11 +32,7 @@ fn request() -> RenderRequest {
             workbook_id: 1,
             revision: 1,
         },
-        viewport: WorksheetViewport {
-            first_cell: coord(5, 5),
-            width: 400,
-            height: 220,
-        },
+        viewport: WorksheetViewport::aligned(coord(5, 5), 400, 220),
         theme: CanvasTheme::light(),
         overlays: OverlayState::default(),
     }
@@ -46,6 +47,201 @@ fn workbook() -> UserModel<'static> {
     w.set_columns_hidden(0, 2, 2, true).unwrap();
     w
 }
+
+fn selection_fill_count(scene: &GridScene, theme: &CanvasTheme, point: Point) -> usize {
+    scene
+        .passes
+        .iter()
+        .flat_map(|pass| pass.iter())
+        .filter(|primitive| {
+            matches!(
+                primitive,
+                Primitive::RectFill { rect, color }
+                    if color.as_ref() == theme.selection_fill.as_ref()
+                        && iron_canvas_core::scene_geometry::contains(*rect, point)
+            )
+        })
+        .count()
+}
+
+fn header_fill_counts(overlays: OverlayState) -> (usize, usize) {
+    let w = workbook();
+    let mut request = request();
+    request.overlays = overlays;
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+    let cell = session.cell_rect(5, 5).unwrap();
+    let scene = &session.committed_frame().unwrap().worksheet.scene;
+    (
+        selection_fill_count(
+            scene,
+            &request.theme,
+            Point {
+                x: 1,
+                y: cell.center().y,
+            },
+        ),
+        selection_fill_count(
+            scene,
+            &request.theme,
+            Point {
+                x: cell.center().x,
+                y: 1,
+            },
+        ),
+    )
+}
+
+#[test]
+fn header_strips_follow_selection_kind() {
+    use iron_canvas::{
+        AreaId, SelectionArea, SelectionKind, SelectionMode, SelectionSnapshot, SelectionTarget,
+    };
+
+    let full_row = OverlayState {
+        selection: vec![range(5, 1, 5, 16_384)],
+        active_cell: Some(coord(5, 5)),
+        ..Default::default()
+    };
+    assert_eq!(header_fill_counts(full_row), (1, 0));
+    let full_column = OverlayState {
+        selection: vec![range(1, 5, 1_048_576, 5)],
+        active_cell: Some(coord(5, 5)),
+        ..Default::default()
+    };
+    assert_eq!(header_fill_counts(full_column), (0, 1));
+    let sheet = OverlayState {
+        selection: vec![range(1, 1, 1_048_576, 16_384)],
+        active_cell: Some(coord(5, 5)),
+        ..Default::default()
+    };
+    assert_eq!(header_fill_counts(sheet), (1, 1));
+
+    let snapshot = |kind: SelectionKind, target: GridRange| {
+        let area = SelectionArea::new(
+            AreaId(0),
+            SelectionTarget::new(kind, target.first, target.last, target).unwrap(),
+        );
+        OverlayState {
+            selection_snapshot: Some(
+                SelectionSnapshot::new(
+                    1,
+                    0,
+                    1,
+                    vec![area],
+                    AreaId(0),
+                    target.first,
+                    SelectionMode::Normal,
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        }
+    };
+    assert_eq!(
+        header_fill_counts(snapshot(SelectionKind::Rows, range(5, 1, 5, 16_384))),
+        (1, 0)
+    );
+    assert_eq!(
+        header_fill_counts(snapshot(SelectionKind::Columns, range(1, 5, 1_048_576, 5))),
+        (0, 1)
+    );
+}
+
+#[test]
+fn snapshots_override_legacy_input_and_union_fills_headers_without_multi_area_handles() {
+    use iron_canvas::{
+        AreaId, OverlayError, RenderError, SelectionArea, SelectionKind, SelectionMode,
+        SelectionSnapshot, SelectionTarget,
+    };
+    let w = workbook();
+    let mut request = request();
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    let areas = [range(1, 1, 7, 7), range(3, 3, 9, 9)]
+        .into_iter()
+        .enumerate()
+        .map(|(index, range)| {
+            SelectionArea::new(
+                AreaId(index as u64),
+                SelectionTarget::new(SelectionKind::Cells, range.first, range.last, range).unwrap(),
+            )
+        })
+        .collect();
+    let snapshot = SelectionSnapshot::new(
+        1,
+        0,
+        3,
+        areas,
+        AreaId(1),
+        coord(9, 9),
+        SelectionMode::Normal,
+    )
+    .unwrap();
+    request.overlays.selection_snapshot = Some(snapshot.clone());
+    session.render(&w, &request).unwrap();
+    let scene = session.committed_frame().unwrap().worksheet.scene.clone();
+    assert!(scene.passes.last().unwrap().is_empty());
+    let rect = session.cell_rect(5, 5).unwrap();
+    let geometry = session
+        .committed_frame()
+        .unwrap()
+        .worksheet
+        .geometry
+        .as_ref()
+        .unwrap();
+    for point in [
+        rect.center(),
+        Point {
+            x: 1,
+            y: rect.center().y,
+        },
+        Point {
+            x: rect.center().x,
+            y: 1,
+        },
+    ] {
+        let count = scene.passes.iter().flat_map(|pass| pass.iter()).filter(|primitive| {
+            matches!(primitive,Primitive::RectFill { rect,color } if color.as_ref() == request.theme.selection_fill && iron_canvas_core::scene_geometry::contains(*rect,point))
+        }).count();
+        assert_eq!(count, 1, "overlap at {point:?}");
+    }
+    assert_eq!(geometry.panes.len(), 4);
+    request.overlays.selection = vec![range(1, 1, 1, 1)];
+    request.overlays.active_cell = Some(coord(1, 1));
+    assert_eq!(
+        session.render(&w, &request).unwrap().extended_style_reads,
+        0
+    );
+    assert_eq!(session.committed_frame().unwrap().worksheet.scene, scene);
+    let before = session.committed_frame().cloned();
+    request.revision.workbook_id = 2;
+    assert!(matches!(
+        session.render(&w, &request),
+        Err(RenderError::InvalidOverlay(OverlayError::Workbook))
+    ));
+    assert_eq!(session.committed_frame(), before.as_ref());
+    request.revision.workbook_id = 1;
+    request.sheet = 1;
+    assert!(matches!(
+        session.render(&w, &request),
+        Err(RenderError::InvalidOverlay(OverlayError::Sheet))
+    ));
+    assert_eq!(session.committed_frame(), before.as_ref());
+}
+#[test]
+fn legacy_selection_limits_are_enforced_before_paint() {
+    let w = workbook();
+    let mut request = request();
+    request.overlays.selection = (1..=SELECTION_LIMIT as i32 + 1)
+        .map(|row| range(row, 1, row, 1))
+        .collect();
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    assert!(matches!(
+        session.render(&w, &request),
+        Err(RenderError::InvalidOverlay(OverlayError::AreaLimit))
+    ));
+}
+
 #[test]
 fn frozen_panes_hidden_axes_headers_and_explicit_sheet_share_hit_geometry() {
     let mut w = workbook();
@@ -236,7 +432,7 @@ fn failed_commit_keeps_old_merge_link_and_geometry_queries() {
         height: 4,
     })
     .unwrap();
-    req.viewport.first_cell = coord(7, 7);
+    req.viewport.scroll.first_cell = coord(7, 7);
     req.revision.revision += 1;
     session.backend_mut().fail = true;
     assert!(session.render(&w, &req).is_err());
@@ -257,6 +453,7 @@ fn pdf_and_svg_stage_the_identical_prepared_scene_with_overlays() {
     let w = workbook();
     let mut request = request();
     request.overlays = OverlayState {
+        selection_snapshot: None,
         selection: vec![range(1, 1, 7, 7)],
         active_cell: Some(coord(1, 1)),
         clipboard: Some(range(5, 5, 6, 6)),
@@ -427,6 +624,76 @@ fn dragged_range_overlay_covers_both_corners_and_draws_its_handle() {
                 && color.as_ref() == request.theme.selection_color.as_ref()
     )));
 }
+#[test]
+fn offset_viewport_clips_merge_text_border_and_overlay_queries() {
+    let mut w = workbook();
+    w.set_user_input(0, 5, 5, "offset").unwrap();
+    w.merge_cells(&Area {
+        sheet: 0,
+        row: 5,
+        column: 5,
+        width: 2,
+        height: 2,
+    })
+    .unwrap();
+    let mut style = w.get_cell_style(0, 5, 5).unwrap();
+    style.border.top = Some(BorderItem {
+        style: BorderStyle::Thin,
+        color: Color::Rgb("#123456".into()),
+    });
+    w.set_selected_cell(5, 5).unwrap();
+    w.on_paste_styles(&[vec![style]]).unwrap();
+    let mut request = request();
+    request.viewport = WorksheetViewport::aligned(coord(5, 5), 400, 220);
+    request.viewport.scroll.offset_x = 7;
+    request.viewport.scroll.offset_y = 5;
+    request.overlays.selection = vec![range(5, 5, 6, 6)];
+    request.overlays.active_cell = Some(coord(5, 5));
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+
+    let full = session.cell_rect(5, 5).expect("full cell rect");
+    let pane = session.scroll_pane_rect().expect("scroll pane");
+    assert!(full.left() < pane.left());
+    assert!(full.top() < pane.top());
+
+    let fragments = session.visible_fragments(range(5, 5, 6, 6));
+    assert_eq!(fragments.len(), 1);
+    let fragment = fragments[0];
+    assert_eq!(
+        (fragment.rect.left(), fragment.rect.top()),
+        (pane.left(), pane.top())
+    );
+    assert!(!fragment.edges[Side::Left.index()]);
+    assert!(!fragment.edges[Side::Top.index()]);
+    assert!(fragment.edges[Side::Right.index()]);
+    assert!(fragment.edges[Side::Bottom.index()]);
+    assert_eq!(
+        session.hit_test(Point {
+            x: pane.left() + 1,
+            y: pane.top() + 1,
+        }),
+        Some(GridHit::Cell(coord(5, 5)))
+    );
+
+    let scene = &session.committed_frame().unwrap().worksheet.scene;
+    let primitives = scene.passes.iter().flat_map(|pass| pass.iter());
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::Text { text, .. } if text == "offset"
+    )));
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::Line { color, .. } if color.as_ref() == "#123456"
+    )));
+    assert!(primitives.clone().any(|primitive| matches!(
+        primitive,
+        Primitive::RectFill { rect, color }
+            if *rect == fragment.rect
+                && color.as_ref() == request.theme.selection_fill.as_ref()
+    )));
+}
+
 #[test]
 fn active_cell_overlay_draws_an_autofill_handle() {
     let w = workbook();

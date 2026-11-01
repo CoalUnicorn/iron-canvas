@@ -553,8 +553,9 @@ mod tests {
     #[test]
     fn sampled_frozen_rows_can_consume_the_viewport() {
         use iron_canvas_core::scene_geometry::{GridGeometry, sample_bands};
-        let rows = sample_bands(900_000, LAST_ROW, 3, 0, 15, |_| Ok::<_, ()>(10.0)).unwrap();
-        let columns = sample_bands(10_000, LAST_COLUMN, 1, 0, 15, |_| Ok::<_, ()>(10.0)).unwrap();
+        let rows = sample_bands(900_000, LAST_ROW, 3, 0, 15, 0, |_| Ok::<_, ()>(10.0)).unwrap();
+        let columns =
+            sample_bands(10_000, LAST_COLUMN, 1, 0, 15, 0, |_| Ok::<_, ()>(10.0)).unwrap();
         let geometry = GridGeometry::new(
             PixelRect {
                 top_left: Point { x: 0, y: 0 },

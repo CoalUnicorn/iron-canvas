@@ -97,15 +97,11 @@ fn fixture(case: &str) -> (UserModel<'static>, WorksheetViewport) {
         model.set_rows_hidden(0, 3, 1002, true).unwrap();
         model.set_columns_hidden(0, 3, 1002, true).unwrap();
     }
-    let mut viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 1, col: 1 },
-        width: 1280,
-        height: 800,
-    };
+    let mut viewport = WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 1280, 800);
     if case == "frozen" {
         model.set_frozen_rows_count(0, 2).unwrap();
         model.set_frozen_columns_count(0, 2).unwrap();
-        viewport.first_cell = CellCoord {
+        viewport.scroll.first_cell = CellCoord {
             row: 10_000,
             col: 1000,
         };

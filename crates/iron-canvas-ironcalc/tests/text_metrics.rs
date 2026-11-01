@@ -43,11 +43,7 @@ fn area() -> Area {
     }
 }
 fn viewport() -> WorksheetViewport {
-    WorksheetViewport {
-        first_cell: CellCoord { row: 1, col: 1 },
-        width: 400,
-        height: 300,
-    }
+    WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 300)
 }
 
 #[test]

@@ -69,11 +69,7 @@ fn fixture() -> (UserModel<'static>, WorksheetViewport) {
     model.set_frozen_columns_count(0, 1).unwrap();
     (
         model,
-        WorksheetViewport {
-            first_cell: CellCoord { row: 2, col: 3 },
-            width: 850,
-            height: 330,
-        },
+        WorksheetViewport::aligned(CellCoord { row: 2, col: 3 }, 850, 330),
     )
 }
 

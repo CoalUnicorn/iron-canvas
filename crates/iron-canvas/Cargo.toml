@@ -18,7 +18,8 @@ ironcalc_base.workspace = true
 iron-canvas-native = { path = "../iron-canvas-native" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-gtk4 = "0.9"
+gtk4 = { version = "0.9", features = ["v4_8"] }
+iron-canvas-navigation = { path = "../iron-canvas-navigation" }
 ironcalc.workspace = true
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]

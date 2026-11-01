@@ -162,11 +162,7 @@ mod tests {
                 workbook_id: 1,
                 revision: 0,
             },
-            viewport: WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 200,
-                height: 80,
-            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 200, 80),
             theme: CanvasTheme::light(),
             overlays: Default::default(),
         }
@@ -202,7 +198,15 @@ mod tests {
             CacheLookup::Geometry(_)
         ));
         changed = original.clone();
-        changed.viewport.first_cell.row += 1;
+        changed.viewport.scroll.first_cell.row += 1;
+        assert!(matches!(
+            cache.lookup(&changed, METRICS),
+            CacheLookup::Geometry(_)
+        ));
+        // Offset-only movement is still a different viewport.
+        changed = original.clone();
+        changed.viewport.scroll.offset_x = 1;
+        changed.viewport.scroll.offset_y = 1;
         assert!(matches!(
             cache.lookup(&changed, METRICS),
             CacheLookup::Geometry(_)

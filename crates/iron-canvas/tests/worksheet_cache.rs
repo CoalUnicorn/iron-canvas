@@ -95,11 +95,7 @@ fn fixture() -> (UserModel<'static>, RenderRequest) {
             workbook_id: 1,
             revision: 0,
         },
-        viewport: WorksheetViewport {
-            first_cell: CellCoord { row: 1, col: 1 },
-            width: 400,
-            height: 200,
-        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 200),
         theme: CanvasTheme::light(),
         overlays: Default::default(),
     };
@@ -167,14 +163,14 @@ fn metadata_does_not_cross_workbook_sheet_or_bypass_boundaries() {
                 3 => {} // Fresh below bypasses both cache sources.
                 4 => {
                     cache.clear();
-                    request.viewport.first_cell.row += 1;
+                    request.viewport.scroll.first_cell.row += 1;
                     if !shared {
                         session.invalidate();
                     }
                 }
                 _ => {
                     cache.set_capacity(0);
-                    request.viewport.first_cell.row += 1;
+                    request.viewport.scroll.first_cell.row += 1;
                     if !shared {
                         session.invalidate();
                     }
@@ -233,7 +229,7 @@ fn failed_metadata_candidate_preserves_committed_data_and_shared_entry() {
     let (old_model, _) = metadata_fixture();
     let mut reader = CanvasSession::new(Backend::new(6.0));
     let mut scrolled = old_request;
-    scrolled.viewport.first_cell.row += 1;
+    scrolled.viewport.scroll.first_cell.row += 1;
     reader
         .render_cached(&mut cache, &old_model, &scrolled, METRICS)
         .unwrap();
@@ -268,7 +264,7 @@ fn local_metadata_survives_scroll_resize_and_theme_changes() {
     let original = session.committed_frame().unwrap().worksheet.clone();
     for change in 0..3 {
         match change {
-            0 => request.viewport.first_cell.row += 1,
+            0 => request.viewport.scroll.first_cell.row += 1,
             1 => request.viewport.width += 30,
             _ => request.theme = CanvasTheme::dark(),
         }
@@ -298,7 +294,7 @@ fn shared_metadata_survives_session_viewport_theme_and_metric_changes() {
         .unwrap();
     let original = first.committed_frame().unwrap().worksheet.clone();
     let mut second = CanvasSession::new(Backend::new(10.0));
-    request.viewport.first_cell.row += 1;
+    request.viewport.scroll.first_cell.row += 1;
     request.theme = CanvasTheme::dark();
     let result = second
         .render_cached(&mut cache, &model, &request, TextMetricsKey::new(2, 1))
@@ -341,7 +337,7 @@ fn reused_metadata_keeps_offscreen_merge_anchors_and_linked_spill_sources() {
         .render_cached(&mut cache, &model, &request, METRICS)
         .unwrap();
     let previous = session.committed_frame().unwrap().worksheet.clone();
-    request.viewport.first_cell = CellCoord { row: 5, col: 2 };
+    request.viewport.scroll.first_cell = CellCoord { row: 5, col: 2 };
     session
         .render_cached(&mut cache, &model, &request, METRICS)
         .unwrap();
@@ -629,7 +625,7 @@ fn revisions_theme_viewport_and_workbook_identity_follow_validity_rules() {
     assert!(result.reused_geometry);
     assert!(result.extended_style_reads > 0);
     assert_fresh(&session, &model, &request);
-    request.viewport.first_cell.row += 1;
+    request.viewport.scroll.first_cell.row += 1;
     assert!(
         !session
             .render_cached(&mut cache, &model, &request, METRICS)

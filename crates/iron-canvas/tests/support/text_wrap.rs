@@ -46,11 +46,7 @@ pub fn fixture() -> (UserModel<'static>, RenderRequest) {
             workbook_id: 71,
             revision: 0,
         },
-        viewport: WorksheetViewport {
-            first_cell: CellCoord { row: 1, col: 1 },
-            width: 500,
-            height: 600,
-        },
+        viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 500, 600),
         theme: CanvasTheme::light(),
         overlays: Default::default(),
     };

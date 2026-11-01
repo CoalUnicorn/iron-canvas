@@ -59,11 +59,7 @@ impl ViewerState {
                     workbook_id: 1,
                     revision: 1,
                 },
-                viewport: WorksheetViewport {
-                    first_cell: CellCoord { row: 1, col: 1 },
-                    width: 900,
-                    height: 620,
-                },
+                viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 900, 620),
                 theme: CanvasTheme::light(),
                 overlays: Default::default(),
             },
@@ -208,7 +204,7 @@ fn draw_frame(
     state.request.viewport.width = width;
     state.request.viewport.height = height;
     if let Some(first_cell) = state.viewports.get(sheet as usize) {
-        state.request.viewport.first_cell = *first_cell;
+        state.request.viewport.scroll.first_cell = *first_cell;
     }
     let ViewerState {
         workbook,

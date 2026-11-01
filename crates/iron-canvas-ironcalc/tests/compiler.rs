@@ -34,11 +34,7 @@ fn prepared(workbook: &UserModel<'_>) -> PreparedWorksheet {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 100,
-                height: 30,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 100, 30),
             &Metrics,
         )
         .unwrap()
@@ -92,11 +88,7 @@ fn geometry_and_metadata_reuse_remain_independent() {
                         sheet: 0,
                         theme: &theme,
                     },
-                    WorksheetViewport {
-                        first_cell: CellCoord { row: 1, col: 1 },
-                        width: 100,
-                        height: 30,
-                    },
+                    WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 100, 30),
                     &mut shaper,
                     reuse,
                 )
@@ -131,11 +123,7 @@ fn viewport_placements_keep_pane_order_and_full_bounds() {
     workbook.set_frozen_columns_count(0, 2).unwrap();
     workbook.set_rows_hidden(0, 2, 2, true).unwrap();
     workbook.set_columns_hidden(0, 2, 2, true).unwrap();
-    let viewport = WorksheetViewport {
-        first_cell: CellCoord { row: 5, col: 5 },
-        width: 180,
-        height: 82,
-    };
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 5, col: 5 }, 180, 82);
     let prepared = WorksheetCompiler::new()
         .prepare(
             WorksheetContext {
@@ -150,16 +138,14 @@ fn viewport_placements_keep_pane_order_and_full_bounds() {
 
     // The last row and column cross the viewport edge. Their placements
     // retain full bounds so callers can position text before clipping.
+    // The reserved header fits seven digits: 7 * 8 + 16 = 72.
     let expected: Vec<_> = [
-        (1, 1, 48, 24),
-        (1, 5, 108, 24),
-        (1, 6, 168, 24),
-        (5, 1, 48, 48),
-        (6, 1, 48, 72),
-        (5, 5, 108, 48),
-        (5, 6, 168, 48),
-        (6, 5, 108, 72),
-        (6, 6, 168, 72),
+        (1, 1, 72, 24),
+        (1, 5, 132, 24),
+        (5, 1, 72, 48),
+        (6, 1, 72, 72),
+        (5, 5, 132, 48),
+        (6, 5, 132, 72),
     ]
     .into_iter()
     .map(|(row, col, x, y)| CellPlacement {
@@ -246,11 +232,7 @@ fn empty_viewports_and_explicit_input_have_no_placements() {
                     sheet: 0,
                     theme: &CanvasTheme::light(),
                 },
-                WorksheetViewport {
-                    first_cell: CellCoord { row: 1, col: 1 },
-                    width,
-                    height,
-                },
+                WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, width, height),
                 &Metrics,
             )
             .unwrap();
@@ -382,11 +364,7 @@ fn invalid_sheet_is_rejected_even_without_cells() {
                     sheet: u32::MAX,
                     theme: &CanvasTheme::light()
                 },
-                WorksheetViewport {
-                    first_cell: CellCoord { row: 1, col: 1 },
-                    width: 0,
-                    height: 0
-                },
+                WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 0, 0),
                 &Metrics,
             )
             .is_err()
@@ -500,11 +478,7 @@ fn explicit_sheet_does_not_change_selection() {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 100,
-                height: 30,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 100, 30),
             &Metrics,
         )
         .unwrap();
@@ -730,4 +704,114 @@ fn linked_cells_paint_the_link_color_and_an_underline() {
     assert_eq!(static_color, formula_color);
     assert_ne!(static_color, plain_color);
     assert_eq!(plain_color, theme.default_text_color.as_ref());
+}
+
+#[test]
+fn pixel_offsets_shift_scrolling_slots_but_not_frozen_slots() {
+    use iron_canvas_core::{Side, scene_geometry::GridRange};
+
+    let mut workbook = UserModel::new_empty("offsets", "en", "UTC", "en").unwrap();
+    workbook.set_rows_height(0, 1, 10, 20.0).unwrap();
+    workbook.set_columns_width(0, 1, 10, 30.0).unwrap();
+    workbook.set_frozen_rows_count(0, 1).unwrap();
+    workbook.set_frozen_columns_count(0, 1).unwrap();
+    let mut viewport = WorksheetViewport::aligned(CellCoord { row: 3, col: 3 }, 200, 120);
+    viewport.scroll.offset_x = 7;
+    viewport.scroll.offset_y = 5;
+    let prepared = WorksheetCompiler::new()
+        .prepare(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            &Metrics,
+        )
+        .unwrap();
+    let origin = prepared.geometry.as_ref().unwrap().origin;
+    let rect = |row, col| {
+        prepared
+            .cells()
+            .find(|cell| cell.coordinate == CellCoord { row, col })
+            .unwrap()
+            .bounds
+    };
+    // Frozen slots do not move. Scrolling slots subtract both offsets.
+    assert_eq!(
+        rect(1, 1).top_left,
+        Point {
+            x: origin.x,
+            y: origin.y
+        }
+    );
+    assert_eq!(
+        rect(3, 3).top_left,
+        Point {
+            x: origin.x + 30 - 7,
+            y: origin.y + 20 - 5,
+        }
+    );
+    let geometry = prepared.geometry.as_ref().unwrap();
+    let fragment = geometry
+        .fragments(GridRange {
+            first: CellCoord { row: 3, col: 3 },
+            last: CellCoord { row: 3, col: 3 },
+        })
+        .into_iter()
+        .find(|fragment| fragment.range.first == CellCoord { row: 3, col: 3 })
+        .unwrap();
+    // The visible fragment clips at the scroll pane, not the cell start.
+    assert_eq!(
+        (fragment.rect.left(), fragment.rect.top()),
+        (origin.x + 30, origin.y + 20)
+    );
+    assert!(!fragment.edges[Side::Left.index()]);
+    assert!(!fragment.edges[Side::Top.index()]);
+    assert!(fragment.edges[Side::Right.index()]);
+    assert!(fragment.edges[Side::Bottom.index()]);
+    assert_eq!(
+        geometry.hit_test(Point {
+            x: origin.x + 32,
+            y: origin.y + 22,
+        }),
+        Some(iron_canvas_core::scene_geometry::GridHit::Cell(CellCoord {
+            row: 3,
+            col: 3,
+        }))
+    );
+}
+
+#[test]
+fn invalid_scroll_origins_are_rejected_against_live_dimensions() {
+    let mut workbook = UserModel::new_empty("origins", "en", "UTC", "en").unwrap();
+    workbook.set_rows_hidden(0, 3, 3, true).unwrap();
+    workbook.set_frozen_rows_count(0, 1).unwrap();
+    workbook.set_frozen_columns_count(0, 1).unwrap();
+    let compile = |viewport| {
+        WorksheetCompiler::new().prepare(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            viewport,
+            &Metrics,
+        )
+    };
+    let aligned = WorksheetViewport::aligned(CellCoord { row: 2, col: 2 }, 200, 100);
+    assert!(compile(aligned).is_ok());
+    // The offset must stay inside the first cell.
+    let mut outside = aligned;
+    outside.scroll.offset_y = 25;
+    assert!(compile(outside).is_err());
+    // A hidden first cell cannot name a scrolling origin.
+    let mut hidden = aligned;
+    hidden.scroll.first_cell.row = 3;
+    assert!(compile(hidden).is_err());
+    // A frozen origin cannot carry a nonzero offset.
+    let mut frozen = aligned;
+    frozen.scroll.first_cell = CellCoord { row: 1, col: 1 };
+    frozen.scroll.offset_x = 1;
+    assert!(compile(frozen).is_err());
 }

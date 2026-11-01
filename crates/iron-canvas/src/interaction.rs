@@ -61,6 +61,7 @@ pub enum PointerAction {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostIntent {
+    Navigate(crate::NavigationIntent),
     Select {
         sheet: u32,
         anchor: CellCoord,
@@ -156,6 +157,11 @@ impl<B: RenderBackend> CanvasSession<B> {
                 .find(|l| l.row == range.first.row && l.column == range.first.col),
         })
     }
+    /// Visible pieces of a range, clipped to each pane. Use [`cell_rect`] for
+    /// an editor's full text box and these fragments to clip its surface.
+    /// An empty result hides the editor surface.
+    ///
+    /// [`cell_rect`]: Self::cell_rect
     pub fn visible_fragments(&self, range: GridRange) -> Vec<RangeFragment> {
         self.committed_frame()
             .and_then(|f| f.worksheet.geometry.as_ref())
@@ -198,7 +204,7 @@ impl<B: RenderBackend> CanvasSession<B> {
     /// after freeze clamping. Falls back to the requested viewport on an axis
     /// with no scrolling band (a frozen band that consumed the extent).
     pub fn scroll_origin(&self) -> Option<CellCoord> {
-        let requested = self.committed.as_ref()?.request.viewport.first_cell;
+        let requested = self.committed.as_ref()?.request.viewport.scroll.first_cell;
         let geometry = self.committed_geometry();
         let row = geometry
             .and_then(|g| g.row_bands.iter().find(|b| !b.frozen))

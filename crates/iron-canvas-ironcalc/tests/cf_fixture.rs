@@ -133,11 +133,7 @@ fn cf_fixture_renders_through_svg_backend() {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport {
-                first_cell: CellCoord { row: 1, col: 1 },
-                width: 1100,
-                height: 700,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 1100, 700),
             backend.metrics(),
         )
         .unwrap();
@@ -167,11 +163,7 @@ fn compiler_suppresses_hidden_values_but_keeps_icon_primitives() {
                 sheet: 0,
                 theme: &CanvasTheme::light(),
             },
-            WorksheetViewport {
-                first_cell: CellCoord { row: 17, col: 2 },
-                width: 58,
-                height: 34,
-            },
+            WorksheetViewport::aligned(CellCoord { row: 17, col: 2 }, 90, 34),
             backend.metrics(),
         )
         .unwrap();
@@ -291,11 +283,7 @@ fn cf_fixture_shared_scene_reaches_native_raster_at_two_scales() {
                     sheet,
                     theme: &CanvasTheme::light(),
                 },
-                WorksheetViewport {
-                    first_cell: CellCoord { row: 1, col: 1 },
-                    width: 1100,
-                    height: 700,
-                },
+                WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 1100, 700),
                 svg.metrics(),
             )
             .unwrap();
