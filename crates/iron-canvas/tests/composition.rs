@@ -47,6 +47,106 @@ fn workbook() -> UserModel<'static> {
     w
 }
 
+fn selection_fill_count(scene: &GridScene, theme: &CanvasTheme, point: Point) -> usize {
+    scene
+        .passes
+        .iter()
+        .flat_map(|pass| pass.iter())
+        .filter(|primitive| {
+            matches!(
+                primitive,
+                Primitive::RectFill { rect, color }
+                    if color.as_ref() == theme.selection_fill.as_ref()
+                        && iron_canvas_core::scene_geometry::contains(*rect, point)
+            )
+        })
+        .count()
+}
+
+fn header_fill_counts(overlays: OverlayState) -> (usize, usize) {
+    let w = workbook();
+    let mut request = request();
+    request.overlays = overlays;
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    session.render(&w, &request).unwrap();
+    let cell = session.cell_rect(5, 5).unwrap();
+    let scene = &session.committed_frame().unwrap().worksheet.scene;
+    (
+        selection_fill_count(
+            scene,
+            &request.theme,
+            Point {
+                x: 1,
+                y: cell.center().y,
+            },
+        ),
+        selection_fill_count(
+            scene,
+            &request.theme,
+            Point {
+                x: cell.center().x,
+                y: 1,
+            },
+        ),
+    )
+}
+
+#[test]
+fn header_strips_follow_selection_kind() {
+    use iron_canvas::{
+        AreaId, SelectionArea, SelectionKind, SelectionMode, SelectionSnapshot, SelectionTarget,
+    };
+
+    let full_row = OverlayState {
+        selection: vec![range(5, 1, 5, 16_384)],
+        active_cell: Some(coord(5, 5)),
+        ..Default::default()
+    };
+    assert_eq!(header_fill_counts(full_row), (1, 0));
+    let full_column = OverlayState {
+        selection: vec![range(1, 5, 1_048_576, 5)],
+        active_cell: Some(coord(5, 5)),
+        ..Default::default()
+    };
+    assert_eq!(header_fill_counts(full_column), (0, 1));
+    let sheet = OverlayState {
+        selection: vec![range(1, 1, 1_048_576, 16_384)],
+        active_cell: Some(coord(5, 5)),
+        ..Default::default()
+    };
+    assert_eq!(header_fill_counts(sheet), (1, 1));
+
+    let snapshot = |kind: SelectionKind, target: GridRange| {
+        let area = SelectionArea::new(
+            AreaId(0),
+            SelectionTarget::new(kind, target.first, target.last, target).unwrap(),
+        );
+        OverlayState {
+            selection_snapshot: Some(
+                SelectionSnapshot::new(
+                    1,
+                    0,
+                    1,
+                    vec![area],
+                    AreaId(0),
+                    target.first,
+                    SelectionMode::Normal,
+                )
+                .unwrap(),
+            ),
+            ..Default::default()
+        }
+    };
+    assert_eq!(
+        header_fill_counts(snapshot(SelectionKind::Rows, range(5, 1, 5, 16_384))),
+        (1, 0)
+    );
+    assert_eq!(
+        header_fill_counts(snapshot(SelectionKind::Columns, range(1, 5, 1_048_576, 5))),
+        (0, 1)
+    );
+}
+
 #[test]
 fn snapshots_override_legacy_input_and_union_fills_headers_without_multi_area_handles() {
     use iron_canvas::{

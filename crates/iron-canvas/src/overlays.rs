@@ -164,13 +164,31 @@ pub(crate) fn compose(
         }
     }
     // Header highlights stay clipped to their strips and preserve the labels.
+    // A full-row selection highlights the row strip only. A full-column
+    // selection highlights the column strip only. Cells and whole sheets keep
+    // the covered row and column spans.
     let mut header = SceneBuilder::default();
     let mut rows = Vec::new();
     let mut columns = Vec::new();
-    for range in &ranges {
+    let kinds: Vec<Option<SelectionKind>> = state.selection_snapshot.as_ref().map_or_else(
+        || ranges.iter().map(|_| None).collect(),
+        |snapshot| {
+            snapshot
+                .areas()
+                .iter()
+                .map(|area| Some(area.target().kind()))
+                .collect()
+        },
+    );
+    for (range, kind) in ranges.iter().zip(kinds) {
+        let (row_strip, column_strip) = header_strips(*range, kind);
         for fragment in geometry.fragments(*range) {
-            rows.push((fragment.rect.top(), fragment.rect.bottom()));
-            columns.push((fragment.rect.left(), fragment.rect.right()));
+            if row_strip {
+                rows.push((fragment.rect.top(), fragment.rect.bottom()));
+            }
+            if column_strip {
+                columns.push((fragment.rect.left(), fragment.rect.right()));
+            }
         }
     }
     for (spans, side) in [(&mut rows, Side::Right), (&mut columns, Side::Bottom)] {
@@ -239,6 +257,22 @@ pub(crate) fn compose(
     worksheet.scene.passes.push(header.finish());
     worksheet.scene.passes.push(autofill.finish());
 }
+
+/// Which header strips a selection covers.
+fn header_strips(range: GridRange, kind: Option<SelectionKind>) -> (bool, bool) {
+    if let Some(kind) = kind {
+        return match kind {
+            SelectionKind::Rows => (true, false),
+            SelectionKind::Columns => (false, true),
+            SelectionKind::Cells | SelectionKind::Sheet => (true, true),
+        };
+    }
+    let range = range.normalized();
+    let full_rows = range.first.col == 1 && range.last.col == LAST_COLUMN;
+    let full_columns = range.first.row == 1 && range.last.row == LAST_ROW;
+    (full_rows || !full_columns, full_columns || !full_rows)
+}
+
 fn outline(out: &mut SceneBuilder, rect: PixelRect, edges: [bool; 4], color: &str, dashed: bool) {
     if rect.width <= 1 || rect.height <= 1 {
         return;
