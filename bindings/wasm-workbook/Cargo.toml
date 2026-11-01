@@ -1,0 +1,37 @@
+[workspace]
+
+[package]
+name = "iron-canvas-wasm-workbook"
+version = "0.1.0-beta.2"
+authors = ["CoalUnicorn"]
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
+
+[dependencies]
+# The workbook binding paints IronCalc's own WebAssembly model with Iron
+# Canvas. Build the sibling IronCalc checkout first; wasm-pack uses its rlib
+# export.
+wasm = { path = "../../../IronCalc/bindings/wasm", features = ["xlsx"] }
+ironcalc_base = { path = "../../../IronCalc/base" }
+iron-canvas = { path = "../../crates/iron-canvas" }
+iron-canvas-core = { path = "../../crates/iron-canvas-core" }
+iron-canvas-ironcalc = { path = "../../crates/iron-canvas-ironcalc" }
+iron-canvas-navigation = { path = "../../crates/iron-canvas-navigation" }
+iron-canvas-wasm = { path = "../wasm", default-features = false }
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["CanvasRenderingContext2d", "HtmlCanvasElement"] }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.70"
+
+# The sibling checkout uses path dependencies. Patch the same packages so
+# one `UserModel` type serves both the engine binding and Iron Canvas.
+[patch."https://github.com/CoalUnicorn/IronCalc"]
+ironcalc_base = { path = "../../../IronCalc/base" }
+ironcalc = { path = "../../../IronCalc/xlsx" }

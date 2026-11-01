@@ -199,9 +199,9 @@ moveScroll(position: ScrollPosition, dx: number, dy: number, rows: ScrollAxis, r
 `moveScroll` uses positive deltas to move content left and up. `ScrollWindow`
 uses an inclusive `last` index.
 
-The React example keeps workbook glue in `examples/react/wasm`. It links
-`SceneTarget` from this crate with the `js` feature disabled, so the example
-owns the only JavaScript surface.
+The React example consumes `bindings/wasm-workbook`. That crate links
+`SceneTarget` from this crate with the `js` feature disabled, so it owns the
+only JavaScript surface.
 
 ## Rust hosts
 

@@ -1,8 +1,9 @@
-//! React example canvas renderer for IronCalc's WebAssembly model.
+//! Workbook renderer binding for IronCalc's WebAssembly model.
 //!
 //! IronCalc owns the workbook, the selected view, and navigation. This crate
-//! only paints the committed model view with Iron Canvas. The React host calls
-//! `Model` methods directly and asks this renderer for a frame.
+//! paints the committed model view with Iron Canvas. A JavaScript host calls
+//! `Model` methods directly and asks this renderer for a frame. The React
+//! example consumes this crate; it holds no wasm adapter of its own.
 
 pub use wasm::Model;
 

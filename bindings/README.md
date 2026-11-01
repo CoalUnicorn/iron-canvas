@@ -8,6 +8,9 @@ its host-facing API separate from the renderer's core Rust API.
   scroll arithmetic. Its rlib exports `SceneTarget` for linked hosts; disable
   the `js` feature when another cdylib owns the JavaScript API. It has no
   workbook or XLSX API.
+- `wasm-workbook/` contains the IronCalc `Model` binding used by the React
+  example. It depends on the IronCalc checkout and on `wasm/`'s `SceneTarget`.
+  It is a separate Cargo workspace because of its IronCalc path patches.
 - `nodejs/` and `python/` are reserved for future Node.js and Python adapters;
   those bindings are not implemented yet.
 

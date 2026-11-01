@@ -10,7 +10,7 @@ import init, {
   CanvasRenderer,
   Model,
   columnNameFromNumber,
-} from "../wasm/pkg/iron_canvas_react_example.js";
+} from "../pkg/iron_canvas_wasm_workbook.js";
 import "./style.css";
 
 interface SheetTab {

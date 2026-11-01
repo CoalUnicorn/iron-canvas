@@ -229,9 +229,9 @@ Forward device pixel ratio as `f64`; only backing-size conversion rounds.
 - `bindings/wasm` is scene-only. `CanvasRenderer` accepts an Iron Canvas scene
   and draws it with `Canvas2dSceneBackend`. Its rlib exports `SceneTarget` for
   linked hosts. It has no engine dependency.
-- `examples/react/wasm` is an app-specific `cdylib`. It holds a
-  `CanvasSession<SceneTarget>`, links `bindings/wasm` with `js` disabled, and
-  owns the only JavaScript surface. Read it for the single-module pattern.
+- `bindings/wasm-workbook` is an app-specific `cdylib`. It holds a
+  `CanvasSession<SceneTarget>` and owns the JavaScript workbook surface. The
+  React example consumes it and has no wasm adapter of its own.
 - Do not send scenes or cell data across the JavaScript boundary when the host
   can link the crates into one module.
 
@@ -253,7 +253,7 @@ Forward device pixel ratio as `f64`; only backing-size conversion rounds.
 | `crates/iron-canvas-native/src/` | Cairo/Pango painter and native backend |
 | `crates/iron-canvas-export/src/{svg,pdf,common}/`, `workbook.rs` | export painters, backends, workbook export |
 | `bindings/wasm/src/lib.rs` | scene-only JS adapter |
-| `examples/react/wasm/src/lib.rs` | single-module host pattern |
+| `bindings/wasm-workbook/src/lib.rs` | workbook host pattern |
 
 ## Verification
 

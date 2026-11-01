@@ -13,22 +13,21 @@ npm install
 npm run dev
 ```
 
-The local `wasm/` crate re-exports IronCalc's `Model` and adds
-`CanvasRenderer`. The renderer paints through `SceneTarget` from the shared
-`bindings/wasm` crate with its `js` feature disabled. IronCalc owns the
+The React app uses the workbook binding in `bindings/wasm-workbook`. It
+re-exports IronCalc's `Model` and adds `CanvasRenderer`. The renderer paints
+through `SceneTarget` from the shared `bindings/wasm` crate. IronCalc owns the
 workbook, the selected view, and navigation state.
 
-> The example depends on the `IronCalc` checkout next to this repository and
-> patches IronCalc to that local path. Update the paths in
-> `wasm/Cargo.toml` when the checkout moves.
+> The workbook binding depends on the `IronCalc` checkout next to this
+> repository and patches IronCalc to that local path. Update the paths in
+> `bindings/wasm-workbook/Cargo.toml` when the checkout moves.
 
 The demo opens with a small sample workbook. Use **Load workbook** to choose an
 `.xlsx` file; visible worksheets are shown as tabs along the bottom. Scroll over
 the grid to browse a sheet, and use `+` to add a worksheet.
 
-`npm run build` builds the example-local WebAssembly module before producing
-the Vite bundle. The module links `SceneTarget` from `bindings/wasm` with the
-`js` feature disabled, so the example's API is the only JavaScript surface.
+`npm run build` builds `bindings/wasm-workbook` into `pkg/` before producing
+the Vite bundle. The example has no Rust crate or wasm adapter of its own.
 
 ## Navigation
 

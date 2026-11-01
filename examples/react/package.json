@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "build:wasm": "wasm-pack build wasm --target web --out-dir pkg --out-name iron_canvas_react_example",
+    "build:wasm": "wasm-pack build ../../bindings/wasm-workbook --target web --out-dir ../../examples/react/pkg --out-name iron_canvas_wasm_workbook",
     "dev": "npm run build:wasm && vite",
     "build": "npm run build:wasm && tsc --noEmit && vite build",
     "preview": "vite preview"

@@ -354,7 +354,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "iron-canvas-react-example"
+name = "iron-canvas-wasm"
+version = "0.1.0-beta.2"
+dependencies = [
+ "iron-canvas-canvas2d",
+ "iron-canvas-core",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
+name = "iron-canvas-wasm-workbook"
 version = "0.1.0-beta.2"
 dependencies = [
  "iron-canvas",
@@ -366,18 +378,6 @@ dependencies = [
  "wasm",
  "wasm-bindgen",
  "wasm-bindgen-test",
- "web-sys",
-]
-
-[[package]]
-name = "iron-canvas-wasm"
-version = "0.1.0-beta.2"
-dependencies = [
- "iron-canvas-canvas2d",
- "iron-canvas-core",
- "serde",
- "serde-wasm-bindgen",
- "wasm-bindgen",
  "web-sys",
 ]
 
