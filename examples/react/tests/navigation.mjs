@@ -157,6 +157,21 @@ try {
   await delay(50);
   assert.doesNotMatch(await painted(), /, A1$/);
 
+  // Header clicks select the full row or column. The active cell sits at the
+  // header edge, and the paint uses only the matching strip.
+  assert.equal(await execute(`${keyScript}
+    const rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: rect.left + 20, clientY: rect.top + 120, button: 0, bubbles: true, cancelable: true }));
+    return true;`), true);
+  await delay(50);
+  assert.match(await painted(), /, A\d+$/);
+  assert.equal(await execute(`${keyScript}
+    const rect = canvas.getBoundingClientRect();
+    canvas.dispatchEvent(new PointerEvent('pointerdown', { clientX: rect.left + 200, clientY: rect.top + 10, button: 0, bubbles: true, cancelable: true }));
+    return true;`), true);
+  await delay(50);
+  assert.match(await painted(), /, [A-Z]+1$/);
+
   // Wheel input applies a pixel scroll and repaints the grid. The listener
   // must be non-passive so preventDefault stops the page scroll.
   const canvasState = async () => command(`/session/${session}/execute/async`, {
