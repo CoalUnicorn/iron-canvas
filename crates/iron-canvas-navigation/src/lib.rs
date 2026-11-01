@@ -122,14 +122,15 @@ impl NavigationController {
         Ok(())
     }
 
-    /// Remove one command only when the host is ready to execute it.
+    /// Remove the first ready command for one view.
+    ///
+    /// Commands for other views stay queued in input order. A host that drains
+    /// one view must not discard work that another view still needs.
     pub fn pop_ready(&mut self, scope: NavigationScope) -> Option<ControllerCommand> {
-        while let Some(command) = self.pending.pop_front() {
-            if command.scope == scope && command.interaction == self.interaction {
-                return Some(command.command);
-            }
-        }
-        None
+        let position = self.pending.iter().position(|command| {
+            command.scope == scope && command.interaction == self.interaction
+        })?;
+        self.pending.remove(position).map(|command| command.command)
     }
 
     /// Select the view that mirrors engine indices. Other views keep their
@@ -293,6 +294,12 @@ mod tests {
             )))
         );
         assert_eq!(controller.pop_ready(b), None);
+        assert_eq!(
+            controller.pop_ready(a),
+            Some(ControllerCommand::Navigation(NavigationIntent::Step(
+                Direction::Right
+            )))
+        );
         controller
             .enqueue(NavigationIntent::Step(Direction::Up), b, false)
             .unwrap();
