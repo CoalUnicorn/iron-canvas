@@ -6,12 +6,10 @@
 
 mod cache;
 mod interaction;
-mod navigation_queries;
 mod selection;
 use cache::CacheLookup;
 pub use cache::{TextMetricsKey, WorksheetCache};
 pub use iron_canvas_core::navigation::*;
-pub use navigation_queries::*;
 pub use selection::*;
 mod overlays;
 mod retained;

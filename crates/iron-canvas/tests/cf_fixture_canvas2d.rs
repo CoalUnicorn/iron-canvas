@@ -691,10 +691,10 @@ fn selection_union_headers_freeze_and_removal_match_fresh_at_four_scales() {
             );
         }
         assert_fresh(&session, &model, &request, dpr);
-        let old_stamp = session.interaction_frame();
+        let old_frame = session.committed_frame().cloned();
         request.revision.workbook_id = 2;
         assert!(session.render(&model, &request).is_err());
-        assert_eq!(session.interaction_frame(), old_stamp);
+        assert_eq!(session.committed_frame(), old_frame.as_ref());
         assert_eq!(pixels(&canvas), union);
         request.revision.workbook_id = 1;
         request.viewport.scroll.first_cell = cell(4, 4);

@@ -332,19 +332,9 @@ and invalidate the session.
 The classifier reads no workbook. Both binding profiles expose Basic commands.
 Extended commands stay unhandled until P3b passes its engine gate.
 
-`interaction_frame` returns an owned stamp for the committed frame. The stamp
-contains sequence, sheet, content token, viewport, and an optional selection
-revision. It identifies committed data. A host separately proves that its
-surface presents that frame.
-
-`navigation_geometry(expected)` returns ready geometry or a pending reason.
-It checks workbook identity, sheet, content revision, logical size, theme,
-geometry availability, and session invalidation. A selection-only change or
-a new requested scroll origin does not invalidate pane dimensions.
-`scroll_to_show_checked` starts from that requested origin and preserves
-pending, bounds, and extent errors. It returns `Unchanged` or `ScrollTo`.
-The old optional `scroll_to_show` remains available. The host supplies the
-workbook that matches the expected content token.
+`NavigationController` owns checked reveal. It resolves merges, hidden axes,
+frozen panes, and pixel offsets before it writes the engine view. The host
+must present the committed frame before it applies the next input.
 
 A `SelectionSnapshot` is an immutable description of accepted selection.
 Checked constructors validate the areas, active area, active cell, and bounds.
@@ -527,7 +517,6 @@ validation and limits.
 | `iron-canvas/src/interaction.rs` | committed queries and `HostIntent` |
 | `iron-canvas-core/src/scroll.rs` | rounded axis extents, `RunAxis`, scroll position arithmetic |
 | `iron-canvas-core/src/navigation.rs` | Pure keyboard classification and typed navigation intents |
-| `iron-canvas/src/navigation_queries.rs` | Interaction stamps, readiness, and checked visibility |
 | `iron-canvas/src/selection.rs` | Validated snapshots and bounded rectangle algebra |
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |
 | `iron-canvas/src/retained.rs` | scroll-blit planning |

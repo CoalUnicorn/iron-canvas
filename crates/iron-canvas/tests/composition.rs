@@ -105,10 +105,6 @@ fn snapshots_override_legacy_input_and_union_fills_headers_without_multi_area_ha
         assert_eq!(count, 1, "overlap at {point:?}");
     }
     assert_eq!(geometry.panes.len(), 4);
-    assert_eq!(
-        session.interaction_frame().unwrap().selection_revision,
-        Some(3)
-    );
     request.overlays.selection = vec![range(1, 1, 1, 1)];
     request.overlays.active_cell = Some(coord(1, 1));
     assert_eq!(
@@ -117,14 +113,12 @@ fn snapshots_override_legacy_input_and_union_fills_headers_without_multi_area_ha
     );
     assert_eq!(session.committed_frame().unwrap().worksheet.scene, scene);
     let before = session.committed_frame().cloned();
-    let stamp = session.interaction_frame();
     request.revision.workbook_id = 2;
     assert!(matches!(
         session.render(&w, &request),
         Err(RenderError::InvalidOverlay(OverlayError::Workbook))
     ));
     assert_eq!(session.committed_frame(), before.as_ref());
-    assert_eq!(session.interaction_frame(), stamp);
     request.revision.workbook_id = 1;
     request.sheet = 1;
     assert!(matches!(
