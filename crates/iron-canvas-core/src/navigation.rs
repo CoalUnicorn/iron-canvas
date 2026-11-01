@@ -104,10 +104,15 @@ pub enum NavigationIntent {
 pub fn classify_navigation(
     key: NavigationKey,
     modifiers: NavigationModifiers,
-    _profile: BindingProfile,
+    profile: BindingProfile,
 ) -> Option<NavigationIntent> {
     use NavigationIntent as I;
     use NavigationKey as K;
+    // Extended bindings need an engine support gate. Do not report Basic
+    // behavior under the Extended name before that gate passes.
+    if profile == BindingProfile::Extended {
+        return None;
+    }
     if modifiers.alt || modifiers.alt_graph {
         return None;
     }
@@ -182,7 +187,8 @@ mod tests {
                         alt: bits & 4 != 0,
                         alt_graph: bits & 8 != 0,
                     };
-                    let supported = !m.alt
+                    let supported = profile == BindingProfile::Basic
+                        && !m.alt
                         && !m.alt_graph
                         && match key {
                             NavigationKey::Up
