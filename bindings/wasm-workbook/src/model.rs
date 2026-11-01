@@ -1,7 +1,8 @@
-//! The small JavaScript `Model` surface that the React host uses.
+//! Thin JavaScript adapter over the official IronCalc user model.
 //!
-//! IronCalc owns workbook editing and the selected view. This wrapper keeps
-//! the engine borrow in Rust so the renderer can paint the same model.
+//! The official `wasm::Model` keeps its `UserModel` field private. The canvas
+//! renderer needs a `&UserModel` borrow for compilation and navigation, so this
+//! adapter stores the official engine directly. It contains no workbook logic.
 
 use ironcalc_base::UserModel;
 use wasm_bindgen::prelude::*;

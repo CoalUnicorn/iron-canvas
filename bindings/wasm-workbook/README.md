@@ -1,7 +1,11 @@
 # WebAssembly workbook binding
 
 `iron-canvas-wasm-workbook` paints IronCalc's WebAssembly model with Iron
-Canvas. It exports a `Model` wrapper and `CanvasRenderer`.
+Canvas. It exports a `Model` adapter and `CanvasRenderer`.
+
+The adapter stores the official `ironcalc_base::UserModel`. The official
+`wasm::Model` type keeps that engine private, so the renderer cannot borrow it.
+The adapter adds no workbook logic.
 
 This crate is separate from `bindings/wasm`:
 
