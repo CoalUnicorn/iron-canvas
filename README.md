@@ -22,9 +22,8 @@ The viewer uses the shared navigation and scroll controller:
 - A status line shows the active cell, the selection, and the pixel origin.
 
 React workbook viewer.
-*Note:* The example embeds IronCalc's WebAssembly `Model` and paints its view
-with Iron Canvas. It uses the sibling `IronCalc` checkout for the engine
-binding.
+*Note:* The example embeds IronCalc's WebAssembly model and paints its view
+with Iron Canvas. It uses the official IronCalc dependency.
 ```sh
 cd examples/react
 npm install

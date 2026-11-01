@@ -5,7 +5,7 @@ committed view with `iron-canvas`.
 
 ## Run
 
-The example uses the sibling IronCalc checkout for the engine binding:
+The example uses the official IronCalc dependency:
 
 ```sh
 cd examples/react
@@ -13,14 +13,10 @@ npm install
 npm run dev
 ```
 
-The React app uses the workbook binding in `bindings/wasm-workbook`. It
-re-exports IronCalc's `Model` and adds `CanvasRenderer`. The renderer paints
-through `SceneTarget` from the shared `bindings/wasm` crate. IronCalc owns the
-workbook, the selected view, and navigation state.
-
-> The workbook binding depends on the `IronCalc` checkout next to this
-> repository and patches IronCalc to that local path. Update the paths in
-> `bindings/wasm-workbook/Cargo.toml` when the checkout moves.
+The React app uses the workbook binding in `bindings/wasm-workbook`. It exports
+an IronCalc `Model` adapter and `CanvasRenderer`. The renderer paints through
+`SceneTarget` from the shared `bindings/wasm` crate. IronCalc owns the workbook,
+the selected view, and navigation state. No sibling checkout is required.
 
 The demo opens with a small sample workbook. Use **Load workbook** to choose an
 `.xlsx` file; visible worksheets are shown as tabs along the bottom. Scroll over
