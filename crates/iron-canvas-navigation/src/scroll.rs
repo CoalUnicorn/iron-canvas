@@ -715,11 +715,20 @@ fn reveal_axis(
     window: ScrollAxisWindow,
     pane: i32,
 ) -> Result<AxisScroll, ScrollError> {
+    // An empty window has no scrolling cell. Every index is frozen. Represent
+    // the axis with the last legal index and zero offset, as normalize_axis does.
+    // Do not clamp here: clamp panics when the window bounds are inverted.
+    if window.is_empty() {
+        return Ok(AxisScroll {
+            first: window.last,
+            offset: 0,
+        });
+    }
     let current = AxisScroll {
         first: first.clamp(window.first, window.last),
         offset,
     };
-    if pane <= 0 || window.is_empty() {
+    if pane <= 0 {
         return Ok(current);
     }
     // A frozen target needs no movement on this axis.
@@ -1169,6 +1178,61 @@ mod tests {
             .unwrap();
         assert!(update.position.first_cell.row <= 30);
         assert!(update.position.first_cell.col <= 30);
+    }
+
+    #[test]
+    fn reveal_handles_a_frozen_row_band_that_consumes_the_axis() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = ScrollViewport {
+            pane_width: 90,
+            pane_height: 100,
+            frozen_rows: 1_048_576,
+            frozen_columns: 0,
+        };
+        let mut controller = NavigationController::default();
+        controller.set_primary_view(Some(scope));
+        controller
+            .import_view(&mut model, scope, &axes, viewport)
+            .unwrap();
+        let update = controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::RevealRange {
+                    first: CellCoord { row: 5, col: 5 },
+                    last: CellCoord { row: 5, col: 5 },
+                },
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        assert_eq!(update.position.first_cell.row, 1_048_576);
+        assert_eq!(update.position.offset_y, 0);
+    }
+
+    #[test]
+    fn navigation_applied_handles_a_frozen_column_band_that_consumes_the_axis() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = ScrollViewport {
+            pane_width: 90,
+            pane_height: 100,
+            frozen_rows: 0,
+            frozen_columns: 16_384,
+        };
+        let mut controller = NavigationController::default();
+        controller.set_primary_view(Some(scope));
+        controller
+            .import_view(&mut model, scope, &axes, viewport)
+            .unwrap();
+        let update = controller
+            .navigation_applied(&mut model, scope, &axes, viewport)
+            .unwrap();
+        assert_eq!(update.position.first_cell.col, 16_384);
+        assert_eq!(update.position.offset_x, 0);
     }
 
     #[test]
