@@ -163,14 +163,19 @@ impl ViewerState {
     }
 
     /// Pane and freeze inputs for the next scroll or reveal call.
+    ///
+    /// Read frozen counts from the selected worksheet. The committed frame can
+    /// still describe the previous sheet after a tab switch.
     fn viewport_context(&self) -> Option<ScrollViewport> {
         let frame = self.session.committed_frame()?;
         let pane = frame.worksheet.geometry.as_ref()?.scroll_pane_rect();
+        let sheet = self.workbook.get_selected_sheet();
+        let worksheet = self.workbook.get_model().workbook.worksheet(sheet).ok()?;
         Some(ScrollViewport {
             pane_width: pane.width,
             pane_height: pane.height,
-            frozen_rows: frame.worksheet.frozen.rows,
-            frozen_columns: frame.worksheet.frozen.cols,
+            frozen_rows: worksheet.frozen_rows,
+            frozen_columns: worksheet.frozen_columns,
         })
     }
 

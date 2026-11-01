@@ -110,7 +110,7 @@ impl CanvasRenderer {
             let scope = self.scope(model)?;
             if self.scroll.view_position(scope).is_some() {
                 let axes = self.axes_for_selected_sheet(model)?;
-                let viewport = self.viewport_context()?;
+                let viewport = self.viewport_context(model)?;
                 let update = self
                     .scroll
                     .resize_view(model.user_model_mut(), scope, &axes, viewport)
@@ -149,9 +149,29 @@ impl CanvasRenderer {
         self.ensure_view_imported(model)?;
         let scope = self.scope(model)?;
         let axes = self.axes_for_selected_sheet(model)?;
-        let viewport = self.viewport_context()?;
+        let viewport = self.viewport_context(model)?;
         self.scroll
             .navigation_applied(model.user_model_mut(), scope, &axes, viewport)
+            .map(|_| ())
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    /// Clamp the saved position against the selected sheet before a paint.
+    ///
+    /// The committed frame can describe the previous sheet. Read frozen counts
+    /// from the model so a sheet switch cannot use the old pane context.
+    fn clamp_view(&mut self, model: &mut Model) -> Result<(), JsValue> {
+        if self.session.committed_frame().is_none() {
+            return Ok(());
+        }
+        let scope = self.scope(model)?;
+        if self.scroll.view_position(scope).is_none() {
+            return Ok(());
+        }
+        let axes = self.axes_for_selected_sheet(model)?;
+        let viewport = self.viewport_context(model)?;
+        self.scroll
+            .resize_view(model.user_model_mut(), scope, &axes, viewport)
             .map(|_| ())
             .map_err(|error| JsValue::from_str(&error.to_string()))
     }
@@ -167,6 +187,7 @@ impl CanvasRenderer {
         if width == 0 || height == 0 {
             return Ok(());
         }
+        self.clamp_view(model)?;
         if reveal_active && let Err(error) = self.sync_navigation(model) {
             // An engine write can fail after it moves the view. Present the
             // actual view and report the failure once.
@@ -226,7 +247,7 @@ impl CanvasRenderer {
         }
         let scope = self.scope(model)?;
         let axes = self.axes_for_selected_sheet(model)?;
-        let viewport = self.viewport_context()?;
+        let viewport = self.viewport_context(model)?;
         self.scroll
             .apply_scroll(
                 model.user_model_mut(),
@@ -423,7 +444,7 @@ impl CanvasRenderer {
         let scope = self.scope(model)?;
         self.scroll.set_primary_view(Some(scope));
         let axes = self.axes_for_selected_sheet(model)?;
-        let viewport = self.viewport_context()?;
+        let viewport = self.viewport_context(model)?;
         self.scroll
             .import_view(model.user_model_mut(), scope, &axes, viewport)
             .map_err(|error| JsValue::from_str(&error.to_string()))?;
@@ -437,7 +458,7 @@ impl CanvasRenderer {
         Some((pane.width, pane.height))
     }
 
-    fn viewport_context(&self) -> Result<ScrollViewport, JsValue> {
+    fn viewport_context(&self, model: &Model) -> Result<ScrollViewport, JsValue> {
         let frame = self
             .session
             .committed_frame()
@@ -448,11 +469,18 @@ impl CanvasRenderer {
             .as_ref()
             .ok_or_else(|| JsValue::from_str("wait for worksheet geometry"))?;
         let pane = geometry.scroll_pane_rect();
+        let workbook = model.user_model();
+        let sheet = workbook.get_selected_sheet();
+        let worksheet = workbook
+            .get_model()
+            .workbook
+            .worksheet(sheet)
+            .map_err(|error| JsValue::from_str(&error))?;
         Ok(ScrollViewport {
             pane_width: pane.width,
             pane_height: pane.height,
-            frozen_rows: frame.worksheet.frozen.rows,
-            frozen_columns: frame.worksheet.frozen.cols,
+            frozen_rows: worksheet.frozen_rows,
+            frozen_columns: worksheet.frozen_columns,
         })
     }
 }
