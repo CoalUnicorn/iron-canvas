@@ -1,26 +1,25 @@
 # WebAssembly workbook binding
 
-`iron-canvas-wasm-workbook` paints IronCalc's WebAssembly `Model` with Iron
-Canvas. It re-exports `Model` and exports `CanvasRenderer`.
+`iron-canvas-wasm-workbook` paints IronCalc's WebAssembly model with Iron
+Canvas. It exports a `Model` wrapper and `CanvasRenderer`.
 
 This crate is separate from `bindings/wasm`:
 
 - `bindings/wasm` stays engine-free. It provides `SceneTarget`, scene
   rendering, theme, scroll arithmetic, and key classification.
 - `bindings/wasm-workbook` adds the workbook session, model reads, navigation,
-  and wheel input. It depends on the IronCalc checkout.
+  and wheel input. It uses the official IronCalc repository.
 
 ## Build
 
-Build the sibling IronCalc checkout first. Then run:
+The crate is a member of the root Cargo workspace. Cargo fetches the pinned
+official IronCalc revision. Run:
 
 ```sh
 wasm-pack build bindings/wasm-workbook --target web --out-dir <dir>
 ```
 
-The crate is a separate Cargo workspace. It patches IronCalc path dependencies
-to the checkout next to this repository. Update the paths in `Cargo.toml` when
-the checkout moves.
+No sibling IronCalc checkout is required.
 
 The React example builds this crate into `examples/react/pkg`:
 
@@ -31,7 +30,24 @@ npm run build:wasm
 
 ## JavaScript API
 
-The module exports `CanvasRenderer` and `Model`. The renderer methods are:
+The module exports `CanvasRenderer`, `Model`, and
+`columnNameFromNumber`. The model methods are:
+
+```ts
+new Model(name: string, locale: string, timezone: string, languageId: string);
+static fromXlsx(bytes: Uint8Array, name: string, locale: string, timezone: string, languageId: string): Model;
+getName(): string;
+getSelectedSheet(): number;
+getSelectedView(): SelectedView;
+getWorksheetsProperties(): WorksheetProperties[];
+setSelectedSheet(sheet: number): void;
+setSelectedCell(row: number, column: number): void;
+setSelectedRange(startRow: number, startColumn: number, endRow: number, endColumn: number): void;
+setUserInput(sheet: number, row: number, column: number, value: string): void;
+newSheet(): void;
+```
+
+The renderer methods are:
 
 ```ts
 new CanvasRenderer(canvas: HTMLCanvasElement);
