@@ -19,10 +19,10 @@ wasm-opt = false
 wasm = { path = "../../../../IronCalc/bindings/wasm", features = ["xlsx"] }
 ironcalc_base = { path = "../../../../IronCalc/base" }
 iron-canvas = { path = "../../../crates/iron-canvas" }
-iron-canvas-canvas2d = { path = "../../../crates/iron-canvas-canvas2d" }
 iron-canvas-core = { path = "../../../crates/iron-canvas-core" }
 iron-canvas-ironcalc = { path = "../../../crates/iron-canvas-ironcalc" }
 iron-canvas-navigation = { path = "../../../crates/iron-canvas-navigation" }
+iron-canvas-wasm = { path = "../../../bindings/wasm", default-features = false }
 wasm-bindgen = "0.2"
 web-sys = { version = "0.3", features = ["CanvasRenderingContext2d", "HtmlCanvasElement"] }
 

@@ -525,7 +525,8 @@ validation and limits.
 | `iron-canvas/src/lib.rs` | `CanvasSession`, request/outcome/error, frame publication |
 | `iron-canvas/src/cache.rs` | `WorksheetCache`, `TextMetricsKey`, content validity and use order |
 | `iron-canvas/src/interaction.rs` | committed queries and `HostIntent` |
-| `iron-canvas/src/navigation.rs` | Pure keyboard classification and typed navigation intents |
+| `iron-canvas-core/src/scroll.rs` | rounded axis extents, `RunAxis`, scroll position arithmetic |
+| `iron-canvas-core/src/navigation.rs` | Pure keyboard classification and typed navigation intents |
 | `iron-canvas/src/navigation_queries.rs` | Interaction stamps, readiness, and checked visibility |
 | `iron-canvas/src/selection.rs` | Validated snapshots and bounded rectangle algebra |
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |

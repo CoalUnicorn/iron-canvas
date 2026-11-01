@@ -1,62 +1,184 @@
-use iron_canvas_canvas2d::Canvas2dSceneBackend;
-use iron_canvas_core::{
-    CanvasMetrics, CanvasSize, Line, PixelRect, Point, Span,
-    geometry::path::{ArcSpec, Path, PathCmd, PointF},
-    painter::{LineCap, LineJoin, PaintColor, StrokeStyle, TextAlign, TextBaseline},
-    scene::{GridScene, RenderBackend, SceneBuilder},
-};
-use serde::Deserialize;
-use wasm_bindgen::prelude::*;
-use web_sys::HtmlCanvasElement;
+#![cfg_attr(not(feature = "js"), allow(dead_code, unused_imports))]
 
+use iron_canvas_canvas2d::{Canvas2dSceneBackend, theme_from_element};
+use iron_canvas_core::{
+    CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, Line, PixelRect, Point, Span,
+    geometry::path::{ArcSpec, Path, PathCmd, PointF},
+    navigation::{
+        BindingProfile, Direction, NavigationIntent, NavigationKey, NavigationModifiers,
+        PageDirection, TraversalAxis, TraversalDirection, classify_navigation,
+    },
+    painter::{LineCap, LineJoin, PaintColor, StrokeStyle, TextAlign, TextBaseline, TextMetrics},
+    scene::{
+        GridScene, RenderBackend, SceneBuilder,
+        retained::{SceneFingerprint, SceneUpdate},
+    },
+    scroll::{
+        self, ExtentRun, RunAxis, ScrollAxisWindow, move_axis, move_position, normalize_axis,
+        normalize_position, scrolling_extent,
+    },
+};
+use serde::{Deserialize, Serialize};
+use wasm_bindgen::prelude::*;
+use web_sys::{Element, HtmlCanvasElement};
+
+/// Rust-side paint target shared by the JavaScript adapter and linked hosts.
+///
+/// It owns the Canvas2D backend, a fixed metric set, and the committed scene
+/// fingerprint. A linked host can use it as a `CanvasSession` backend; the
+/// JavaScript adapter uses `render_scene` for retained frames.
+pub struct SceneTarget {
+    backend: Canvas2dSceneBackend,
+    metrics: CanvasMetrics,
+    /// Fingerprint of the committed scene. The next scene reuses, damages, or
+    /// repaints from it. `None` forces a full frame.
+    previous: Option<SceneFingerprint>,
+}
+
+impl SceneTarget {
+    pub fn new(canvas: HtmlCanvasElement, metrics: CanvasMetrics) -> Result<Self, JsValue> {
+        Ok(Self {
+            backend: Canvas2dSceneBackend::new(canvas, metrics)?,
+            metrics,
+            previous: None,
+        })
+    }
+
+    pub fn metrics(&self) -> CanvasMetrics {
+        self.metrics
+    }
+
+    /// Render a scene with retained updates. An unchanged scene keeps the
+    /// committed pixels; a changed scene repaints only its damaged bands.
+    pub fn render_scene(&mut self, scene: &GridScene) -> Result<(), JsValue> {
+        let fingerprint = SceneFingerprint::new(scene);
+        let update = plan_update(self.previous.as_ref(), &fingerprint);
+        let staged = self.backend.stage_update(scene, &update)?;
+        self.backend.commit_frame(staged)?;
+        // Publish the fingerprint only after the frame commits, so a failed
+        // stage or commit leaves the reuse state on the previous frame.
+        self.previous = Some(fingerprint);
+        Ok(())
+    }
+
+    /// Render a scene and repaint every pixel, even when the scene is
+    /// unchanged.
+    pub fn render_scene_fresh(&mut self, scene: &GridScene) -> Result<(), JsValue> {
+        let staged = self.backend.stage_frame(scene)?;
+        self.backend.commit_frame(staged)?;
+        self.previous = Some(SceneFingerprint::new(scene));
+        Ok(())
+    }
+
+    /// Drop memoized text measurements and force the next scene to repaint.
+    pub fn invalidate_metrics(&mut self) {
+        self.backend.invalidate_metrics();
+        self.previous = None;
+    }
+}
+
+impl RenderBackend for SceneTarget {
+    type StagedFrame = HtmlCanvasElement;
+    type Error = JsValue;
+
+    fn metrics(&self) -> &dyn TextMetrics {
+        self.backend.metrics()
+    }
+
+    fn stage_frame(&mut self, scene: &GridScene) -> Result<HtmlCanvasElement, JsValue> {
+        self.backend.stage_frame(scene)
+    }
+
+    fn invalidate_metrics(&mut self) {
+        self.backend.invalidate_metrics();
+        self.previous = None;
+    }
+
+    fn supports_partial_updates(&self) -> bool {
+        self.backend.supports_partial_updates()
+    }
+
+    fn retained_scale(&self) -> Option<f64> {
+        self.backend.retained_scale()
+    }
+
+    fn stage_update(
+        &mut self,
+        scene: &GridScene,
+        update: &SceneUpdate,
+    ) -> Result<HtmlCanvasElement, JsValue> {
+        self.backend.stage_update(scene, update)
+    }
+
+    fn commit_frame(&mut self, staged: HtmlCanvasElement) -> Result<(), JsValue> {
+        self.backend.commit_frame(staged)
+    }
+}
+
+#[cfg(feature = "js")]
 #[wasm_bindgen]
 pub struct CanvasRenderer {
     canvas: HtmlCanvasElement,
-    metrics: CanvasMetrics,
-    backend: Canvas2dSceneBackend,
+    target: SceneTarget,
 }
 
+#[cfg(feature = "js")]
 #[wasm_bindgen]
 impl CanvasRenderer {
     #[wasm_bindgen(constructor)]
     pub fn new(canvas: HtmlCanvasElement) -> Result<CanvasRenderer, JsValue> {
         let metrics = metrics_for(0.0, 0.0, 1.0)?;
-        let backend = Canvas2dSceneBackend::new(canvas.clone(), metrics)?;
         Ok(CanvasRenderer {
-            canvas,
-            metrics,
-            backend,
+            canvas: canvas.clone(),
+            target: SceneTarget::new(canvas, metrics)?,
         })
     }
 
+    #[cfg(feature = "js")]
     #[wasm_bindgen(js_name = resize)]
     pub fn resize(&mut self, width: f64, height: f64, dpr: f64) -> Result<(), JsValue> {
         let metrics = metrics_for(width, height, dpr)?;
-        if metrics != self.metrics {
-            self.backend = Canvas2dSceneBackend::new(self.canvas.clone(), metrics)?;
-            self.metrics = metrics;
+        if metrics != self.target.metrics() {
+            // The new target has no painted pixels. The next scene is fresh.
+            self.target = SceneTarget::new(self.canvas.clone(), metrics)?;
         }
         Ok(())
     }
 
+    /// Render a scene with retained updates. An unchanged scene keeps the
+    /// committed pixels; a changed scene repaints only its damaged bands.
+    #[cfg(feature = "js")]
     #[wasm_bindgen(js_name = renderScene)]
     pub fn render_scene(&mut self, value: JsValue) -> Result<(), JsValue> {
-        let dto: SceneDto = serde_wasm_bindgen::from_value(value)
-            .map_err(|error| JsValue::from_str(&format!("invalid Iron Canvas scene: {error}")))?;
-        let scene = dto
-            .into_scene()
-            .map_err(|error| JsValue::from_str(&error))?;
-        self.render_grid_scene(&scene)
+        let scene = scene_from_value(value)?;
+        self.target.render_scene(&scene)
+    }
+
+    /// Render a scene and repaint every pixel, even when the scene is
+    /// unchanged. Use after a display or compositing change outside the scene.
+    #[cfg(feature = "js")]
+    #[wasm_bindgen(js_name = renderSceneFresh)]
+    pub fn render_scene_fresh(&mut self, value: JsValue) -> Result<(), JsValue> {
+        let scene = scene_from_value(value)?;
+        self.target.render_scene_fresh(&scene)
+    }
+
+    /// Drop memoized text measurements and force the next scene to repaint.
+    /// Call after browser fonts load or change.
+    #[cfg(feature = "js")]
+    #[wasm_bindgen(js_name = invalidateMetrics)]
+    pub fn invalidate_metrics(&mut self) {
+        self.target.invalidate_metrics();
     }
 }
 
+#[cfg(feature = "js")]
 impl CanvasRenderer {
     /// Render a typed Iron Canvas scene. This Rust entry point also lets
     /// application-specific hosts reuse the Canvas2D renderer without
     /// routing internal scene data through the JavaScript DTO.
     pub fn render_grid_scene(&mut self, scene: &GridScene) -> Result<(), JsValue> {
-        let staged = self.backend.stage_frame(scene)?;
-        self.backend.commit_frame(staged)
+        self.target.render_scene_fresh(scene)
     }
 }
 
@@ -69,6 +191,541 @@ fn metrics_for(width: f64, height: f64, dpr: f64) -> Result<CanvasMetrics, JsVal
         dpr,
     )
     .map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+fn scene_from_value(value: JsValue) -> Result<GridScene, JsValue> {
+    let dto: SceneDto = serde_wasm_bindgen::from_value(value)
+        .map_err(|error| JsValue::from_str(&format!("invalid Iron Canvas scene: {error}")))?;
+    dto.into_scene().map_err(|error| JsValue::from_str(&error))
+}
+
+/// Choose the retained update for the next scene. The first scene and a
+/// dimension change are fresh; otherwise core compares paint bands.
+fn plan_update(previous: Option<&SceneFingerprint>, fingerprint: &SceneFingerprint) -> SceneUpdate {
+    previous.map_or(SceneUpdate::Fresh, |previous| fingerprint.damage(previous))
+}
+
+/// Palette returned by `themeFromElement`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThemeDto<'a> {
+    grid_color: &'a str,
+    grid_separator_color: &'a str,
+    header_bg: &'a str,
+    header_border_color: &'a str,
+    header_text_color: &'a str,
+    header_selected_bg: &'a str,
+    header_selected_color: &'a str,
+    default_text_color: &'a str,
+    error_text_color: &'a str,
+    selection_color: &'a str,
+    cell_bg: &'a str,
+    pointing: &'a str,
+    selection_fill: &'a str,
+    pointing_tint: &'a str,
+}
+
+impl<'a> From<&'a CanvasTheme> for ThemeDto<'a> {
+    fn from(theme: &'a CanvasTheme) -> Self {
+        Self {
+            grid_color: &theme.grid_color,
+            grid_separator_color: &theme.grid_separator_color,
+            header_bg: &theme.header_bg,
+            header_border_color: &theme.header_border_color,
+            header_text_color: &theme.header_text_color,
+            header_selected_bg: &theme.header_selected_bg,
+            header_selected_color: &theme.header_selected_color,
+            default_text_color: &theme.default_text_color,
+            error_text_color: &theme.error_text_color,
+            selection_color: &theme.selection_color,
+            cell_bg: &theme.cell_bg,
+            pointing: &theme.pointing,
+            selection_fill: &theme.selection_fill,
+            pointing_tint: &theme.pointing_tint,
+        }
+    }
+}
+
+/// Build the palette from CSS custom properties on `element`'s computed
+/// style. Falls back to the light theme when the document has no style.
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = themeFromElement)]
+pub fn theme_from_element_value(element: &Element) -> Result<JsValue, JsValue> {
+    let theme = theme_from_element::from_element(element);
+    serde_wasm_bindgen::to_value(&ThemeDto::from(&theme))
+        .map_err(|error| JsValue::from_str(&format!("failed to serialize theme: {error}")))
+}
+
+/// One axis window for scroll arithmetic. `last` is inclusive.
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+pub struct ScrollWindow {
+    first: i32,
+    last: i32,
+}
+
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+impl ScrollWindow {
+    #[wasm_bindgen(constructor)]
+    pub fn new(first: i32, last: i32) -> Self {
+        Self { first, last }
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn first(&self) -> i32 {
+        self.first
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn last(&self) -> i32 {
+        self.last
+    }
+
+    fn to_core(&self) -> ScrollAxisWindow {
+        ScrollAxisWindow::new(self.first, self.last)
+    }
+}
+
+/// Rounded extents for one axis. Pass runs that differ from the default; the
+/// gaps use `defaultExtent`. Indices are one-based and inclusive.
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+pub struct ScrollAxis {
+    axis: RunAxis,
+}
+
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+impl ScrollAxis {
+    #[wasm_bindgen(constructor)]
+    pub fn new(default_extent: i32, last_index: i32, runs: JsValue) -> Result<ScrollAxis, JsValue> {
+        let runs: Vec<ExtentRunDto> = if runs.is_undefined() || runs.is_null() {
+            Vec::new()
+        } else {
+            serde_wasm_bindgen::from_value(runs)
+                .map_err(|error| JsValue::from_str(&format!("invalid scroll axis runs: {error}")))?
+        };
+        let runs: Vec<ExtentRun> = runs.into_iter().map(ExtentRun::from).collect();
+        RunAxis::from_runs(default_extent, last_index, &runs)
+            .map(|axis| Self { axis })
+            .map_err(|error| JsValue::from_str(&error.to_string()))
+    }
+
+    #[wasm_bindgen(getter, js_name = defaultExtent)]
+    pub fn default_extent(&self) -> i32 {
+        self.axis.default_extent()
+    }
+
+    #[wasm_bindgen(getter, js_name = lastIndex)]
+    pub fn last_index(&self) -> i32 {
+        self.axis.last_index()
+    }
+
+    #[wasm_bindgen(getter, js_name = totalExtent)]
+    pub fn total_extent(&self) -> f64 {
+        self.axis.total_extent() as f64
+    }
+}
+
+/// One normalized position on a single axis.
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+pub struct AxisScroll {
+    first: i32,
+    offset: i32,
+}
+
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+impl AxisScroll {
+    #[wasm_bindgen(getter)]
+    pub fn first(&self) -> i32 {
+        self.first
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn offset(&self) -> i32 {
+        self.offset
+    }
+
+    fn from_core(value: scroll::AxisScroll) -> Self {
+        Self {
+            first: value.first,
+            offset: value.offset,
+        }
+    }
+}
+
+/// First visible cell plus the pixel offset inside it.
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+pub struct ScrollPosition {
+    first_row: i32,
+    first_col: i32,
+    offset_x: i32,
+    offset_y: i32,
+}
+
+#[cfg(feature = "js")]
+#[wasm_bindgen]
+impl ScrollPosition {
+    #[wasm_bindgen(constructor)]
+    pub fn new(first_row: i32, first_col: i32, offset_x: i32, offset_y: i32) -> Self {
+        Self {
+            first_row,
+            first_col,
+            offset_x,
+            offset_y,
+        }
+    }
+
+    #[wasm_bindgen(getter, js_name = firstRow)]
+    pub fn first_row(&self) -> i32 {
+        self.first_row
+    }
+
+    #[wasm_bindgen(getter, js_name = firstCol)]
+    pub fn first_col(&self) -> i32 {
+        self.first_col
+    }
+
+    #[wasm_bindgen(getter, js_name = offsetX)]
+    pub fn offset_x(&self) -> i32 {
+        self.offset_x
+    }
+
+    #[wasm_bindgen(getter, js_name = offsetY)]
+    pub fn offset_y(&self) -> i32 {
+        self.offset_y
+    }
+
+    fn to_core(&self) -> scroll::ScrollPosition {
+        scroll::ScrollPosition {
+            first_cell: CellCoord {
+                row: self.first_row,
+                col: self.first_col,
+            },
+            offset_x: self.offset_x,
+            offset_y: self.offset_y,
+        }
+    }
+
+    fn from_core(value: scroll::ScrollPosition) -> Self {
+        Self {
+            first_row: value.first_cell.row,
+            first_col: value.first_cell.col,
+            offset_x: value.offset_x,
+            offset_y: value.offset_y,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ExtentRunDto {
+    first: i32,
+    last: i32,
+    extent: i32,
+}
+
+impl From<ExtentRunDto> for ExtentRun {
+    fn from(value: ExtentRunDto) -> Self {
+        Self {
+            first: value.first,
+            last: value.last,
+            extent: value.extent,
+        }
+    }
+}
+
+/// Pixels of scrolling content inside `window`.
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = scrollingExtent)]
+pub fn scrolling_extent_js(axis: &ScrollAxis, window: &ScrollWindow) -> f64 {
+    scrolling_extent(&axis.axis, window.to_core()) as f64
+}
+
+/// Clamp a requested position to a legal cell and offset.
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = normalizeAxis)]
+pub fn normalize_axis_js(
+    first: i32,
+    offset: i32,
+    axis: &ScrollAxis,
+    window: &ScrollWindow,
+) -> AxisScroll {
+    AxisScroll::from_core(normalize_axis(first, offset, &axis.axis, window.to_core()))
+}
+
+/// Move an axis position by a signed pixel delta.
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = moveAxis)]
+pub fn move_axis_js(
+    first: i32,
+    offset: i32,
+    delta: i32,
+    axis: &ScrollAxis,
+    window: &ScrollWindow,
+    pane: i32,
+) -> AxisScroll {
+    AxisScroll::from_core(move_axis(
+        first,
+        offset,
+        delta,
+        &axis.axis,
+        window.to_core(),
+        pane,
+    ))
+}
+
+/// Apply the pane end limit without new input.
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = clampAxisEnd)]
+pub fn clamp_axis_end_js(
+    first: i32,
+    offset: i32,
+    axis: &ScrollAxis,
+    window: &ScrollWindow,
+    pane: i32,
+) -> AxisScroll {
+    AxisScroll::from_core(scroll::clamp_axis_end(
+        first,
+        offset,
+        &axis.axis,
+        window.to_core(),
+        pane,
+    ))
+}
+
+/// Normalize both axes of a scroll position.
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = normalizeScroll)]
+pub fn normalize_scroll_js(
+    position: &ScrollPosition,
+    rows: &ScrollAxis,
+    row_window: &ScrollWindow,
+    columns: &ScrollAxis,
+    column_window: &ScrollWindow,
+) -> ScrollPosition {
+    ScrollPosition::from_core(normalize_position(
+        position.to_core(),
+        &rows.axis,
+        row_window.to_core(),
+        &columns.axis,
+        column_window.to_core(),
+    ))
+}
+
+/// Move both axes. Positive deltas move content left and up.
+#[allow(clippy::too_many_arguments)]
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = moveScroll)]
+pub fn move_scroll_js(
+    position: &ScrollPosition,
+    delta_x: i32,
+    delta_y: i32,
+    rows: &ScrollAxis,
+    row_window: &ScrollWindow,
+    columns: &ScrollAxis,
+    column_window: &ScrollWindow,
+    pane_width: i32,
+    pane_height: i32,
+) -> ScrollPosition {
+    ScrollPosition::from_core(move_position(
+        position.to_core(),
+        delta_x,
+        delta_y,
+        &rows.axis,
+        row_window.to_core(),
+        &columns.axis,
+        column_window.to_core(),
+        pane_width,
+        pane_height,
+    ))
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+struct ModifiersDto {
+    primary: bool,
+    shift: bool,
+    alt: bool,
+    alt_graph: bool,
+}
+
+impl From<ModifiersDto> for NavigationModifiers {
+    fn from(value: ModifiersDto) -> Self {
+        Self {
+            primary: value.primary,
+            shift: value.shift,
+            alt: value.alt,
+            alt_graph: value.alt_graph,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum DirectionDto {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl From<Direction> for DirectionDto {
+    fn from(value: Direction) -> Self {
+        match value {
+            Direction::Up => Self::Up,
+            Direction::Down => Self::Down,
+            Direction::Left => Self::Left,
+            Direction::Right => Self::Right,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum TraversalAxisDto {
+    Rows,
+    Columns,
+}
+
+impl From<TraversalAxis> for TraversalAxisDto {
+    fn from(value: TraversalAxis) -> Self {
+        match value {
+            TraversalAxis::Rows => Self::Rows,
+            TraversalAxis::Columns => Self::Columns,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum TraversalDirectionDto {
+    Forward,
+    Backward,
+}
+
+impl From<TraversalDirection> for TraversalDirectionDto {
+    fn from(value: TraversalDirection) -> Self {
+        match value {
+            TraversalDirection::Forward => Self::Forward,
+            TraversalDirection::Backward => Self::Backward,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+enum PageDirectionDto {
+    Up,
+    Down,
+}
+
+impl From<PageDirection> for PageDirectionDto {
+    fn from(value: PageDirection) -> Self {
+        match value {
+            PageDirection::Up => Self::Up,
+            PageDirection::Down => Self::Down,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+enum IntentDto {
+    Step {
+        direction: DirectionDto,
+    },
+    ExtendStep {
+        direction: DirectionDto,
+    },
+    DataEdge {
+        direction: DirectionDto,
+    },
+    Traverse {
+        axis: TraversalAxisDto,
+        direction: TraversalDirectionDto,
+    },
+    Page {
+        direction: PageDirectionDto,
+    },
+    RowStart,
+    RowEnd,
+    SheetStart,
+    UsedEnd,
+    SelectUsedRange,
+    Cancel,
+}
+
+impl From<NavigationIntent> for IntentDto {
+    fn from(value: NavigationIntent) -> Self {
+        match value {
+            NavigationIntent::Step(direction) => Self::Step {
+                direction: direction.into(),
+            },
+            NavigationIntent::ExtendStep(direction) => Self::ExtendStep {
+                direction: direction.into(),
+            },
+            NavigationIntent::DataEdge(direction) => Self::DataEdge {
+                direction: direction.into(),
+            },
+            NavigationIntent::Traverse { axis, direction } => Self::Traverse {
+                axis: axis.into(),
+                direction: direction.into(),
+            },
+            NavigationIntent::Page(direction) => Self::Page {
+                direction: direction.into(),
+            },
+            NavigationIntent::RowStart => Self::RowStart,
+            NavigationIntent::RowEnd => Self::RowEnd,
+            NavigationIntent::SheetStart => Self::SheetStart,
+            NavigationIntent::UsedEnd => Self::UsedEnd,
+            NavigationIntent::SelectUsedRange => Self::SelectUsedRange,
+            NavigationIntent::Cancel => Self::Cancel,
+        }
+    }
+}
+
+/// Classify a normalized key for a host-owned grid. Returns an intent object,
+/// or `null` when the key does not map. The host applies the intent to its
+/// model; this binding performs no engine writes.
+#[cfg(feature = "js")]
+#[wasm_bindgen(js_name = classifyNavigation)]
+pub fn classify_navigation_js(
+    key: &str,
+    modifiers: JsValue,
+    profile: Option<String>,
+) -> Result<JsValue, JsValue> {
+    let profile = match profile.as_deref() {
+        None | Some("basic") => BindingProfile::Basic,
+        Some("extended") => BindingProfile::Extended,
+        Some(other) => {
+            return Err(JsValue::from_str(&format!(
+                "unknown navigation profile: {other}"
+            )));
+        }
+    };
+    let Some(key) = NavigationKey::from_key(key) else {
+        return Ok(JsValue::NULL);
+    };
+    let modifiers: ModifiersDto = if modifiers.is_undefined() || modifiers.is_null() {
+        ModifiersDto::default()
+    } else {
+        serde_wasm_bindgen::from_value(modifiers)
+            .map_err(|error| JsValue::from_str(&format!("invalid navigation modifiers: {error}")))?
+    };
+    match classify_navigation(key, modifiers.into(), profile) {
+        None => Ok(JsValue::NULL),
+        Some(intent) => serde_wasm_bindgen::to_value(&IntentDto::from(intent))
+            .map_err(|error| JsValue::from_str(&format!("failed to serialize intent: {error}"))),
+    }
 }
 
 #[derive(Deserialize)]
@@ -90,6 +747,11 @@ impl SceneDto {
                 match command {
                     PrimitiveDto::RectFill { rect, color } => {
                         builder.rect_fill(rect.into_rect()?, PaintColor::Borrowed(&color));
+                    }
+                    PrimitiveDto::RectFillRun { rect, edges, color } => {
+                        let rect = rect.into_rect()?;
+                        validate_run_edges(&rect, &edges)?;
+                        builder.rect_fill_run(rect, &edges, PaintColor::Borrowed(&color));
                     }
                     PrimitiveDto::Gradient { rect, from, to } => {
                         builder.rect_fill_hgradient(
@@ -250,6 +912,11 @@ enum PrimitiveDto {
         rect: RectDto,
         color: String,
     },
+    RectFillRun {
+        rect: RectDto,
+        edges: Vec<i32>,
+        color: String,
+    },
     Gradient {
         rect: RectDto,
         from: String,
@@ -369,6 +1036,21 @@ fn into_path(path: Vec<PathCommandDto>) -> Result<Vec<PathCmd>, String> {
         .validate()
         .map_err(|error| format!("invalid path: {error:?}"))?;
     Ok(path)
+}
+
+/// `rect_fill_run` expects ordered boundaries from `rect.left` through
+/// `rect.right`, with no repeated edge. Reject bad input before the builder's
+/// debug assertion can fire.
+fn validate_run_edges(rect: &PixelRect, edges: &[i32]) -> Result<(), String> {
+    let valid = edges.len() >= 2
+        && edges.first() == Some(&rect.left())
+        && edges.last() == Some(&rect.right())
+        && edges.windows(2).all(|pair| pair[0] < pair[1]);
+    if valid {
+        Ok(())
+    } else {
+        Err("rectFillRun edges must increase strictly from left to right".into())
+    }
 }
 
 #[derive(Deserialize)]
@@ -491,9 +1173,16 @@ impl From<TextBaselineDto> for TextBaseline {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "js"))]
 mod tests {
-    use super::SceneDto;
+    use super::{IntentDto, SceneDto, ThemeDto, plan_update};
+    use iron_canvas_core::{
+        CanvasTheme,
+        navigation::{
+            Direction, NavigationIntent, PageDirection, TraversalAxis, TraversalDirection,
+        },
+        scene::retained::{SceneFingerprint, SceneUpdate},
+    };
     use serde_json::json;
 
     #[test]
@@ -590,5 +1279,123 @@ mod tests {
         .unwrap();
 
         assert!(dto.into_scene().unwrap_err().contains("fit i32"));
+    }
+
+    fn scene_from_json(value: serde_json::Value) -> iron_canvas_core::scene::GridScene {
+        let dto: SceneDto = serde_json::from_value(value).unwrap();
+        dto.into_scene().unwrap()
+    }
+
+    #[test]
+    fn builds_rect_fill_runs_with_ordered_edges() {
+        let scene = scene_from_json(json!({
+            "clip": { "left": 0, "top": 0, "width": 60, "height": 20 },
+            "passes": [[{
+                "type": "rectFillRun",
+                "rect": { "left": 0, "top": 0, "width": 60, "height": 20 },
+                "edges": [0, 15, 40, 60],
+                "color": "#123456"
+            }]]
+        }));
+
+        match &scene.passes[0][0] {
+            iron_canvas_core::scene::Primitive::RectFillRun { rect, edges, color } => {
+                assert_eq!(rect.width, 60);
+                assert_eq!(&**edges, &[0, 15, 40, 60]);
+                assert_eq!(&**color, "#123456");
+            }
+            other => panic!("expected a rect fill run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rejects_rect_fill_runs_with_unordered_edges() {
+        let dto: SceneDto = serde_json::from_value(json!({
+            "clip": { "left": 0, "top": 0, "width": 60, "height": 20 },
+            "passes": [[{
+                "type": "rectFillRun",
+                "rect": { "left": 0, "top": 0, "width": 60, "height": 20 },
+                "edges": [0, 40, 15, 60],
+                "color": "#123456"
+            }]]
+        }))
+        .unwrap();
+
+        assert!(
+            dto.into_scene()
+                .unwrap_err()
+                .contains("edges must increase strictly")
+        );
+    }
+
+    #[test]
+    fn plans_a_fresh_reuse_and_damage_update() {
+        let first = scene_from_json(json!({
+            "clip": { "left": 0, "top": 0, "width": 10, "height": 96 },
+            "passes": [[{
+                "type": "rectFill",
+                "rect": { "left": 0, "top": 0, "width": 10, "height": 32 },
+                "color": "#ffffff"
+            }]]
+        }));
+        let same = first.clone();
+        let moved = scene_from_json(json!({
+            "clip": { "left": 0, "top": 0, "width": 10, "height": 96 },
+            "passes": [[{
+                "type": "rectFill",
+                "rect": { "left": 0, "top": 32, "width": 10, "height": 32 },
+                "color": "#ffffff"
+            }]]
+        }));
+
+        let first_fingerprint = SceneFingerprint::new(&first);
+        assert_eq!(plan_update(None, &first_fingerprint), SceneUpdate::Fresh);
+        assert_eq!(
+            plan_update(Some(&first_fingerprint), &SceneFingerprint::new(&same)),
+            SceneUpdate::Reuse
+        );
+        assert!(matches!(
+            plan_update(Some(&first_fingerprint), &SceneFingerprint::new(&moved)),
+            SceneUpdate::Damage(_)
+        ));
+    }
+
+    #[test]
+    fn serializes_the_theme_with_camel_case_keys() {
+        let theme = CanvasTheme::light();
+        let value = serde_json::to_value(ThemeDto::from(&theme)).unwrap();
+
+        assert_eq!(value["gridColor"], theme.grid_color.as_ref());
+        assert_eq!(value["selectionFill"], theme.selection_fill.as_ref());
+        assert_eq!(value["pointingTint"], theme.pointing_tint.as_ref());
+    }
+
+    #[test]
+    fn serializes_navigation_intents_as_tagged_objects() {
+        let cases = [
+            (
+                NavigationIntent::ExtendStep(Direction::Left),
+                json!({ "type": "extendStep", "direction": "left" }),
+            ),
+            (
+                NavigationIntent::Traverse {
+                    axis: TraversalAxis::Rows,
+                    direction: TraversalDirection::Backward,
+                },
+                json!({ "type": "traverse", "axis": "rows", "direction": "backward" }),
+            ),
+            (
+                NavigationIntent::Page(PageDirection::Down),
+                json!({ "type": "page", "direction": "down" }),
+            ),
+            (NavigationIntent::UsedEnd, json!({ "type": "usedEnd" })),
+            (NavigationIntent::Cancel, json!({ "type": "cancel" })),
+        ];
+        for (intent, expected) in cases {
+            assert_eq!(
+                serde_json::to_value(IntentDto::from(intent)).unwrap(),
+                expected
+            );
+        }
     }
 }

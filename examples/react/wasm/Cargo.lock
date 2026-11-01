@@ -358,14 +358,26 @@ name = "iron-canvas-react-example"
 version = "0.1.0-beta.2"
 dependencies = [
  "iron-canvas",
- "iron-canvas-canvas2d",
  "iron-canvas-core",
  "iron-canvas-ironcalc",
  "iron-canvas-navigation",
+ "iron-canvas-wasm",
  "ironcalc_base",
  "wasm",
  "wasm-bindgen",
  "wasm-bindgen-test",
+ "web-sys",
+]
+
+[[package]]
+name = "iron-canvas-wasm"
+version = "0.1.0-beta.2"
+dependencies = [
+ "iron-canvas-canvas2d",
+ "iron-canvas-core",
+ "serde",
+ "serde-wasm-bindgen",
+ "wasm-bindgen",
  "web-sys",
 ]
 

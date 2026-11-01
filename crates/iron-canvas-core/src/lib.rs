@@ -5,6 +5,7 @@
 //! resolved-scene types; spreadsheet semantics live in `iron-canvas-ironcalc`.
 
 pub mod geometry;
+pub mod navigation;
 pub mod painter;
 pub mod scene;
 pub mod scene_geometry;
@@ -27,5 +28,6 @@ pub use theme::{CanvasTheme, ThemeVariables};
 
 pub use scene_geometry::CellCoord;
 pub use scroll::{
-    AxisExtents, AxisScroll, ScrollAxisWindow, ScrollPosition, move_position, normalize_position,
+    AxisExtents, AxisRun, AxisScroll, ExtentRun, RunAxis, RunAxisError, ScrollAxisWindow,
+    ScrollPosition, move_position, normalize_position,
 };

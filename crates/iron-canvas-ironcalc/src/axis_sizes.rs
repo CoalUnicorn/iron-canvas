@@ -8,7 +8,11 @@
 //! Interactive hosts can advance it between frames; synchronous callers run it
 //! to completion.
 
-use iron_canvas_core::{AxisExtents, ScrollAxisWindow, scroll::scrolling_extent};
+pub use iron_canvas_core::scroll::AxisRun;
+use iron_canvas_core::{
+    AxisExtents, ScrollAxisWindow,
+    scroll::{ExtentRun, RunAxis, RunAxisError, scrolling_extent},
+};
 use ironcalc_base::{UserModel, types::Worksheet};
 use std::collections::BTreeMap;
 
@@ -541,6 +545,11 @@ fn validate_size(record: usize, size: f64) -> Result<(), AxisSizeError> {
     Ok(())
 }
 
+fn rounded_extent(size: f64, record: usize) -> Result<i32, AxisSizeError> {
+    validate_size(record, size)?;
+    Ok(size.round() as i32)
+}
+
 /// Return the covered interval that contains `at` or starts after it.
 fn next_overlap(covered: &BTreeMap<i32, i32>, at: i32, last: i32) -> Option<(i32, i32)> {
     if let Some((&start, &end)) = covered.range(..=at).next_back()
@@ -608,23 +617,11 @@ fn finish_sync(
     builder.into_sizes()
 }
 
-/// One rounded extent run. `prefix` is the checked total before `first`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AxisRun {
-    pub first: i32,
-    pub last: i32,
-    pub extent: i32,
-    pub prefix: i64,
-}
-
 /// Rounded, contiguous extents for one axis. Every index in
 /// `1..=last_index` belongs to exactly one run.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorksheetAxis {
-    default_extent: i32,
-    runs: Vec<AxisRun>,
-    total: i64,
-    last_index: i32,
+    axis: RunAxis,
 }
 
 impl WorksheetAxis {
@@ -634,8 +631,7 @@ impl WorksheetAxis {
             return Err(AxisSizeError::Limit);
         }
         let default_extent = rounded_extent(sizes.default_size, 0)?;
-        let mut runs = Vec::new();
-        let mut prefix = 0_i64;
+        let mut runs = Vec::with_capacity(sizes.runs.len());
         let mut cursor = 1_i32;
         for (record, run) in sizes.runs.iter().enumerate() {
             if run.first < 1 || run.last < run.first || run.last > last_index {
@@ -652,147 +648,70 @@ impl WorksheetAxis {
                     last: run.last,
                 });
             }
-            let extent = rounded_extent(run.size, record)?;
-            if cursor < run.first {
-                push_run(
-                    &mut runs,
-                    &mut prefix,
-                    cursor,
-                    run.first - 1,
-                    default_extent,
-                )?;
-            }
-            push_run(&mut runs, &mut prefix, run.first, run.last, extent)?;
+            runs.push(ExtentRun {
+                first: run.first,
+                last: run.last,
+                extent: rounded_extent(run.size, record)?,
+            });
             cursor = run.last.checked_add(1).ok_or(AxisSizeError::Limit)?;
         }
-        if cursor <= last_index {
-            push_run(&mut runs, &mut prefix, cursor, last_index, default_extent)?;
-        }
-        Ok(Self {
-            default_extent,
-            runs,
-            total: prefix,
-            last_index,
-        })
+        let axis =
+            RunAxis::from_runs(default_extent, last_index, &runs).map_err(|error| match error {
+                RunAxisError::InvalidRun { run } => {
+                    let record = &sizes.runs[run];
+                    AxisSizeError::InvalidRecord {
+                        record: run,
+                        first: record.first,
+                        last: record.last,
+                    }
+                }
+                RunAxisError::InvalidDefaultExtent => AxisSizeError::InvalidSize {
+                    record: 0,
+                    size: sizes.default_size,
+                },
+                RunAxisError::InvalidLimit | RunAxisError::Overflow | RunAxisError::Limit => {
+                    AxisSizeError::Limit
+                }
+            })?;
+        Ok(Self { axis })
     }
 
     pub fn default_extent(&self) -> i32 {
-        self.default_extent
+        self.axis.default_extent()
     }
 
     pub fn total_extent(&self) -> i64 {
-        self.total
+        self.axis.total_extent()
     }
 
     pub fn last_index(&self) -> i32 {
-        self.last_index
+        self.axis.last_index()
     }
 
     pub fn runs(&self) -> &[AxisRun] {
-        &self.runs
+        self.axis.runs()
     }
-
-    fn run_at(&self, index: i32) -> Option<&AxisRun> {
-        if index < 1 || index > self.last_index {
-            return None;
-        }
-        let position = self
-            .runs
-            .partition_point(|run| run.first <= index)
-            .checked_sub(1)?;
-        self.runs.get(position).filter(|run| run.last >= index)
-    }
-}
-
-fn rounded_extent(size: f64, record: usize) -> Result<i32, AxisSizeError> {
-    validate_size(record, size)?;
-    Ok(size.round() as i32)
-}
-
-fn push_run(
-    runs: &mut Vec<AxisRun>,
-    prefix: &mut i64,
-    first: i32,
-    last: i32,
-    extent: i32,
-) -> Result<(), AxisSizeError> {
-    let length = i64::from(last)
-        .checked_sub(i64::from(first))
-        .and_then(|value| value.checked_add(1))
-        .ok_or(AxisSizeError::Limit)?;
-    let span = length
-        .checked_mul(i64::from(extent))
-        .ok_or(AxisSizeError::Limit)?;
-    let next = prefix.checked_add(span).ok_or(AxisSizeError::Limit)?;
-    if let Some(previous) = runs.last_mut()
-        && previous.last.checked_add(1) == Some(first)
-        && previous.extent == extent
-    {
-        previous.last = last;
-    } else {
-        if runs.len() >= CONSTRUCTION_LIMIT {
-            return Err(AxisSizeError::Limit);
-        }
-        runs.push(AxisRun {
-            first,
-            last,
-            extent,
-            prefix: *prefix,
-        });
-    }
-    *prefix = next;
-    Ok(())
 }
 
 impl AxisExtents for WorksheetAxis {
     fn default_extent(&self) -> i32 {
-        self.default_extent
+        self.axis.default_extent()
     }
 
     fn extent(&self, index: i32) -> i32 {
-        self.run_at(index)
-            .map_or(self.default_extent, |run| run.extent)
+        AxisExtents::extent(&self.axis, index)
     }
 
     fn extent_before(&self, index: i32) -> i64 {
-        if index <= 1 {
-            return 0;
-        }
-        let last = (index - 1).min(self.last_index);
-        let Some(run) = self.run_at(last) else {
-            return self.total;
-        };
-        let length = i64::from(last - run.first + 1);
-        run.prefix + length * i64::from(run.extent)
+        AxisExtents::extent_before(&self.axis, index)
     }
 
     fn total_extent(&self) -> i64 {
-        self.total
+        self.axis.total_extent()
     }
 
     fn locate(&self, distance: i64, window: ScrollAxisWindow) -> Option<(i32, i32)> {
-        if window.is_empty() {
-            return None;
-        }
-        let start = self.extent_before(window.first);
-        let end = self.extent_before(window.last.saturating_add(1));
-        if end <= start {
-            return None;
-        }
-        let target = start + distance.clamp(0, end - start - 1);
-        let position = self
-            .runs
-            .partition_point(|run| run.prefix <= target)
-            .checked_sub(1)?;
-        let run = self.runs.get(position)?;
-        let extent = i64::from(run.extent);
-        if extent <= 0 {
-            return None;
-        }
-        let into = target - run.prefix;
-        let offset = i32::try_from(into % extent).ok()?;
-        let advance = i32::try_from(into / extent).ok()?;
-        Some((run.first.checked_add(advance)?, offset))
+        AxisExtents::locate(&self.axis, distance, window)
     }
 }
 
@@ -907,13 +826,11 @@ mod tests {
     }
 
     #[test]
-    fn checked_prefix_sums_reject_overflow() {
-        let mut runs = Vec::new();
-        let mut prefix = i64::MAX - 5;
-        assert_eq!(
-            push_run(&mut runs, &mut prefix, 1, 2, 10),
-            Err(AxisSizeError::Limit)
-        );
+    fn engine_axis_sums_are_checked() {
+        // Core covers prefix-sum overflow on `RunAxis`. Engine sizes cannot
+        // exceed the i64 sum over at most one million rows.
+        let axis = WorksheetAxis::from_sizes(&sizes(DEFAULT_ROW_HEIGHT, vec![]), 3).unwrap();
+        assert_eq!(axis.total_extent(), 75);
     }
 
     #[test]

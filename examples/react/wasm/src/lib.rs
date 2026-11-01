@@ -10,7 +10,6 @@ use iron_canvas::{
     CanvasSession, HostIntent, OverlayState, PointerAction, RenderRequest, RevisionToken,
     TextMetricsKey, WorksheetCache,
 };
-use iron_canvas_canvas2d::Canvas2dSceneBackend;
 use iron_canvas_core::{
     CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, Point, ScrollPosition,
     scene_geometry::GridRange,
@@ -19,6 +18,7 @@ use iron_canvas_ironcalc::{WorksheetAxes, WorksheetViewport, get_column_sizes, g
 use iron_canvas_navigation::{
     NavigationController, NavigationScope, ScrollCommand, ScrollViewport,
 };
+use iron_canvas_wasm::SceneTarget;
 use ironcalc_base::UserModel;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -33,7 +33,7 @@ const LINE_STEP: f64 = 24.0;
 pub struct CanvasRenderer {
     canvas: HtmlCanvasElement,
     metrics: CanvasMetrics,
-    session: CanvasSession<Canvas2dSceneBackend>,
+    session: CanvasSession<SceneTarget>,
     cache: WorksheetCache,
     /// Keyed by workbook, stable sheet ID, and text metric generation.
     axes: HashMap<(u64, u32, u64), Rc<WorksheetAxes>>,
@@ -460,8 +460,6 @@ fn metrics_for(width: f64, height: f64, dpr: f64) -> Result<CanvasMetrics, JsVal
 fn new_session(
     canvas: HtmlCanvasElement,
     metrics: CanvasMetrics,
-) -> Result<CanvasSession<Canvas2dSceneBackend>, JsValue> {
-    Ok(CanvasSession::new(Canvas2dSceneBackend::new(
-        canvas, metrics,
-    )?))
+) -> Result<CanvasSession<SceneTarget>, JsValue> {
+    Ok(CanvasSession::new(SceneTarget::new(canvas, metrics)?))
 }

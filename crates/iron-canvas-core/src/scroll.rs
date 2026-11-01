@@ -225,6 +225,245 @@ pub fn move_position(
     }
 }
 
+/// One requested run of equal rounded extents. Gaps between runs use the
+/// axis default extent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExtentRun {
+    pub first: i32,
+    pub last: i32,
+    pub extent: i32,
+}
+
+/// One resolved run. `prefix` is the checked total before `first`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AxisRun {
+    pub first: i32,
+    pub last: i32,
+    pub extent: i32,
+    pub prefix: i64,
+}
+
+/// Failure to build a [`RunAxis`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RunAxisError {
+    /// `last_index` must be at least 1.
+    InvalidLimit,
+    /// The default extent must not be negative.
+    InvalidDefaultExtent,
+    /// A run is out of order, out of range, or has a negative extent.
+    InvalidRun { run: usize },
+    /// The extent total or an index arithmetic step overflowed.
+    Overflow,
+    /// The resolved run count reached the construction limit.
+    Limit,
+}
+
+impl std::fmt::Display for RunAxisError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidLimit => f.write_str("axis last index must be positive"),
+            Self::InvalidDefaultExtent => f.write_str("axis default extent must not be negative"),
+            Self::InvalidRun { run } => write!(
+                f,
+                "axis run {run} is out of order, out of range, or negative"
+            ),
+            Self::Overflow => f.write_str("axis extent sum overflowed"),
+            Self::Limit => f.write_str("axis run construction limit reached"),
+        }
+    }
+}
+
+impl std::error::Error for RunAxisError {}
+
+/// Upper bound for resolved runs. This keeps a hostile or corrupt input from
+/// allocating without limit.
+const MAX_AXIS_RUNS: usize = 1_048_576;
+
+/// Rounded, contiguous extents for one axis. Every index in
+/// `1..=last_index` belongs to exactly one run.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunAxis {
+    default_extent: i32,
+    runs: Vec<AxisRun>,
+    total: i64,
+    last_index: i32,
+}
+
+impl RunAxis {
+    /// Build contiguous runs from ordered, non-overlapping runs. Missing
+    /// intervals use `default_extent`. Adjacent equal extents combine.
+    pub fn from_runs(
+        default_extent: i32,
+        last_index: i32,
+        runs: &[ExtentRun],
+    ) -> Result<Self, RunAxisError> {
+        if default_extent < 0 {
+            return Err(RunAxisError::InvalidDefaultExtent);
+        }
+        if last_index < 1 {
+            return Err(RunAxisError::InvalidLimit);
+        }
+        let mut resolved = Vec::with_capacity(runs.len().saturating_mul(2).max(1));
+        let mut prefix = 0_i64;
+        let mut cursor = 1_i32;
+        for (run, extent) in runs.iter().enumerate() {
+            let valid = extent.first >= cursor
+                && extent.last >= extent.first
+                && extent.last <= last_index
+                && extent.extent >= 0;
+            if !valid {
+                return Err(RunAxisError::InvalidRun { run });
+            }
+            if cursor < extent.first {
+                push_run(
+                    &mut resolved,
+                    &mut prefix,
+                    cursor,
+                    extent.first - 1,
+                    default_extent,
+                )?;
+            }
+            push_run(
+                &mut resolved,
+                &mut prefix,
+                extent.first,
+                extent.last,
+                extent.extent,
+            )?;
+            cursor = extent.last.checked_add(1).ok_or(RunAxisError::Overflow)?;
+        }
+        if cursor <= last_index {
+            push_run(
+                &mut resolved,
+                &mut prefix,
+                cursor,
+                last_index,
+                default_extent,
+            )?;
+        }
+        Ok(Self {
+            default_extent,
+            runs: resolved,
+            total: prefix,
+            last_index,
+        })
+    }
+
+    pub fn default_extent(&self) -> i32 {
+        self.default_extent
+    }
+
+    pub fn total_extent(&self) -> i64 {
+        self.total
+    }
+
+    pub fn last_index(&self) -> i32 {
+        self.last_index
+    }
+
+    pub fn runs(&self) -> &[AxisRun] {
+        &self.runs
+    }
+
+    fn run_at(&self, index: i32) -> Option<&AxisRun> {
+        if index < 1 || index > self.last_index {
+            return None;
+        }
+        let position = self
+            .runs
+            .partition_point(|run| run.first <= index)
+            .checked_sub(1)?;
+        self.runs.get(position).filter(|run| run.last >= index)
+    }
+}
+
+fn push_run(
+    runs: &mut Vec<AxisRun>,
+    prefix: &mut i64,
+    first: i32,
+    last: i32,
+    extent: i32,
+) -> Result<(), RunAxisError> {
+    let length = i64::from(last)
+        .checked_sub(i64::from(first))
+        .and_then(|value| value.checked_add(1))
+        .ok_or(RunAxisError::Overflow)?;
+    let span = length
+        .checked_mul(i64::from(extent))
+        .ok_or(RunAxisError::Overflow)?;
+    let next = prefix.checked_add(span).ok_or(RunAxisError::Overflow)?;
+    if let Some(previous) = runs.last_mut()
+        && previous.last.checked_add(1) == Some(first)
+        && previous.extent == extent
+    {
+        previous.last = last;
+    } else {
+        if runs.len() >= MAX_AXIS_RUNS {
+            return Err(RunAxisError::Limit);
+        }
+        runs.push(AxisRun {
+            first,
+            last,
+            extent,
+            prefix: *prefix,
+        });
+    }
+    *prefix = next;
+    Ok(())
+}
+
+impl AxisExtents for RunAxis {
+    fn default_extent(&self) -> i32 {
+        self.default_extent
+    }
+
+    fn extent(&self, index: i32) -> i32 {
+        self.run_at(index)
+            .map_or(self.default_extent, |run| run.extent)
+    }
+
+    fn extent_before(&self, index: i32) -> i64 {
+        if index <= 1 {
+            return 0;
+        }
+        let last = (index - 1).min(self.last_index);
+        let Some(run) = self.run_at(last) else {
+            return self.total;
+        };
+        let length = i64::from(last - run.first + 1);
+        run.prefix + length * i64::from(run.extent)
+    }
+
+    fn total_extent(&self) -> i64 {
+        self.total
+    }
+
+    fn locate(&self, distance: i64, window: ScrollAxisWindow) -> Option<(i32, i32)> {
+        if window.is_empty() {
+            return None;
+        }
+        let start = self.extent_before(window.first);
+        let end = self.extent_before(window.last.saturating_add(1));
+        if end <= start {
+            return None;
+        }
+        let target = start + distance.clamp(0, end - start - 1);
+        let position = self
+            .runs
+            .partition_point(|run| run.prefix <= target)
+            .checked_sub(1)?;
+        let run = self.runs.get(position)?;
+        let extent = i64::from(run.extent);
+        if extent <= 0 {
+            return None;
+        }
+        let into = target - run.prefix;
+        let offset = i32::try_from(into % extent).ok()?;
+        let advance = i32::try_from(into / extent).ok()?;
+        Some((run.first.checked_add(advance)?, offset))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,5 +689,150 @@ mod tests {
         assert_eq!(moved.offset_x, 10);
         let normalized = normalize_position(moved, &rows, window(1, 3), &columns, window(1, 3));
         assert_eq!(normalized, moved);
+    }
+
+    #[test]
+    fn run_axis_fills_gaps_and_keeps_prefix_sums() {
+        let axis = RunAxis::from_runs(
+            25,
+            6,
+            &[
+                ExtentRun {
+                    first: 2,
+                    last: 3,
+                    extent: 32,
+                },
+                ExtentRun {
+                    first: 5,
+                    last: 5,
+                    extent: 0,
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            axis.runs(),
+            [
+                AxisRun {
+                    first: 1,
+                    last: 1,
+                    extent: 25,
+                    prefix: 0,
+                },
+                AxisRun {
+                    first: 2,
+                    last: 3,
+                    extent: 32,
+                    prefix: 25,
+                },
+                AxisRun {
+                    first: 4,
+                    last: 4,
+                    extent: 25,
+                    prefix: 89,
+                },
+                AxisRun {
+                    first: 5,
+                    last: 5,
+                    extent: 0,
+                    prefix: 114,
+                },
+                AxisRun {
+                    first: 6,
+                    last: 6,
+                    extent: 25,
+                    prefix: 114,
+                },
+            ]
+        );
+        assert_eq!(axis.total_extent(), 139);
+        assert_eq!(axis.extent_before(3), 57);
+        assert_eq!(axis.extent_before(7), 139);
+        assert_eq!(axis.extent(5), 0);
+        assert_eq!(axis.extent(6), 25);
+    }
+
+    #[test]
+    fn run_axis_matches_equivalent_explicit_extents() {
+        let explicit = TestAxis(vec![25, 25, 50, 50, 25, 25]);
+        let axis = RunAxis::from_runs(
+            25,
+            6,
+            &[ExtentRun {
+                first: 3,
+                last: 4,
+                extent: 50,
+            }],
+        )
+        .unwrap();
+        let windows = [
+            window(1, 6),
+            ScrollAxisWindow::after_frozen(2, 6),
+            ScrollAxisWindow::after_frozen(6, 6),
+        ];
+        for window in windows {
+            for first in 1..=6 {
+                for offset in [0, 1, 24, 100] {
+                    assert_eq!(
+                        normalize_axis(first, offset, &explicit, window),
+                        normalize_axis(first, offset, &axis, window),
+                        "{first} {offset} {window:?}"
+                    );
+                    assert_eq!(
+                        move_axis(first, offset, 37, &explicit, window, 64),
+                        move_axis(first, offset, 37, &axis, window, 64),
+                        "{first} {offset} {window:?}"
+                    );
+                }
+            }
+            assert_eq!(
+                scrolling_extent(&explicit, window),
+                scrolling_extent(&axis, window)
+            );
+        }
+    }
+
+    #[test]
+    fn run_axis_rejects_invalid_runs() {
+        let run = |first, last, extent| ExtentRun {
+            first,
+            last,
+            extent,
+        };
+        assert_eq!(
+            RunAxis::from_runs(25, 10, &[run(3, 2, 10)]),
+            Err(RunAxisError::InvalidRun { run: 0 })
+        );
+        assert_eq!(
+            RunAxis::from_runs(25, 10, &[run(1, 2, 10), run(2, 3, 10)]),
+            Err(RunAxisError::InvalidRun { run: 1 })
+        );
+        assert_eq!(
+            RunAxis::from_runs(25, 10, &[run(1, 11, 10)]),
+            Err(RunAxisError::InvalidRun { run: 0 })
+        );
+        assert_eq!(
+            RunAxis::from_runs(25, 10, &[run(1, 2, -1)]),
+            Err(RunAxisError::InvalidRun { run: 0 })
+        );
+        assert_eq!(
+            RunAxis::from_runs(-1, 10, &[]),
+            Err(RunAxisError::InvalidDefaultExtent)
+        );
+        assert_eq!(
+            RunAxis::from_runs(25, 0, &[]),
+            Err(RunAxisError::InvalidLimit)
+        );
+    }
+
+    #[test]
+    fn run_prefix_sums_reject_overflow() {
+        let mut runs = Vec::new();
+        let mut prefix = i64::MAX - 5;
+        assert_eq!(
+            push_run(&mut runs, &mut prefix, 1, 2, 10),
+            Err(RunAxisError::Overflow)
+        );
     }
 }

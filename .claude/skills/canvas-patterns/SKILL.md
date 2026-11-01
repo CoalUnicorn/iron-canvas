@@ -227,10 +227,11 @@ Forward device pixel ratio as `f64`; only backing-size conversion rounds.
 ## WebAssembly boundary
 
 - `bindings/wasm` is scene-only. `CanvasRenderer` accepts an Iron Canvas scene
-  and draws it with `Canvas2dSceneBackend`. It has no engine dependency.
+  and draws it with `Canvas2dSceneBackend`. Its rlib exports `SceneTarget` for
+  linked hosts. It has no engine dependency.
 - `examples/react/wasm` is an app-specific `cdylib`. It holds a
-  `CanvasSession` with a `SceneCompilerBackend` and passes committed scenes to
-  the painter. Read it for the single-module pattern.
+  `CanvasSession<SceneTarget>`, links `bindings/wasm` with `js` disabled, and
+  owns the only JavaScript surface. Read it for the single-module pattern.
 - Do not send scenes or cell data across the JavaScript boundary when the host
   can link the crates into one module.
 

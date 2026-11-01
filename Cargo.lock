@@ -835,10 +835,12 @@ version = "0.1.0-beta.2"
 dependencies = [
  "iron-canvas-canvas2d",
  "iron-canvas-core",
+ "js-sys",
  "serde",
  "serde-wasm-bindgen",
  "serde_json",
  "wasm-bindgen",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 

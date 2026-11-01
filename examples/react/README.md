@@ -14,8 +14,9 @@ npm run dev
 ```
 
 The local `wasm/` crate re-exports IronCalc's `Model` and adds
-`CanvasRenderer`. The renderer reads the model; IronCalc owns the workbook,
-the selected view, and navigation state.
+`CanvasRenderer`. The renderer paints through `SceneTarget` from the shared
+`bindings/wasm` crate with its `js` feature disabled. IronCalc owns the
+workbook, the selected view, and navigation state.
 
 > The example depends on the `IronCalc` checkout next to this repository and
 > patches IronCalc to that local path. Update the paths in
@@ -26,8 +27,8 @@ The demo opens with a small sample workbook. Use **Load workbook** to choose an
 the grid to browse a sheet, and use `+` to add a worksheet.
 
 `npm run build` builds the example-local WebAssembly module before producing
-the Vite bundle. The shared Canvas-only renderer in `bindings/wasm` is not
-involved.
+the Vite bundle. The module links `SceneTarget` from `bindings/wasm` with the
+`js` feature disabled, so the example's API is the only JavaScript surface.
 
 ## Navigation
 

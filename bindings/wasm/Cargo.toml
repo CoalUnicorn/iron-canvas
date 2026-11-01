@@ -10,16 +10,32 @@ crate-type = ["cdylib", "rlib"]
 [package.metadata.wasm-pack.profile.release]
 wasm-opt = false
 
+[features]
+default = ["js"]
+# JavaScript exports. Disable when linking this crate into another
+# `wasm-bindgen` cdylib that defines its own host API.
+js = []
+
 [dependencies]
 iron-canvas-canvas2d = { path = "../../crates/iron-canvas-canvas2d" }
 iron-canvas-core = { path = "../../crates/iron-canvas-core" }
 serde.workspace = true
 serde-wasm-bindgen = "0.6"
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["HtmlCanvasElement"] }
+web-sys = { version = "0.3", features = ["Element", "HtmlCanvasElement"] }
 
 [dev-dependencies]
+js-sys = "0.3"
 serde_json.workspace = true
+wasm-bindgen-test = "0.3"
+web-sys = { version = "0.3", features = [
+    "CanvasRenderingContext2d",
+    "Document",
+    "Element",
+    "HtmlCanvasElement",
+    "ImageData",
+    "Window",
+] }
 
 [lints]
 workspace = true
