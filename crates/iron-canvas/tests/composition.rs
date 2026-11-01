@@ -1,6 +1,7 @@
 use iron_canvas::{
-    CanvasSession, FormulaOverlay, FormulaRefHit, HostIntent, OverlayState, PointerAction,
-    RefCorner, RefZone, RenderBackend, RenderRequest, RevisionToken,
+    CanvasSession, FormulaOverlay, FormulaRefHit, HostIntent, OverlayError, OverlayState,
+    PointerAction, RefCorner, RefZone, RenderBackend, RenderError, RenderRequest, RevisionToken,
+    SELECTION_LIMIT,
 };
 use iron_canvas_core::{
     CanvasTheme, CellCoord, Point, Side,
@@ -227,6 +228,20 @@ fn snapshots_override_legacy_input_and_union_fills_headers_without_multi_area_ha
     ));
     assert_eq!(session.committed_frame(), before.as_ref());
 }
+#[test]
+fn legacy_selection_limits_are_enforced_before_paint() {
+    let w = workbook();
+    let mut request = request();
+    request.overlays.selection = (1..=SELECTION_LIMIT as i32 + 1)
+        .map(|row| range(row, 1, row, 1))
+        .collect();
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    assert!(matches!(
+        session.render(&w, &request),
+        Err(RenderError::InvalidOverlay(OverlayError::AreaLimit))
+    ));
+}
+
 #[test]
 fn frozen_panes_hidden_axes_headers_and_explicit_sheet_share_hit_geometry() {
     let mut w = workbook();

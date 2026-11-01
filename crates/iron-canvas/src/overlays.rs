@@ -1,7 +1,9 @@
 //! Spreadsheet overlay composition from owned, already prepared content.
 
 use crate::interaction::{LAST_COLUMN, LAST_ROW, autofill_handle_rect, logical_range};
-use crate::selection::{SelectionKind, SelectionSnapshot, union_ranges};
+use crate::selection::{
+    SELECTION_LIMIT, SelectionKind, SelectionSnapshot, bounded_union, union_ranges,
+};
 use iron_canvas_core::{
     CanvasTheme, CellCoord, PixelRect, Point, Side,
     geometry::{
@@ -38,6 +40,8 @@ pub struct OverlayState {
 pub enum OverlayError {
     Workbook,
     Sheet,
+    AreaLimit,
+    PieceLimit,
 }
 impl std::fmt::Display for OverlayError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -54,7 +58,14 @@ impl OverlayState {
             if selection.sheet() != request.sheet {
                 return Err(OverlayError::Sheet);
             }
+            return Ok(());
         }
+        // Legacy ranges are public input. Apply the same bounds as snapshots
+        // before the paint pass clones and unions them.
+        if self.selection.len() > SELECTION_LIMIT {
+            return Err(OverlayError::AreaLimit);
+        }
+        bounded_union(self.selection.iter().copied()).map_err(|_| OverlayError::PieceLimit)?;
         Ok(())
     }
 }

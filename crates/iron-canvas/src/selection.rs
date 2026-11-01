@@ -424,7 +424,7 @@ pub(crate) fn union_ranges(ranges: impl IntoIterator<Item = GridRange>) -> Vec<G
     result
 }
 
-fn bounded_union(
+pub(crate) fn bounded_union(
     ranges: impl IntoIterator<Item = GridRange>,
 ) -> Result<Vec<GridRange>, SelectionError> {
     union_impl(ranges, SELECTION_LIMIT)
