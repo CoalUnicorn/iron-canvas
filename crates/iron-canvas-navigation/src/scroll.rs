@@ -279,6 +279,10 @@ impl NavigationController {
                 position = next;
             }
             ScrollCommand::SetOrigin(first_cell) => {
+                // An explicit jump must not carry a fraction from the old
+                // position into the next wheel event.
+                state.fractional_x = 0.0;
+                state.fractional_y = 0.0;
                 let next = normalize_position(
                     ScrollPosition::aligned(first_cell),
                     &axes.rows,
@@ -1360,6 +1364,63 @@ mod tests {
             .unwrap();
         assert_eq!(up.position.first_cell.row, 195);
         assert_eq!(up.position.offset_y, 19);
+    }
+
+    #[test]
+    fn set_origin_clears_fractional_input() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+        controller.set_primary_view(Some(scope));
+        controller
+            .import_view(&mut model, scope, &axes, viewport)
+            .unwrap();
+
+        // Build a half-pixel remainder at a position away from a boundary.
+        controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::SetOrigin(CellCoord { row: 50, col: 50 }),
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::Pixels { dx: 0.5, dy: 0.5 },
+                &axes,
+                viewport,
+            )
+            .unwrap();
+
+        // The jump must discard both axis remainders.
+        controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::SetOrigin(CellCoord { row: 1, col: 1 }),
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        let update = controller
+            .apply_scroll(
+                &mut model,
+                scope,
+                ScrollCommand::Pixels { dx: 0.5, dy: 0.5 },
+                &axes,
+                viewport,
+            )
+            .unwrap();
+
+        assert_eq!(update.position.first_cell, CellCoord { row: 1, col: 1 });
+        assert_eq!(update.position.offset_x, 0);
+        assert_eq!(update.position.offset_y, 0);
     }
 
     #[test]
