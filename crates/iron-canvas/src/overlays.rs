@@ -36,6 +36,7 @@ pub struct OverlayState {
     /// The host resolves formula references. This type describes only paint.
     pub formula_references: Vec<FormulaOverlay>,
 }
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayError {
     Workbook,

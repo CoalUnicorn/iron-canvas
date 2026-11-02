@@ -92,6 +92,8 @@ fn valid_axis(cells: &[AxisCell], last: i32) -> bool {
 }
 
 /// Return a bounded prefix of visible tiles. Uncovered cells retain individual reads.
+// This function runs synchronously in the render path. Keep the row and column
+// loops explicit so the read order and the stop condition stay visible.
 pub(super) fn plan_blocks(
     panes: &[GridPane],
     limits: BlockLimits,
@@ -107,18 +109,24 @@ pub(super) fn plan_blocks(
         if !valid_axis(&pane.rows, LAST_ROW) || !valid_axis(&pane.columns, LAST_COLUMN) {
             return Err(BlockPlanError::Bounds);
         }
-        // Keep coordinate gaps out of dense requests. Iterate borrowed runs so
+        // Keep coordinate gaps out of dense requests. Walk borrowed runs so
         // fragmented axes do not allocate a list of every run combination.
-        for rows in pane
-            .rows
-            .chunk_by(|a, b| a.index.checked_add(1) == Some(b.index))
-        {
-            for rows in rows.chunks(tile_height) {
-                for columns in pane
-                    .columns
-                    .chunk_by(|a, b| a.index.checked_add(1) == Some(b.index))
-                {
-                    for columns in columns.chunks(tile_width) {
+        let mut row_start = 0;
+        while row_start < pane.rows.len() {
+            let row_end = run_end(&pane.rows, row_start);
+            let row_run = &pane.rows[row_start..row_end];
+            let mut row_chunk = 0;
+            while row_chunk < row_run.len() {
+                let row_chunk_end = (row_chunk + tile_height).min(row_run.len());
+                let rows = &row_run[row_chunk..row_chunk_end];
+                let mut column_start = 0;
+                while column_start < pane.columns.len() {
+                    let column_end = run_end(&pane.columns, column_start);
+                    let column_run = &pane.columns[column_start..column_end];
+                    let mut column_chunk = 0;
+                    while column_chunk < column_run.len() {
+                        let column_chunk_end = (column_chunk + tile_width).min(column_run.len());
+                        let columns = &column_run[column_chunk..column_chunk_end];
                         let count = rows
                             .len()
                             .checked_mul(columns.len())
@@ -136,12 +144,25 @@ pub(super) fn plan_blocks(
                         if remaining == 0 || blocks.len() == limits.blocks_per_attempt {
                             return Ok(blocks);
                         }
+                        column_chunk = column_chunk_end;
                     }
+                    column_start = column_end;
                 }
+                row_chunk = row_chunk_end;
             }
+            row_start = row_end;
         }
     }
     Ok(blocks)
+}
+
+/// Return the end of the consecutive run that starts at `start`.
+fn run_end(cells: &[AxisCell], start: usize) -> usize {
+    let mut end = start + 1;
+    while end < cells.len() && cells[end - 1].index.checked_add(1) == Some(cells[end].index) {
+        end += 1;
+    }
+    end
 }
 
 // Validate public engine vectors before any indexed cell access. Keep indices,

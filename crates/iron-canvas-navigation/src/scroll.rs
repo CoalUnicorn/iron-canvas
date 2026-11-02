@@ -91,17 +91,15 @@ pub(crate) struct ViewState {
     fractional_x: f64,
     fractional_y: f64,
     generation: u64,
-    viewport: ScrollViewport,
 }
 
 impl ViewState {
-    fn new(position: ScrollPosition, viewport: ScrollViewport) -> Self {
+    fn new(position: ScrollPosition) -> Self {
         Self {
             position,
             fractional_x: 0.0,
             fractional_y: 0.0,
             generation: 0,
-            viewport,
         }
     }
 }
@@ -176,7 +174,7 @@ impl NavigationController {
         if let Some(state) = self.views.get(&scope).copied() {
             let position = self.normalize(state.position, axes, viewport, true);
             let changed = position != state.position;
-            return self.install_or_update(model, scope, position, viewport, changed);
+            return self.install_or_update(model, scope, position, changed);
         }
         let sheet_id = selected_sheet_id(model)?;
         if sheet_id != scope.sheet_id {
@@ -194,7 +192,7 @@ impl NavigationController {
             &axes.cols,
             column_window(axes, viewport.frozen_columns),
         );
-        let state = ViewState::new(position, viewport);
+        let state = ViewState::new(position);
         let mirrored = self.mirror(model, scope, position)?;
         // Normalization can move a hidden engine origin to a visible cell.
         // The frame that prompted the import still used the engine origin.
@@ -221,7 +219,6 @@ impl NavigationController {
         let Some(mut state) = self.views.get(&scope).copied() else {
             return Err(ScrollError::UnknownView);
         };
-        state.viewport = viewport;
         let mut position = state.position;
         let changed;
         match command {
@@ -386,7 +383,6 @@ impl NavigationController {
         let Some(mut state) = self.views.get(&scope).copied() else {
             return Err(ScrollError::UnknownView);
         };
-        state.viewport = viewport;
         if selected_sheet_id(model)? != scope.sheet_id {
             return Err(ScrollError::SheetMismatch);
         }
@@ -482,7 +478,6 @@ impl NavigationController {
         let Some(mut state) = self.views.get(&scope).copied() else {
             return Err(ScrollError::UnknownView);
         };
-        state.viewport = viewport;
         let position = self.normalize(state.position, axes, viewport, true);
         let changed = position != state.position;
         state.position = position;
@@ -555,13 +550,11 @@ impl NavigationController {
         model: &mut UserModel<'_>,
         scope: NavigationScope,
         position: ScrollPosition,
-        viewport: ScrollViewport,
         changed: bool,
     ) -> Result<ScrollUpdate, ScrollError> {
         let Some(mut state) = self.views.get(&scope).copied() else {
             return Err(ScrollError::UnknownView);
         };
-        state.viewport = viewport;
         let previous = state.position;
         state.position = position;
         let generation = if changed {

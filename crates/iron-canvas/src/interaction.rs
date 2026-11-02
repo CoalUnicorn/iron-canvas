@@ -59,9 +59,9 @@ pub enum PointerAction {
     ExtendSelection,
     ActivateLink,
 }
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostIntent {
-    Navigate(crate::NavigationIntent),
     Select {
         sheet: u32,
         anchor: CellCoord,

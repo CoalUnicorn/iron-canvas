@@ -65,6 +65,7 @@ pub struct PreparedWorksheetFrame {
 }
 
 /// An error that prevented the candidate frame from being committed.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum RenderError<E> {
     Preparation(WorksheetCompileError),
