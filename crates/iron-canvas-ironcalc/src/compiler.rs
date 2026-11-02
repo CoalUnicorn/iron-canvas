@@ -17,6 +17,7 @@ mod text;
 pub(crate) use text::font_css;
 
 pub use cf::{CfDataBarPaint, CfDecorationPaint, CfIconPaint, CfRatingPaint};
+pub use composition::row_header_width;
 
 pub use iron_canvas_core::scroll::ScrollPosition;
 use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect};

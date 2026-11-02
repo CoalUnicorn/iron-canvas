@@ -18,4 +18,5 @@ pub use compiler::{
     CellPlacement, CellReadOperation, CfDataBarPaint, CfDecorationPaint, CfIconPaint,
     CfRatingPaint, FrozenAxes, PreparedWorksheet, ScrollPosition, WorksheetCompileError,
     WorksheetCompiler, WorksheetContext, WorksheetMetadata, WorksheetReuse, WorksheetViewport,
+    row_header_width,
 };

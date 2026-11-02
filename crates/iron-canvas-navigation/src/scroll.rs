@@ -567,11 +567,10 @@ impl NavigationController {
         } else {
             state.generation
         };
-        let mirrored = if changed {
-            self.mirror(model, scope, position)?
-        } else {
-            false
-        };
+        // Restore the engine indices when this view is primary, even when the
+        // saved position did not change. Another primary view can move the
+        // engine origin in the meantime.
+        let mirrored = self.mirror(model, scope, position)?;
         self.views.insert(scope, state);
         Ok(ScrollUpdate {
             position,
@@ -1116,6 +1115,59 @@ mod tests {
         assert_eq!(reimported.generation, 0);
         controller.reset().unwrap();
         assert!(controller.view_position(first).is_none());
+    }
+
+    #[test]
+    fn restoring_a_primary_view_restores_the_engine_origin() {
+        let mut model = model();
+        let axes = axes(&model);
+        let first = scope(&model, 0);
+        let second = scope(&model, 1);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+
+        controller.set_primary_view(Some(first));
+        controller
+            .import_view(&mut model, first, &axes, viewport)
+            .unwrap();
+        controller
+            .apply_scroll(
+                &mut model,
+                first,
+                ScrollCommand::SetOrigin(CellCoord { row: 10, col: 1 }),
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        assert_eq!(model.get_selected_view().top_row, 10);
+        let first_generation = controller.view_generation(first).unwrap();
+
+        controller
+            .import_view(&mut model, second, &axes, viewport)
+            .unwrap();
+        controller.set_primary_view(Some(second));
+        controller
+            .apply_scroll(
+                &mut model,
+                second,
+                ScrollCommand::SetOrigin(CellCoord { row: 20, col: 1 }),
+                &axes,
+                viewport,
+            )
+            .unwrap();
+        assert_eq!(model.get_selected_view().top_row, 20);
+
+        // The saved position stays equal, but the engine origin still belongs
+        // to the other view. Restoring the primary view must move the engine.
+        controller.set_primary_view(Some(first));
+        let restored = controller
+            .import_view(&mut model, first, &axes, viewport)
+            .unwrap();
+        assert_eq!(restored.position.first_cell.row, 10);
+        assert_eq!(restored.generation, first_generation);
+        assert!(!restored.changed);
+        assert!(restored.mirrored);
+        assert_eq!(model.get_selected_view().top_row, 10);
     }
 
     #[test]

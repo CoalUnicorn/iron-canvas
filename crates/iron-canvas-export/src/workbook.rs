@@ -14,7 +14,9 @@ use iron_canvas_core::{CanvasTheme, CellCoord};
 #[cfg(any(feature = "svg", feature = "pdf"))]
 use iron_canvas_core::{painter::TextMetrics, scene::RenderBackend};
 #[cfg(any(feature = "svg", feature = "pdf"))]
-use iron_canvas_ironcalc::{PreparedWorksheet, WorksheetCompiler, WorksheetViewport};
+use iron_canvas_ironcalc::{
+    PreparedWorksheet, WorksheetCompiler, WorksheetViewport, row_header_width,
+};
 use iron_canvas_ironcalc::{WorksheetCompileError, WorksheetContext};
 use ironcalc::import::load_from_xlsx;
 use ironcalc_base::UserModel;
@@ -132,6 +134,8 @@ impl Error for WorkbookExportError {
 /// `sheet` accepts a case-insensitive worksheet name or a zero-based index.
 /// When omitted, the first worksheet is exported. The output extension chooses
 /// SVG or PDF; the workbook's frozen rows and columns remain visible.
+/// A hidden first row or column moves the origin to the first visible cell.
+/// A range with no visible rows or columns is an error.
 /// Formulas are evaluated after import. Export does not use cached XLSX results.
 ///
 /// Returns the zero-based index of the worksheet exported.
@@ -318,16 +322,28 @@ fn viewport_for_range(
         range.last.col,
         frozen_columns,
     )?;
-    let largest_row_label = range.last.row.max(frozen_rows).to_string();
-    let measured_header = metrics.measure_text_width(&largest_row_label, "12px sans-serif");
-    if !measured_header.is_finite() || measured_header < 0.0 {
-        return Err("text metrics returned an invalid row-header width".to_owned());
-    }
-    let measured_header = measured_header.ceil();
-    if measured_header > f64::from(i32::MAX - 16) {
-        return Err("row-header width is too large".to_owned());
-    }
-    let header_width = (measured_header as i32 + 16).max(48);
+    // The compiler rejects an origin with zero extent. Move a hidden first
+    // cell to the first visible cell in the requested range.
+    let first_row = visible_export_origin(
+        workbook,
+        sheet,
+        true,
+        range.first.row,
+        range.last.row,
+        frozen_rows,
+    )?;
+    let first_column = visible_export_origin(
+        workbook,
+        sheet,
+        false,
+        range.first.col,
+        range.last.col,
+        frozen_columns,
+    )?;
+    // The compiler reserves the same header width. A shared width keeps the
+    // complete last column inside the page bounds.
+    let header_width = row_header_width(metrics)
+        .ok_or_else(|| "text metrics returned an invalid row-header width".to_owned())?;
     let width = header_width
         .checked_add(columns)
         .ok_or_else(|| "page width overflows".to_owned())?;
@@ -345,7 +361,46 @@ fn viewport_for_range(
         ));
     }
 
-    Ok(WorksheetViewport::aligned(range.first, width, height))
+    Ok(WorksheetViewport::aligned(
+        CellCoord {
+            row: first_row,
+            col: first_column,
+        },
+        width,
+        height,
+    ))
+}
+
+#[cfg(any(feature = "svg", feature = "pdf"))]
+fn visible_export_origin(
+    workbook: &UserModel<'_>,
+    sheet: u32,
+    rows: bool,
+    first: i32,
+    last: i32,
+    frozen: i32,
+) -> Result<i32, String> {
+    for index in first..=last {
+        let extent = if rows {
+            workbook.get_row_height(sheet, index)
+        } else {
+            workbook.get_column_width(sheet, index)
+        }
+        .map_err(|error| {
+            let axis = if rows { "row height" } else { "column width" };
+            format!("could not read {axis} for index {index}: {error}")
+        })?;
+        if !extent.is_finite() || extent < 0.0 || extent.round() > f64::from(i32::MAX) {
+            return Err(format!("invalid worksheet extent at index {index}"));
+        }
+        if extent.round() > 0.0 {
+            // An aligned origin inside the frozen band stays accepted. Outside
+            // the band, move the origin to this first visible cell.
+            return Ok(if first <= frozen { first } else { index });
+        }
+    }
+    let axis = if rows { "rows" } else { "columns" };
+    Err(format!("requested range has no visible {axis}"))
 }
 
 #[cfg(any(feature = "svg", feature = "pdf"))]
@@ -495,6 +550,140 @@ mod tests {
     use super::*;
     #[cfg(feature = "svg")]
     use ironcalc::export::save_to_xlsx;
+
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    struct FixedMetrics;
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    impl TextMetrics for FixedMetrics {
+        fn measure_text_width(&self, _: &str, _: &str) -> f64 {
+            50.0
+        }
+    }
+
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    fn empty_model() -> UserModel<'static> {
+        UserModel::new_empty("export-origin", "en", "UTC", "en").expect("create workbook")
+    }
+
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    fn range(first_row: i32, first_col: i32, last_row: i32, last_col: i32) -> CellRange {
+        CellRange::new(
+            CellCoord {
+                row: first_row,
+                col: first_col,
+            },
+            CellCoord {
+                row: last_row,
+                col: last_col,
+            },
+        )
+        .expect("valid range")
+    }
+
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    fn assert_last_column_fits(metrics: &dyn TextMetrics) {
+        let model = empty_model();
+        let range = range(1, 1, 1, 1);
+        let prepared = prepare(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            range,
+            metrics,
+        )
+        .expect("prepare export");
+        let geometry = prepared.geometry.as_ref().expect("regular geometry");
+        let cell = prepared
+            .cells()
+            .find(|placement| placement.coordinate == CellCoord { row: 1, col: 1 })
+            .expect("A1 placement");
+        assert_eq!(cell.bounds.right(), geometry.bounds.width);
+        assert_eq!(cell.bounds.bottom(), geometry.bounds.height);
+        assert!(cell.bounds.width > 0);
+        assert!(cell.bounds.height > 0);
+    }
+
+    #[cfg(feature = "svg")]
+    #[test]
+    fn svg_page_covers_the_complete_last_column() {
+        let backend = crate::SvgSceneBackend::new();
+        assert_last_column_fits(backend.metrics());
+    }
+
+    #[cfg(feature = "pdf")]
+    #[test]
+    fn pdf_page_covers_the_complete_last_column() {
+        let backend = crate::PdfSceneBackend::new();
+        assert_last_column_fits(backend.metrics());
+    }
+
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    #[test]
+    fn hidden_first_row_moves_the_export_origin() {
+        let mut model = empty_model();
+        model.set_rows_hidden(0, 1, 1, true).expect("hide row");
+        let requested = range(1, 1, 3, 3);
+        let viewport =
+            viewport_for_range(&model, 0, requested, &FixedMetrics).expect("normalize hidden row");
+        assert_eq!(viewport.scroll.first_cell, CellCoord { row: 2, col: 1 });
+        assert_eq!(viewport.scroll.offset_y, 0);
+        prepare(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            requested,
+            &FixedMetrics,
+        )
+        .expect("compile hidden row export");
+    }
+
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    #[test]
+    fn hidden_first_column_moves_the_export_origin() {
+        let mut model = empty_model();
+        model
+            .set_columns_hidden(0, 1, 1, true)
+            .expect("hide column");
+        let requested = range(1, 1, 3, 3);
+        let viewport = viewport_for_range(&model, 0, requested, &FixedMetrics)
+            .expect("normalize hidden column");
+        assert_eq!(viewport.scroll.first_cell, CellCoord { row: 1, col: 2 });
+        assert_eq!(viewport.scroll.offset_x, 0);
+        prepare(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &CanvasTheme::light(),
+            },
+            requested,
+            &FixedMetrics,
+        )
+        .expect("compile hidden column export");
+    }
+
+    #[cfg(any(feature = "svg", feature = "pdf"))]
+    #[test]
+    fn fully_hidden_export_ranges_are_rejected() {
+        let mut rows_hidden = empty_model();
+        rows_hidden
+            .set_rows_hidden(0, 1, 3, true)
+            .expect("hide rows");
+        let error = viewport_for_range(&rows_hidden, 0, range(1, 1, 3, 3), &FixedMetrics)
+            .expect_err("reject fully hidden rows");
+        assert!(error.contains("no visible rows"), "{error}");
+
+        let mut columns_hidden = empty_model();
+        columns_hidden
+            .set_columns_hidden(0, 1, 3, true)
+            .expect("hide columns");
+        let error = viewport_for_range(&columns_hidden, 0, range(1, 1, 3, 3), &FixedMetrics)
+            .expect_err("reject fully hidden columns");
+        assert!(error.contains("no visible columns"), "{error}");
+    }
 
     #[test]
     fn parses_single_cells_and_ranges_case_insensitively() {

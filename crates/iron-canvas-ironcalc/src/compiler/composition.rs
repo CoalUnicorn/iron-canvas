@@ -25,6 +25,23 @@ const MIN_HEADER_WIDTH: i32 = 48;
 /// must not move columns when a visible label crosses a digit boundary.
 const HEADER_RESERVED_LABEL: &str = "8888888";
 
+/// Measure the row-header strip width.
+///
+/// Compilation and file export call this function so both reserve the same
+/// width. A shared width keeps the last exported column inside the page.
+/// Return `None` when the metrics produce an invalid width.
+pub fn row_header_width(metrics: &dyn TextMetrics) -> Option<i32> {
+    let measured = metrics.measure_text_width(HEADER_RESERVED_LABEL, HEADER_FONT_CSS);
+    if !measured.is_finite() || measured < 0.0 {
+        return None;
+    }
+    let measured = measured.ceil();
+    if measured > f64::from(i32::MAX - HEADER_LABEL_PADDING) {
+        return None;
+    }
+    Some((measured as i32 + HEADER_LABEL_PADDING).max(MIN_HEADER_WIDTH))
+}
+
 pub(super) fn prepare(
     context: WorksheetContext<'_, '_>,
     viewport: WorksheetViewport,
@@ -264,15 +281,11 @@ fn prepare_geometry(
         LAST_COLUMN,
     )?;
     let header_height = HEADER_STRIP_HEIGHT.min(viewport.height);
-    // Reserve one stable width for the largest row label. The old width
-    // depended on visible labels, so crossing a digit boundary moved columns.
-    let header_width = (attempt
-        .shaper
-        .metrics()
-        .measure_text_width(HEADER_RESERVED_LABEL, HEADER_FONT_CSS)
-        .ceil() as i32)
-        .saturating_add(HEADER_LABEL_PADDING)
-        .max(MIN_HEADER_WIDTH)
+    // Reserve one stable width for the largest row label. File export uses
+    // the same width so the page includes the complete last column. Invalid
+    // metrics keep the narrow fallback instead of failing the frame.
+    let header_width = row_header_width(attempt.shaper.metrics())
+        .unwrap_or(MIN_HEADER_WIDTH)
         .min(viewport.width);
     let rows = sample_bands(
         first.row,
