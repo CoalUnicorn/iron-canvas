@@ -5,9 +5,8 @@
 //! a short mutable model borrow.
 
 use crate::{
-    GridCommand, GridError, LAST_COLUMN, LAST_ROW, NavigationController, NavigationError,
-    NavigationScope, Outcome, Pane, RevealOutcome, RevealTarget, SkipReason, ViewIdentity,
-    apply_navigation,
+    GridCommand, GridError, LAST_COLUMN, LAST_ROW, NavigationController, Outcome, Pane,
+    RevealOutcome, RevealTarget, SkipReason, ViewIdentity, apply_navigation,
 };
 use iron_canvas_core::{
     AxisExtents, AxisScroll, CellCoord, ScrollAxisWindow, ScrollPosition, move_position,
@@ -16,120 +15,6 @@ use iron_canvas_core::{
 use iron_canvas_ironcalc::{WorksheetAxes, WorksheetAxis};
 use ironcalc_base::UserModel;
 use std::collections::HashMap;
-
-/// Pane and freeze inputs for one scroll attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ScrollViewport {
-    pub pane_width: i32,
-    pub pane_height: i32,
-    pub frozen_rows: i32,
-    pub frozen_columns: i32,
-}
-
-/// One scroll request.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ScrollCommand {
-    /// Logical pixels. Each axis keeps a signed fractional remainder.
-    Pixels { dx: f64, dy: f64 },
-}
-
-/// Result of one accepted or unchanged scroll request.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ScrollUpdate {
-    pub position: ScrollPosition,
-    /// Checked generation for accepted view changes.
-    pub generation: u64,
-    pub mirrored: bool,
-    pub changed: bool,
-}
-
-/// Failure to apply or import a scroll position.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ScrollError {
-    /// The view has no stored position. Import it first.
-    UnknownView,
-    /// The selected engine sheet does not match this view's sheet.
-    SheetMismatch,
-    /// Cached axis sizes belong to another workbook or sheet.
-    AxesMismatch,
-    /// The view generation is exhausted. It never wraps.
-    GenerationExhausted,
-    InvalidDelta,
-    /// A zero-extent reveal target has no rectangle.
-    NotVisible,
-    Engine(String),
-}
-
-impl std::fmt::Display for ScrollError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::UnknownView => f.write_str("view scroll state is not imported"),
-            Self::SheetMismatch => f.write_str("selected engine sheet does not match the view"),
-            Self::AxesMismatch => f.write_str("axis sizes do not match the view identity"),
-            Self::GenerationExhausted => f.write_str("view generation is exhausted"),
-            Self::InvalidDelta => f.write_str("scroll delta is not finite"),
-            Self::NotVisible => f.write_str("reveal target has no visible extent"),
-            Self::Engine(error) => write!(f, "engine scroll update failed: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for ScrollError {}
-
-impl From<Pane> for ScrollViewport {
-    fn from(pane: Pane) -> Self {
-        Self {
-            pane_width: pane.width,
-            pane_height: pane.height,
-            frozen_rows: pane.frozen_rows,
-            frozen_columns: pane.frozen_columns,
-        }
-    }
-}
-
-impl From<ScrollViewport> for Pane {
-    fn from(viewport: ScrollViewport) -> Self {
-        Self {
-            width: viewport.pane_width,
-            height: viewport.pane_height,
-            frozen_rows: viewport.frozen_rows,
-            frozen_columns: viewport.frozen_columns,
-        }
-    }
-}
-
-impl From<GridError> for ScrollError {
-    fn from(error: GridError) -> Self {
-        match error {
-            GridError::UnknownView(_) => Self::UnknownView,
-            GridError::IdentityMismatch => Self::SheetMismatch,
-            GridError::AxesMismatch => Self::AxesMismatch,
-            GridError::GenerationExhausted => Self::GenerationExhausted,
-            GridError::InvalidDelta => Self::InvalidDelta,
-            GridError::NotVisible => Self::NotVisible,
-            GridError::Navigation(NavigationError::InvalidTarget) => {
-                Self::Engine("selection target is outside the worksheet".into())
-            }
-            GridError::Navigation(NavigationError::Engine(error)) | GridError::Engine(error) => {
-                Self::Engine(error)
-            }
-        }
-    }
-}
-
-impl From<ScrollError> for GridError {
-    fn from(error: ScrollError) -> Self {
-        match error {
-            ScrollError::UnknownView => Self::Engine("view is not attached".into()),
-            ScrollError::SheetMismatch => Self::IdentityMismatch,
-            ScrollError::AxesMismatch => Self::AxesMismatch,
-            ScrollError::GenerationExhausted => Self::GenerationExhausted,
-            ScrollError::InvalidDelta => Self::InvalidDelta,
-            ScrollError::NotVisible => Self::NotVisible,
-            ScrollError::Engine(error) => Self::Engine(error),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ViewState {
@@ -154,11 +39,12 @@ pub(crate) type ViewMap = HashMap<ViewIdentity, ViewState>;
 
 /// Reject cached axes with a different source identity. Unscoped axes stay
 /// available for tests and exports.
-fn validate_axes(axes: &WorksheetAxes, scope: NavigationScope) -> Result<(), ScrollError> {
+fn validate_axes(axes: &WorksheetAxes, identity: ViewIdentity) -> Result<(), GridError> {
     if let Some(axes_scope) = axes.scope
-        && (axes_scope.workbook_id != scope.workbook_id || axes_scope.sheet_id != scope.sheet_id)
+        && (axes_scope.workbook_id != identity.workbook_id
+            || axes_scope.sheet_id != identity.sheet_id)
     {
-        return Err(ScrollError::AxesMismatch);
+        return Err(GridError::AxesMismatch);
     }
     Ok(())
 }
@@ -217,9 +103,9 @@ impl NavigationController {
         pane: Pane,
         origin: Option<CellCoord>,
     ) -> Result<Outcome, GridError> {
-        validate_axes(axes, identity).map_err(GridError::from)?;
+        validate_axes(axes, identity)?;
         if let Some(state) = self.views.get(&identity).copied() {
-            let position = self.normalize(state.position, axes, pane.into(), true);
+            let position = self.normalize(state.position, axes, pane, true);
             let changed = position != state.position;
             let mut state = state;
             state.position = position;
@@ -231,9 +117,7 @@ impl NavigationController {
             }
             // Restore the engine indices when this view is primary, even when
             // the saved position did not change.
-            let mirrored = self
-                .mirror(model, identity, position)
-                .map_err(GridError::from)?;
+            let mirrored = self.mirror(model, identity, position)?;
             self.views.insert(identity, state);
             return Ok(Outcome {
                 position,
@@ -243,7 +127,7 @@ impl NavigationController {
                 reveal: RevealOutcome::NotRequested,
             });
         }
-        if selected_sheet_id(model).map_err(GridError::from)? != identity.sheet_id {
+        if selected_sheet_id(model)? != identity.sheet_id {
             return Err(GridError::IdentityMismatch);
         }
         let engine_position = origin.unwrap_or_else(|| {
@@ -262,14 +146,100 @@ impl NavigationController {
             column_window(axes, pane.frozen_columns),
         );
         let state = ViewState::new(position);
-        let mirrored = self
-            .mirror(model, identity, position)
-            .map_err(GridError::from)?;
+        let mirrored = self.mirror(model, identity, position)?;
         let changed = position != aligned;
         self.views.insert(identity, state);
         Ok(Outcome {
             position,
             generation: 0,
+            mirrored,
+            changed,
+            reveal: RevealOutcome::NotRequested,
+        })
+    }
+
+    fn scroll_pixels(
+        &mut self,
+        model: &mut UserModel<'_>,
+        identity: ViewIdentity,
+        dx: f64,
+        dy: f64,
+        axes: &WorksheetAxes,
+        pane: Pane,
+    ) -> Result<Outcome, GridError> {
+        validate_axes(axes, identity)?;
+        let Some(mut state) = self.views.get(&identity).copied() else {
+            return Err(GridError::UnknownView(identity));
+        };
+        if !dx.is_finite() || !dy.is_finite() {
+            return Err(GridError::InvalidDelta);
+        }
+        let mut position = state.position;
+        let row_window = row_window(axes, pane.frozen_rows);
+        let column_window = column_window(axes, pane.frozen_columns);
+        let row_limit = scrolling_extent(&axes.rows, row_window) + i64::from(pane.height.max(0));
+        let column_limit =
+            scrolling_extent(&axes.cols, column_window) + i64::from(pane.width.max(0));
+        let total_y = state.fractional_y + dy;
+        let total_x = state.fractional_x + dx;
+        let (whole_y, remainder_y) = split_delta(total_y, row_limit);
+        let (whole_x, remainder_x) = split_delta(total_x, column_limit);
+        state.fractional_y = remainder_y;
+        state.fractional_x = remainder_x;
+        let next = move_position(
+            position,
+            whole_x,
+            whole_y,
+            &axes.rows,
+            row_window,
+            &axes.cols,
+            column_window,
+            pane.width,
+            pane.height,
+        );
+        // Clear only input that pushes outward from a boundary. A half-pixel
+        // event that moves away from the boundary must stay for the next event.
+        if clears_fraction(
+            &axes.rows,
+            row_window,
+            next.first_cell.row,
+            next.offset_y,
+            pane.height,
+            total_y,
+        ) {
+            state.fractional_y = 0.0;
+        }
+        if clears_fraction(
+            &axes.cols,
+            column_window,
+            next.first_cell.col,
+            next.offset_x,
+            pane.width,
+            total_x,
+        ) {
+            state.fractional_x = 0.0;
+        }
+        let changed = next != position;
+        position = next;
+        state.position = position;
+        let generation = if changed {
+            state
+                .generation
+                .checked_add(1)
+                .ok_or(GridError::GenerationExhausted)?
+        } else {
+            state.generation
+        };
+        state.generation = generation;
+        let mirrored = if changed {
+            self.mirror(model, identity, position)?
+        } else {
+            false
+        };
+        self.views.insert(identity, state);
+        Ok(Outcome {
+            position,
+            generation,
             mirrored,
             changed,
             reveal: RevealOutcome::NotRequested,
@@ -287,19 +257,7 @@ impl NavigationController {
     ) -> Result<Outcome, GridError> {
         match command {
             GridCommand::Scroll { dx, dy } => {
-                let update = self
-                    .apply_scroll(
-                        model,
-                        identity,
-                        ScrollCommand::Pixels { dx, dy },
-                        axes,
-                        pane.into(),
-                    )
-                    .map_err(|error| match error {
-                        ScrollError::UnknownView => GridError::UnknownView(identity),
-                        other => GridError::from(other),
-                    })?;
-                Ok(outcome_from_update(update, RevealOutcome::NotRequested))
+                self.scroll_pixels(model, identity, dx, dy, axes, pane)
             }
             GridCommand::Navigate(intent) => {
                 let result = match apply_navigation(model, intent, pane.height) {
@@ -317,11 +275,11 @@ impl NavigationController {
                 self.commit(model, identity, state, position, reveal)
             }
             GridCommand::Reveal(target) => {
-                validate_axes(axes, identity).map_err(GridError::from)?;
+                validate_axes(axes, identity)?;
                 let Some(state) = self.views.get(&identity).copied() else {
                     return Err(GridError::UnknownView(identity));
                 };
-                if selected_sheet_id(model).map_err(GridError::from)? != identity.sheet_id {
+                if selected_sheet_id(model)? != identity.sheet_id {
                     return Err(GridError::IdentityMismatch);
                 }
                 let mut position = state.position;
@@ -368,11 +326,11 @@ impl NavigationController {
         axes: &WorksheetAxes,
         pane: Pane,
     ) -> Result<Outcome, GridError> {
-        validate_axes(axes, identity).map_err(GridError::from)?;
+        validate_axes(axes, identity)?;
         let Some(state) = self.views.get(&identity).copied() else {
             return Err(GridError::UnknownView(identity));
         };
-        let position = self.normalize(state.position, axes, pane.into(), true);
+        let position = self.normalize(state.position, axes, pane, true);
         self.commit(
             model,
             identity,
@@ -389,11 +347,11 @@ impl NavigationController {
         axes: &WorksheetAxes,
         pane: Pane,
     ) -> Result<(ViewState, ScrollPosition), GridError> {
-        validate_axes(axes, identity).map_err(GridError::from)?;
+        validate_axes(axes, identity)?;
         let Some(state) = self.views.get(&identity).copied() else {
             return Err(GridError::UnknownView(identity));
         };
-        if selected_sheet_id(model).map_err(GridError::from)? != identity.sheet_id {
+        if selected_sheet_id(model)? != identity.sheet_id {
             return Err(GridError::IdentityMismatch);
         }
         let view = model.get_selected_view();
@@ -406,7 +364,7 @@ impl NavigationController {
             position.first_cell.col = view.left_column.max(1);
             position.offset_x = 0;
         }
-        position = self.normalize(position, axes, pane.into(), true);
+        position = self.normalize(position, axes, pane, true);
         Ok((state, position))
     }
 
@@ -428,8 +386,7 @@ impl NavigationController {
         }
         let generation = state.generation;
         let mirrored = if changed {
-            self.mirror(model, identity, position)
-                .map_err(GridError::from)?
+            self.mirror(model, identity, position)?
         } else {
             false
         };
@@ -455,7 +412,7 @@ impl NavigationController {
         if let Some(reason) = skip_reason(target, pane) {
             return Ok(RevealOutcome::Skipped(reason));
         }
-        let (first, last) = resolve_reveal(model, identity, target).map_err(GridError::from)?;
+        let (first, last) = resolve_reveal(model, identity, target)?;
         let row = reveal_axis(
             position.first_cell.row,
             position.offset_y,
@@ -464,8 +421,7 @@ impl NavigationController {
             &axes.rows,
             row_window(axes, pane.frozen_rows),
             pane.height,
-        )
-        .map_err(GridError::from)?;
+        )?;
         let column = reveal_axis(
             position.first_cell.col,
             position.offset_x,
@@ -474,8 +430,7 @@ impl NavigationController {
             &axes.cols,
             column_window(axes, pane.frozen_columns),
             pane.width,
-        )
-        .map_err(GridError::from)?;
+        )?;
         let next = ScrollPosition {
             first_cell: CellCoord {
                 row: row.first,
@@ -491,25 +446,6 @@ impl NavigationController {
         } else {
             RevealOutcome::AlreadyVisible
         })
-    }
-}
-
-fn outcome_from_update(update: ScrollUpdate, reveal: RevealOutcome) -> Outcome {
-    Outcome {
-        position: update.position,
-        generation: update.generation,
-        mirrored: update.mirrored,
-        changed: update.changed,
-        reveal,
-    }
-}
-
-fn outcome_to_update(outcome: Outcome) -> ScrollUpdate {
-    ScrollUpdate {
-        position: outcome.position,
-        generation: outcome.generation,
-        mirrored: outcome.mirrored,
-        changed: outcome.changed,
     }
 }
 
@@ -530,7 +466,7 @@ fn resolve_reveal(
     model: &UserModel<'_>,
     identity: ViewIdentity,
     target: &RevealTarget,
-) -> Result<(CellCoord, CellCoord), ScrollError> {
+) -> Result<(CellCoord, CellCoord), GridError> {
     if let Some(focus) = target.focus {
         return merged_range(model, identity, focus, focus);
     }
@@ -542,225 +478,9 @@ fn resolve_reveal(
 }
 
 impl NavigationController {
-    /// Import the engine origin for a view, or restore its saved position.
-    pub fn import_view(
-        &mut self,
-        model: &mut UserModel<'_>,
-        scope: NavigationScope,
-        axes: &WorksheetAxes,
-        viewport: ScrollViewport,
-    ) -> Result<ScrollUpdate, ScrollError> {
-        self.attach(model, scope, axes, viewport.into(), None)
-            .map(outcome_to_update)
-            .map_err(ScrollError::from)
-    }
-
-    /// Apply one scroll command through the shared entry point.
-    pub fn apply_scroll(
-        &mut self,
-        model: &mut UserModel<'_>,
-        scope: NavigationScope,
-        command: ScrollCommand,
-        axes: &WorksheetAxes,
-        viewport: ScrollViewport,
-    ) -> Result<ScrollUpdate, ScrollError> {
-        validate_axes(axes, scope)?;
-        let Some(mut state) = self.views.get(&scope).copied() else {
-            return Err(ScrollError::UnknownView);
-        };
-        let mut position = state.position;
-        let ScrollCommand::Pixels { dx, dy } = command;
-        if !dx.is_finite() || !dy.is_finite() {
-            return Err(ScrollError::InvalidDelta);
-        }
-        let row_window = row_window(axes, viewport.frozen_rows);
-        let column_window = column_window(axes, viewport.frozen_columns);
-        let row_limit =
-            scrolling_extent(&axes.rows, row_window) + i64::from(viewport.pane_height.max(0));
-        let column_limit =
-            scrolling_extent(&axes.cols, column_window) + i64::from(viewport.pane_width.max(0));
-        let total_y = state.fractional_y + dy;
-        let total_x = state.fractional_x + dx;
-        let (whole_y, remainder_y) = split_delta(total_y, row_limit);
-        let (whole_x, remainder_x) = split_delta(total_x, column_limit);
-        state.fractional_y = remainder_y;
-        state.fractional_x = remainder_x;
-        let next = move_position(
-            position,
-            whole_x,
-            whole_y,
-            &axes.rows,
-            row_window,
-            &axes.cols,
-            column_window,
-            viewport.pane_width,
-            viewport.pane_height,
-        );
-        // Clear only input that pushes outward from a boundary. A
-        // half-pixel event that moves away from the boundary must stay
-        // for the next event.
-        if clears_fraction(
-            &axes.rows,
-            row_window,
-            next.first_cell.row,
-            next.offset_y,
-            viewport.pane_height,
-            total_y,
-        ) {
-            state.fractional_y = 0.0;
-        }
-        if clears_fraction(
-            &axes.cols,
-            column_window,
-            next.first_cell.col,
-            next.offset_x,
-            viewport.pane_width,
-            total_x,
-        ) {
-            state.fractional_x = 0.0;
-        }
-        let changed = next != position;
-        position = next;
-        state.position = position;
-        if changed {
-            let generation = state
-                .generation
-                .checked_add(1)
-                .ok_or(ScrollError::GenerationExhausted)?;
-            let mirrored = self.mirror(model, scope, position)?;
-            state.generation = generation;
-            self.views.insert(scope, state);
-            Ok(ScrollUpdate {
-                position,
-                generation,
-                mirrored,
-                changed: true,
-            })
-        } else {
-            self.views.insert(scope, state);
-            Ok(ScrollUpdate {
-                position,
-                generation: state.generation,
-                mirrored: false,
-                changed: false,
-            })
-        }
-    }
-
-    /// Reconcile after an engine navigation command.
-    ///
-    /// A changed engine origin resets offsets on the changed axes. Otherwise
-    /// the stored offsets stay and the engine selection target is revealed.
-    pub fn navigation_applied(
-        &mut self,
-        model: &mut UserModel<'_>,
-        scope: NavigationScope,
-        axes: &WorksheetAxes,
-        viewport: ScrollViewport,
-    ) -> Result<ScrollUpdate, ScrollError> {
-        validate_axes(axes, scope)?;
-        let Some(mut state) = self.views.get(&scope).copied() else {
-            return Err(ScrollError::UnknownView);
-        };
-        if selected_sheet_id(model)? != scope.sheet_id {
-            return Err(ScrollError::SheetMismatch);
-        }
-        let view = model.get_selected_view();
-        let mut position = state.position;
-        if view.top_row != position.first_cell.row {
-            position.first_cell.row = view.top_row.max(1);
-            position.offset_y = 0;
-        }
-        if view.left_column != position.first_cell.col {
-            position.first_cell.col = view.left_column.max(1);
-            position.offset_x = 0;
-        }
-        position = self.normalize(position, axes, viewport, true);
-        let target = CellCoord {
-            row: view.range[0].min(view.range[2]),
-            col: view.range[1].min(view.range[3]),
-        };
-        let end = CellCoord {
-            row: view.range[0].max(view.range[2]),
-            col: view.range[1].max(view.range[3]),
-        };
-        let row = reveal_axis(
-            position.first_cell.row,
-            position.offset_y,
-            target.row,
-            end.row,
-            &axes.rows,
-            row_window(axes, viewport.frozen_rows),
-            viewport.pane_height,
-        )
-        .unwrap_or(AxisScroll {
-            first: position.first_cell.row,
-            offset: position.offset_y,
-        });
-        let column = reveal_axis(
-            position.first_cell.col,
-            position.offset_x,
-            target.col,
-            end.col,
-            &axes.cols,
-            column_window(axes, viewport.frozen_columns),
-            viewport.pane_width,
-        )
-        .unwrap_or(AxisScroll {
-            first: position.first_cell.col,
-            offset: position.offset_x,
-        });
-        position = ScrollPosition {
-            first_cell: CellCoord {
-                row: row.first,
-                col: column.first,
-            },
-            offset_x: column.offset,
-            offset_y: row.offset,
-        };
-        let changed = position != state.position;
-        state.position = position;
-        if changed {
-            let generation = state
-                .generation
-                .checked_add(1)
-                .ok_or(ScrollError::GenerationExhausted)?;
-            let mirrored = self.mirror(model, scope, position)?;
-            state.generation = generation;
-            self.views.insert(scope, state);
-            Ok(ScrollUpdate {
-                position,
-                generation,
-                mirrored,
-                changed: true,
-            })
-        } else {
-            self.views.insert(scope, state);
-            Ok(ScrollUpdate {
-                position,
-                generation: state.generation,
-                mirrored: false,
-                changed: false,
-            })
-        }
-    }
-
-    /// Normalize and end-clamp a saved position after a viewport resize.
-    pub fn resize_view(
-        &mut self,
-        model: &mut UserModel<'_>,
-        scope: NavigationScope,
-        axes: &WorksheetAxes,
-        viewport: ScrollViewport,
-    ) -> Result<ScrollUpdate, ScrollError> {
-        self.resize(model, scope, axes, viewport.into())
-            .map(outcome_to_update)
-            .map_err(ScrollError::from)
-    }
-
     /// Current accepted position for a view.
-    pub fn view_position(&self, scope: NavigationScope) -> Option<ScrollPosition> {
-        self.views.get(&scope).map(|state| state.position)
+    pub fn view_position(&self, identity: ViewIdentity) -> Option<ScrollPosition> {
+        self.views.get(&identity).map(|state| state.position)
     }
 
     /// Drop all positions for a deleted sheet.
@@ -779,11 +499,11 @@ impl NavigationController {
         &self,
         position: ScrollPosition,
         axes: &WorksheetAxes,
-        viewport: ScrollViewport,
+        pane: Pane,
         clamp_end: bool,
     ) -> ScrollPosition {
-        let row_window = row_window(axes, viewport.frozen_rows);
-        let column_window = column_window(axes, viewport.frozen_columns);
+        let row_window = row_window(axes, pane.frozen_rows);
+        let column_window = column_window(axes, pane.frozen_columns);
         let normalized =
             normalize_position(position, &axes.rows, row_window, &axes.cols, column_window);
         if clamp_end {
@@ -792,8 +512,8 @@ impl NavigationController {
                 axes,
                 row_window,
                 column_window,
-                viewport.pane_width,
-                viewport.pane_height,
+                pane.width,
+                pane.height,
             )
         } else {
             normalized
@@ -803,16 +523,16 @@ impl NavigationController {
     fn mirror(
         &mut self,
         model: &mut UserModel<'_>,
-        scope: NavigationScope,
+        identity: ViewIdentity,
         position: ScrollPosition,
-    ) -> Result<bool, ScrollError> {
-        if self.primary != Some(scope) {
+    ) -> Result<bool, GridError> {
+        if self.primary != Some(identity) {
             // A secondary view keeps its own position and never changes the
             // selected engine sheet.
             return Ok(false);
         }
         let sheet_id = selected_sheet_id(model)?;
-        if sheet_id != scope.sheet_id {
+        if sheet_id != identity.sheet_id {
             return Ok(false);
         }
         let view = model.get_selected_view();
@@ -821,26 +541,26 @@ impl NavigationController {
         }
         #[cfg(test)]
         if std::mem::take(&mut self.fail_next_engine_write) {
-            return Err(ScrollError::Engine("injected setter failure".into()));
+            return Err(GridError::Engine("injected setter failure".into()));
         }
         model
             .set_top_left_visible_cell(position.first_cell.row, position.first_cell.col)
-            .map_err(ScrollError::Engine)?;
+            .map_err(|error| GridError::Engine(error.to_string()))?;
         Ok(true)
     }
 }
 
-fn selected_sheet_id(model: &UserModel<'_>) -> Result<u32, ScrollError> {
+fn selected_sheet_id(model: &UserModel<'_>) -> Result<u32, GridError> {
     let sheet = model.get_selected_sheet();
     model
         .get_model()
         .workbook
         .worksheet(sheet)
         .map(|worksheet| worksheet.sheet_id)
-        .map_err(ScrollError::Engine)
+        .map_err(|error| GridError::Engine(error.to_string()))
 }
 
-fn sheet_index(model: &UserModel<'_>, sheet_id: u32) -> Result<u32, ScrollError> {
+fn sheet_index(model: &UserModel<'_>, sheet_id: u32) -> Result<u32, GridError> {
     model
         .get_model()
         .workbook
@@ -848,7 +568,7 @@ fn sheet_index(model: &UserModel<'_>, sheet_id: u32) -> Result<u32, ScrollError>
         .iter()
         .position(|worksheet| worksheet.sheet_id == sheet_id)
         .map(|index| index as u32)
-        .ok_or(ScrollError::SheetMismatch)
+        .ok_or(GridError::IdentityMismatch)
 }
 
 /// Expand a single-cell target to its merged bounds.
@@ -857,12 +577,14 @@ fn merged_range(
     identity: ViewIdentity,
     first: CellCoord,
     last: CellCoord,
-) -> Result<(CellCoord, CellCoord), ScrollError> {
+) -> Result<(CellCoord, CellCoord), GridError> {
     if first != last {
         return Ok((first, last));
     }
     let sheet = sheet_index(model, identity.sheet_id)?;
-    let merges = model.get_merged_cells(sheet).map_err(ScrollError::Engine)?;
+    let merges = model
+        .get_merged_cells(sheet)
+        .map_err(|error| GridError::Engine(error.to_string()))?;
     for merge in merges {
         if (merge.row..merge.row + merge.height).contains(&first.row)
             && (merge.column..merge.column + merge.width).contains(&first.col)
@@ -909,22 +631,22 @@ fn clamp_end_position(
     axes: &WorksheetAxes,
     row_window: ScrollAxisWindow,
     column_window: ScrollAxisWindow,
-    pane_width: i32,
-    pane_height: i32,
+    width: i32,
+    height: i32,
 ) -> ScrollPosition {
     let row = clamp_axis(
         position.first_cell.row,
         position.offset_y,
         &axes.rows,
         row_window,
-        pane_height,
+        height,
     );
     let column = clamp_axis(
         position.first_cell.col,
         position.offset_x,
         &axes.cols,
         column_window,
-        pane_width,
+        width,
     );
     ScrollPosition {
         first_cell: CellCoord {
@@ -970,7 +692,7 @@ fn reveal_axis(
     axis: &WorksheetAxis,
     window: ScrollAxisWindow,
     pane: i32,
-) -> Result<AxisScroll, ScrollError> {
+) -> Result<AxisScroll, GridError> {
     // An empty window has no scrolling cell. Every index is frozen. Represent
     // the axis with the last legal index and zero offset, as normalize_axis does.
     // Do not clamp here: clamp panics when the window bounds are inverted.
@@ -1002,7 +724,7 @@ fn reveal_axis(
     let target_end = axis.extent_before(target_last.saturating_add(1)) - base;
     let span = target_end - target_start;
     if span <= 0 {
-        return Err(ScrollError::NotVisible);
+        return Err(GridError::NotVisible);
     }
     let pane = i64::from(pane);
     let total = scrolling_extent(axis, window);
@@ -1054,18 +776,18 @@ mod tests {
         .unwrap()
     }
 
-    fn scope(model: &UserModel<'_>, view_id: u64) -> NavigationScope {
-        NavigationScope {
+    fn scope(model: &UserModel<'_>, view_id: u64) -> ViewIdentity {
+        ViewIdentity {
             workbook_id: 7,
             view_id,
             sheet_id: model.get_model().workbook.worksheet(0).unwrap().sheet_id,
         }
     }
 
-    fn pane(pane_width: i32, pane_height: i32) -> ScrollViewport {
-        ScrollViewport {
-            pane_width,
-            pane_height,
+    fn pane(width: i32, height: i32) -> Pane {
+        Pane {
+            width,
+            height,
             frozen_rows: 0,
             frozen_columns: 0,
         }
@@ -1076,9 +798,9 @@ mod tests {
     fn move_to(
         controller: &mut NavigationController,
         model: &mut UserModel<'_>,
-        scope: NavigationScope,
+        scope: ViewIdentity,
         axes: &WorksheetAxes,
-        viewport: ScrollViewport,
+        viewport: Pane,
         row: i32,
         col: i32,
     ) {
@@ -1089,10 +811,10 @@ mod tests {
             return;
         }
         controller
-            .apply_scroll(
+            .command(
                 model,
                 scope,
-                ScrollCommand::Pixels {
+                GridCommand::Scroll {
                     dx: f64::from(dx),
                     dy: f64::from(dy),
                 },
@@ -1109,15 +831,15 @@ mod tests {
         let scope = scope(&model, 0);
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(scope));
+        controller.activate(scope);
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
         let update = controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: 7.6 },
+                GridCommand::Scroll { dx: 0.0, dy: 7.6 },
                 &axes,
                 viewport,
             )
@@ -1125,10 +847,10 @@ mod tests {
         assert_eq!(update.position.offset_y, 7);
         assert!(!update.mirrored);
         let update = controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: 7.6 },
+                GridCommand::Scroll { dx: 0.0, dy: 7.6 },
                 &axes,
                 viewport,
             )
@@ -1136,10 +858,10 @@ mod tests {
         assert_eq!(update.position.offset_y, 15);
         // Crossing a cell boundary mirrors the new engine row.
         let update = controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: 6.0 },
+                GridCommand::Scroll { dx: 0.0, dy: 6.0 },
                 &axes,
                 viewport,
             )
@@ -1150,10 +872,10 @@ mod tests {
         assert_eq!(model.get_selected_view().top_row, 2);
         // A negative remainder is retained across events.
         let update = controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: -7.4 },
+                GridCommand::Scroll { dx: 0.0, dy: -7.4 },
                 &axes,
                 viewport,
             )
@@ -1192,17 +914,17 @@ mod tests {
         let mut controller = NavigationController::default();
         model.set_top_left_visible_cell(1_000_000, 1).unwrap();
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
         assert_eq!(
             controller.view_position(scope).unwrap().first_cell.row,
             1_000_001
         );
         let update = controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: 10.0 },
+                GridCommand::Scroll { dx: 0.0, dy: 10.0 },
                 &axes,
                 viewport,
             )
@@ -1219,22 +941,22 @@ mod tests {
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
         controller.views.get_mut(&scope).unwrap().generation = u64::MAX;
         let before = controller.view_position(scope).unwrap();
         assert_eq!(
-            controller.apply_scroll(
+            controller.command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels {
+                GridCommand::Scroll {
                     dx: 120.0,
                     dy: 80.0
                 },
                 &axes,
                 viewport,
             ),
-            Err(ScrollError::GenerationExhausted)
+            Err(GridError::GenerationExhausted)
         );
         assert_eq!(controller.view_position(scope), Some(before));
         assert_eq!(
@@ -1253,23 +975,23 @@ mod tests {
         let scope = scope(&model, 0);
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(scope));
+        controller.activate(scope);
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
         controller.fail_next_engine_write = true;
         let before = controller.view_position(scope).unwrap();
-        let result = controller.apply_scroll(
+        let result = controller.command(
             &mut model,
             scope,
-            ScrollCommand::Pixels {
+            GridCommand::Scroll {
                 dx: 150.0,
                 dy: 100.0,
             },
             &axes,
             viewport,
         );
-        assert!(matches!(result, Err(ScrollError::Engine(_))));
+        assert!(matches!(result, Err(GridError::Engine(_))));
         assert_eq!(controller.view_position(scope), Some(before));
         assert_eq!(model.get_selected_view().top_row, 1);
         assert_eq!(model.get_selected_view().left_column, 1);
@@ -1283,12 +1005,12 @@ mod tests {
         let second = scope(&model, 1);
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(first));
+        controller.activate(first);
         controller
-            .import_view(&mut model, first, &axes, viewport)
+            .attach(&mut model, first, &axes, viewport, None)
             .unwrap();
         controller
-            .import_view(&mut model, second, &axes, viewport)
+            .attach(&mut model, second, &axes, viewport, None)
             .unwrap();
         move_to(&mut controller, &mut model, first, &axes, viewport, 4, 3);
         // The primary view mirrors the engine; the secondary view keeps its
@@ -1308,14 +1030,14 @@ mod tests {
         assert_eq!(model.get_selected_view().top_row, 4);
         // Re-import restores the saved position, not the engine origin.
         let restored = controller
-            .import_view(&mut model, first, &axes, viewport)
+            .attach(&mut model, first, &axes, viewport, None)
             .unwrap();
         assert_eq!(restored.position.first_cell.row, 4);
         controller.remove_sheet(first.workbook_id, first.sheet_id);
         assert!(controller.view_position(first).is_none());
         assert!(controller.view_position(second).is_none());
         let reimported = controller
-            .import_view(&mut model, first, &axes, viewport)
+            .attach(&mut model, first, &axes, viewport, None)
             .unwrap();
         assert_eq!(reimported.position.first_cell.row, 4);
         assert_eq!(reimported.generation, 0);
@@ -1332,25 +1054,25 @@ mod tests {
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
 
-        controller.set_primary_view(Some(first));
+        controller.activate(first);
         controller
-            .import_view(&mut model, first, &axes, viewport)
+            .attach(&mut model, first, &axes, viewport, None)
             .unwrap();
         move_to(&mut controller, &mut model, first, &axes, viewport, 10, 1);
         assert_eq!(model.get_selected_view().top_row, 10);
 
         controller
-            .import_view(&mut model, second, &axes, viewport)
+            .attach(&mut model, second, &axes, viewport, None)
             .unwrap();
-        controller.set_primary_view(Some(second));
+        controller.activate(second);
         move_to(&mut controller, &mut model, second, &axes, viewport, 20, 1);
         assert_eq!(model.get_selected_view().top_row, 20);
 
         // The saved position stays equal, but the engine origin still belongs
         // to the other view. Restoring the primary view must move the engine.
-        controller.set_primary_view(Some(first));
+        controller.activate(first);
         let restored = controller
-            .import_view(&mut model, first, &axes, viewport)
+            .attach(&mut model, first, &axes, viewport, None)
             .unwrap();
         assert_eq!(restored.position.first_cell.row, 10);
         assert!(!restored.changed);
@@ -1359,7 +1081,7 @@ mod tests {
     }
 
     #[test]
-    fn import_view_reports_a_normalized_origin_change() {
+    fn attach_reports_a_normalized_origin_change() {
         let mut model = model();
         model.set_rows_hidden(0, 2, 2, true).unwrap();
         model.set_top_left_visible_cell(2, 1).unwrap();
@@ -1367,10 +1089,10 @@ mod tests {
         let scope = scope(&model, 0);
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(scope));
+        controller.activate(scope);
 
         let update = controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
 
         assert_eq!(update.position.first_cell.row, 3);
@@ -1391,46 +1113,44 @@ mod tests {
             revision: 0,
         });
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(scope));
+        controller.activate(scope);
 
         assert!(matches!(
-            controller.import_view(&mut model, scope, &wrong, viewport),
-            Err(ScrollError::AxesMismatch)
+            controller.attach(&mut model, scope, &wrong, viewport, None),
+            Err(GridError::AxesMismatch)
         ));
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
         assert!(matches!(
-            controller.apply_scroll(
+            controller.command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: 1.0 },
+                GridCommand::Scroll { dx: 0.0, dy: 1.0 },
                 &wrong,
                 viewport,
             ),
-            Err(ScrollError::AxesMismatch)
+            Err(GridError::AxesMismatch)
         ));
     }
 
     #[test]
-    fn navigation_applied_handles_a_frozen_column_band_that_consumes_the_axis() {
+    fn sync_handles_a_frozen_column_band_that_consumes_the_axis() {
         let mut model = model();
         let axes = axes(&model);
         let scope = scope(&model, 0);
-        let viewport = ScrollViewport {
-            pane_width: 90,
-            pane_height: 100,
+        let viewport = Pane {
+            width: 90,
+            height: 100,
             frozen_rows: 0,
             frozen_columns: 16_384,
         };
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(scope));
+        controller.activate(scope);
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
-        let update = controller
-            .navigation_applied(&mut model, scope, &axes, viewport)
-            .unwrap();
+        let update = controller.sync(&model, scope, &axes, viewport).unwrap();
         assert_eq!(update.position.first_cell.col, 16_384);
         assert_eq!(update.position.offset_x, 0);
     }
@@ -1442,17 +1162,17 @@ mod tests {
         let scope = scope(&model, 0);
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(scope));
+        controller.activate(scope);
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
 
         for _ in 0..2 {
             let update = controller
-                .apply_scroll(
+                .command(
                     &mut model,
                     scope,
-                    ScrollCommand::Pixels { dx: 0.0, dy: 0.5 },
+                    GridCommand::Scroll { dx: 0.0, dy: 0.5 },
                     &axes,
                     viewport,
                 )
@@ -1474,26 +1194,26 @@ mod tests {
         let scope = scope(&model, 0);
         let viewport = pane(100, 100);
         let mut controller = NavigationController::default();
-        controller.set_primary_view(Some(scope));
+        controller.activate(scope);
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
 
         // A negative fraction at the top is outward and is discarded.
         controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: -0.5 },
+                GridCommand::Scroll { dx: 0.0, dy: -0.5 },
                 &axes,
                 viewport,
             )
             .unwrap();
         let down = controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: 1.0 },
+                GridCommand::Scroll { dx: 0.0, dy: 1.0 },
                 &axes,
                 viewport,
             )
@@ -1521,19 +1241,19 @@ mod tests {
         let axes = WorksheetAxes::from_sizes(&rows, &columns).unwrap();
         move_to(&mut controller, &mut model, scope, &axes, viewport, 196, 1);
         controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: 0.5 },
+                GridCommand::Scroll { dx: 0.0, dy: 0.5 },
                 &axes,
                 viewport,
             )
             .unwrap();
         let up = controller
-            .apply_scroll(
+            .command(
                 &mut model,
                 scope,
-                ScrollCommand::Pixels { dx: 0.0, dy: -1.0 },
+                GridCommand::Scroll { dx: 0.0, dy: -1.0 },
                 &axes,
                 viewport,
             )
@@ -1567,23 +1287,14 @@ mod tests {
         let viewport = pane(90, 60);
         let mut controller = NavigationController::default();
         controller
-            .import_view(&mut model, scope, &axes, viewport)
+            .attach(&mut model, scope, &axes, viewport, None)
             .unwrap();
         move_to(&mut controller, &mut model, scope, &axes, viewport, 196, 1);
         let resized = controller
-            .resize_view(&mut model, scope, &axes, pane(90, 200))
+            .resize(&mut model, scope, &axes, pane(90, 200))
             .unwrap();
         assert_eq!(resized.position.first_cell.row, 191);
         assert_eq!(resized.position.offset_y, 0);
-    }
-
-    fn pane_input(width: i32, height: i32) -> Pane {
-        Pane {
-            width,
-            height,
-            frozen_rows: 0,
-            frozen_columns: 0,
-        }
     }
 
     #[test]
@@ -1591,7 +1302,7 @@ mod tests {
         let mut model = model();
         let axes = axes(&model);
         let scope = scope(&model, 0);
-        let pane = pane_input(100, 100);
+        let pane = pane(100, 100);
         let mut controller = NavigationController::default();
         controller.activate(scope);
         controller
@@ -1628,7 +1339,7 @@ mod tests {
         let mut model = model();
         let axes = axes(&model);
         let scope = scope(&model, 0);
-        let pane = pane_input(100, 100);
+        let pane = pane(100, 100);
         let mut controller = NavigationController::default();
         controller
             .attach(&mut model, scope, &axes, pane, None)
@@ -1656,7 +1367,7 @@ mod tests {
         let mut model = model();
         let axes = axes(&model);
         let scope = scope(&model, 0);
-        let pane = pane_input(100, 100);
+        let pane = pane(100, 100);
         let mut controller = NavigationController::default();
         controller
             .attach(&mut model, scope, &axes, pane, None)
@@ -1684,7 +1395,7 @@ mod tests {
         let mut model = model();
         let axes = axes(&model);
         let scope = scope(&model, 0);
-        let pane = pane_input(100, 100);
+        let pane = pane(100, 100);
         let mut controller = NavigationController::default();
         controller
             .attach(&mut model, scope, &axes, pane, None)
@@ -1733,7 +1444,7 @@ mod tests {
         let mut model = model();
         let axes = axes(&model);
         let scope = scope(&model, 0);
-        let pane = pane_input(100, 100);
+        let pane = pane(100, 100);
         let mut controller = NavigationController::default();
         controller
             .attach(&mut model, scope, &axes, pane, None)
@@ -1751,7 +1462,7 @@ mod tests {
         let axes = axes(&model);
         let first = scope(&model, 0);
         let second = scope(&model, 1);
-        let pane = pane_input(100, 100);
+        let pane = pane(100, 100);
         let mut controller = NavigationController::default();
         controller.activate(first);
         controller
@@ -1799,7 +1510,7 @@ mod tests {
         let mut model = model();
         let axes = axes(&model);
         let scope = scope(&model, 0);
-        let pane = pane_input(100, 100);
+        let pane = pane(100, 100);
         let mut controller = NavigationController::default();
         controller.activate(scope);
         controller

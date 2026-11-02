@@ -4,7 +4,6 @@
 //! resolves merges and hidden axes. The caller owns frame presentation.
 
 mod scroll;
-pub use scroll::{ScrollCommand, ScrollError, ScrollUpdate, ScrollViewport};
 
 use iron_canvas_core::CellCoord;
 use iron_canvas_core::ScrollPosition;
@@ -25,9 +24,6 @@ pub struct ViewIdentity {
     pub view_id: u64,
     pub sheet_id: u32,
 }
-
-/// Compatibility name for `ViewIdentity` during host migration.
-pub type NavigationScope = ViewIdentity;
 
 /// Pane and freeze inputs for one call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,11 +156,6 @@ impl NavigationController {
     /// Select the view that mirrors engine indices.
     pub fn activate(&mut self, identity: ViewIdentity) {
         self.primary = Some(identity);
-    }
-
-    /// Select the view that mirrors engine indices.
-    pub fn set_primary_view(&mut self, scope: Option<NavigationScope>) {
-        self.primary = scope;
     }
 }
 
