@@ -6,14 +6,13 @@
 mod scroll;
 pub use scroll::{ScrollCommand, ScrollError, ScrollUpdate, ScrollViewport};
 
-use iron_canvas::{Direction, NavigationIntent, PageDirection, TraversalAxis, TraversalDirection};
+use iron_canvas_core::navigation::{
+    Direction, NavigationIntent, PageDirection, TraversalAxis, TraversalDirection,
+};
 use ironcalc_base::{UserModel, worksheet::NavigationDirection};
 use scroll::ViewMap;
-use std::collections::VecDeque;
 
-const QUEUE_LIMIT: usize = 64;
-
-/// Identity of a queued command. The sheet ID survives sheet reordering.
+/// Stable identity of one host view. The sheet ID survives sheet reordering.
 /// A host view identity separates two windows that show the same sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NavigationScope {
@@ -22,46 +21,9 @@ pub struct NavigationScope {
     pub sheet_id: u32,
 }
 
-/// One entry in the shared navigation and scroll queue.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum ControllerCommand {
-    Navigation(NavigationIntent),
-    Scroll(ScrollCommand),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QueueError {
-    Full,
-    /// A repeated input arrived at capacity and was discarded.
-    RepeatDropped,
-    InteractionExhausted,
-}
-
-impl std::fmt::Display for QueueError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Full => f.write_str("navigation queue is full"),
-            Self::RepeatDropped => f.write_str("repeated input was dropped at capacity"),
-            Self::InteractionExhausted => f.write_str("grid interaction identity exhausted"),
-        }
-    }
-}
-
-impl std::error::Error for QueueError {}
-
-#[derive(Debug, Clone, Copy)]
-struct PendingCommand {
-    command: ControllerCommand,
-    scope: NavigationScope,
-    interaction: u64,
-}
-
-/// Keep commands in input order until geometry is ready.
+/// Owns the accepted scroll position for each view.
 #[derive(Default)]
 pub struct NavigationController {
-    pending: VecDeque<PendingCommand>,
-    interaction: u64,
-    selection_revision: u64,
     views: ViewMap,
     primary: Option<NavigationScope>,
     #[cfg(test)]
@@ -69,84 +31,10 @@ pub struct NavigationController {
 }
 
 impl NavigationController {
-    pub fn is_empty(&self) -> bool {
-        self.pending.is_empty()
-    }
-
-    pub fn len(&self) -> usize {
-        self.pending.len()
-    }
-
-    pub fn selection_revision(&self) -> u64 {
-        self.selection_revision
-    }
-
-    pub fn next_revision(&self) -> Option<u64> {
-        self.selection_revision.checked_add(1)
-    }
-
-    pub fn accept_revision(&mut self, revision: u64) {
-        self.selection_revision = revision;
-    }
-
-    pub fn enqueue(
-        &mut self,
-        intent: NavigationIntent,
-        scope: NavigationScope,
-        repeat: bool,
-    ) -> Result<(), QueueError> {
-        self.enqueue_queued(ControllerCommand::Navigation(intent), scope, repeat)
-    }
-
-    pub(crate) fn enqueue_queued(
-        &mut self,
-        command: ControllerCommand,
-        scope: NavigationScope,
-        repeat: bool,
-    ) -> Result<(), QueueError> {
-        if self.interaction == u64::MAX {
-            return Err(QueueError::InteractionExhausted);
-        }
-        if self.pending.len() == QUEUE_LIMIT {
-            return Err(if repeat {
-                QueueError::RepeatDropped
-            } else {
-                QueueError::Full
-            });
-        }
-        self.pending.push_back(PendingCommand {
-            command,
-            scope,
-            interaction: self.interaction,
-        });
-        Ok(())
-    }
-
-    /// Remove the first ready command for one view.
-    ///
-    /// Commands for other views stay queued in input order. A host that drains
-    /// one view must not discard work that another view still needs.
-    pub fn pop_ready(&mut self, scope: NavigationScope) -> Option<ControllerCommand> {
-        let position = self.pending.iter().position(|command| {
-            command.scope == scope && command.interaction == self.interaction
-        })?;
-        self.pending.remove(position).map(|command| command.command)
-    }
-
     /// Select the view that mirrors engine indices. Other views keep their
     /// positions locally and never move the selected engine sheet.
     pub fn set_primary_view(&mut self, scope: Option<NavigationScope>) {
         self.primary = scope;
-    }
-
-    pub fn cancel(&mut self) -> Result<(), QueueError> {
-        let next = self
-            .interaction
-            .checked_add(1)
-            .ok_or(QueueError::InteractionExhausted)?;
-        self.pending.clear();
-        self.interaction = next;
-        Ok(())
     }
 }
 
@@ -258,87 +146,6 @@ pub fn select_anchor_and_focus(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn queue_keeps_order_and_rejects_old_sheet_identity() {
-        let mut controller = NavigationController::default();
-        let a = NavigationScope {
-            workbook_id: 1,
-            view_id: 0,
-            sheet_id: 7,
-        };
-        let b = NavigationScope {
-            workbook_id: 1,
-            view_id: 0,
-            sheet_id: 8,
-        };
-        controller
-            .enqueue(NavigationIntent::Step(Direction::Right), a, false)
-            .unwrap();
-        controller
-            .enqueue(NavigationIntent::Step(Direction::Down), b, false)
-            .unwrap();
-        controller
-            .enqueue(NavigationIntent::Step(Direction::Left), b, false)
-            .unwrap();
-        assert_eq!(
-            controller.pop_ready(b),
-            Some(ControllerCommand::Navigation(NavigationIntent::Step(
-                Direction::Down
-            )))
-        );
-        assert_eq!(
-            controller.pop_ready(b),
-            Some(ControllerCommand::Navigation(NavigationIntent::Step(
-                Direction::Left
-            )))
-        );
-        assert_eq!(controller.pop_ready(b), None);
-        assert_eq!(
-            controller.pop_ready(a),
-            Some(ControllerCommand::Navigation(NavigationIntent::Step(
-                Direction::Right
-            )))
-        );
-        controller
-            .enqueue(NavigationIntent::Step(Direction::Up), b, false)
-            .unwrap();
-        controller.cancel().unwrap();
-        assert_eq!(controller.pop_ready(b), None);
-    }
-
-    #[test]
-    fn repeat_overflow_drops_only_the_repeat() {
-        let mut controller = NavigationController::default();
-        let scope = NavigationScope {
-            workbook_id: 1,
-            view_id: 0,
-            sheet_id: 1,
-        };
-        for _ in 0..QUEUE_LIMIT {
-            controller
-                .enqueue(NavigationIntent::Step(Direction::Right), scope, false)
-                .unwrap();
-        }
-        assert_eq!(
-            controller.enqueue(NavigationIntent::Step(Direction::Down), scope, true),
-            Err(QueueError::RepeatDropped)
-        );
-        assert_eq!(controller.len(), QUEUE_LIMIT);
-        assert_eq!(
-            controller.enqueue(NavigationIntent::Step(Direction::Down), scope, false),
-            Err(QueueError::Full)
-        );
-        for _ in 0..QUEUE_LIMIT {
-            assert_eq!(
-                controller.pop_ready(scope),
-                Some(ControllerCommand::Navigation(NavigationIntent::Step(
-                    Direction::Right
-                )))
-            );
-        }
-        assert_eq!(controller.pop_ready(scope), None);
-    }
 
     #[test]
     fn explicit_focus_restores_merge_contraction() {
