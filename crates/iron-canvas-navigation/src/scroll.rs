@@ -302,8 +302,15 @@ impl NavigationController {
                 Ok(outcome_from_update(update, RevealOutcome::NotRequested))
             }
             GridCommand::Navigate(intent) => {
-                let result =
-                    apply_navigation(model, intent, pane.height).map_err(GridError::Navigation)?;
+                let result = match apply_navigation(model, intent, pane.height) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        // The engine can move before it reports an error. Follow
+                        // the view it now shows, then report the failure.
+                        let _ = self.sync(model, identity, axes, pane);
+                        return Err(GridError::Navigation(error));
+                    }
+                };
                 let (state, mut position) = self.reconcile(model, identity, axes, pane)?;
                 let reveal =
                     self.reveal_target(model, identity, &mut position, &result.target, axes, pane)?;
