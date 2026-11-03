@@ -125,10 +125,12 @@ on any concrete backend crate. No crate depends on `iron-canvas` except the host
   until its engine gate passes.
 
 The navigation state owner is `NavigationController` in
-`iron-canvas-navigation`. It stores one accepted position and a signed
-fractional remainder per view. It applies `Scroll`, `Navigate`, and `Reveal`
-commands in input order, reveals inline, and mirrors the primary view origin
-through a short mutable model borrow. It never draws.
+`iron-canvas-navigation`. It stores one accepted position, a signed fractional
+remainder, and the newest axes revision per view. It applies `Scroll`,
+`Navigate`, and `Reveal` commands in input order, reveals inline, and mirrors
+the primary view origin through a short mutable model borrow. It never draws.
+Scoped axes for another workbook or sheet, or an older revision, are rejected.
+Unscoped axes stay available for tests and exports.
 
 ### Paint contract
 

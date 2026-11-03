@@ -23,6 +23,8 @@ pub(crate) struct ViewState {
     fractional_x: f64,
     fractional_y: f64,
     generation: u64,
+    /// Content revision of the newest axes accepted for this view.
+    axes_revision: u64,
 }
 
 impl ViewState {
@@ -31,6 +33,7 @@ impl ViewState {
             position,
             fractional_x: 0.0,
             fractional_y: 0.0,
+            axes_revision: 0,
             generation: 0,
         }
     }
@@ -38,16 +41,27 @@ impl ViewState {
 
 pub(crate) type ViewMap = HashMap<ViewIdentity, ViewState>;
 
-/// Reject cached axes with a different source identity. Unscoped axes stay
-/// available for tests and exports.
-fn validate_axes(axes: &WorksheetAxes, identity: ViewIdentity) -> Result<(), GridError> {
-    if let Some(axes_scope) = axes.scope
-        && (axes_scope.workbook_id != identity.workbook_id
-            || axes_scope.sheet_id != identity.sheet_id)
+/// Reject cached axes with a different source identity or an older revision.
+/// Unscoped axes stay available for tests and exports.
+///
+/// Return the newest revision accepted for the view. A newer revision comes
+/// from a rebuilt axis cache after a content or dimension change. An older
+/// revision is a stale cache and would move the view against old extents.
+fn validate_axes(
+    axes: &WorksheetAxes,
+    identity: ViewIdentity,
+    accepted_revision: u64,
+) -> Result<u64, GridError> {
+    let Some(axes_scope) = axes.scope else {
+        return Ok(accepted_revision);
+    };
+    if axes_scope.workbook_id != identity.workbook_id
+        || axes_scope.sheet_id != identity.sheet_id
+        || axes_scope.revision < accepted_revision
     {
         return Err(GridError::AxesMismatch);
     }
-    Ok(())
+    Ok(axes_scope.revision)
 }
 
 fn row_window(axes: &WorksheetAxes, frozen: i32) -> ScrollAxisWindow {
@@ -97,11 +111,19 @@ impl NavigationController {
         pane: Pane,
         origin: Option<CellCoord>,
     ) -> Result<Outcome, GridError> {
-        validate_axes(axes, identity)?;
-        if let Some(state) = self.views.get(&identity).copied() {
+        let existing = self.views.get(&identity).copied();
+        let axes_revision = validate_axes(
+            axes,
+            identity,
+            existing.map_or(0, |state| state.axes_revision),
+        )?;
+        if let Some(state) = existing {
             let position = self.normalize(state.position, axes, pane, true);
             let changed = position != state.position;
-            let mut state = state;
+            let mut state = ViewState {
+                axes_revision,
+                ..state
+            };
             state.position = position;
             if changed {
                 state.generation = state
@@ -139,7 +161,10 @@ impl NavigationController {
             &axes.cols,
             column_window(axes, pane.frozen_columns),
         );
-        let state = ViewState::new(position);
+        let state = ViewState {
+            axes_revision,
+            ..ViewState::new(position)
+        };
         let mirrored = self.mirror(model, identity, position)?;
         let changed = position != aligned;
         self.views.insert(identity, state);
@@ -162,14 +187,17 @@ impl NavigationController {
         identity: ViewIdentity,
         axes: &WorksheetAxes,
     ) -> Result<ViewState, GridError> {
-        validate_axes(axes, identity)?;
         let Some(state) = self.views.get(&identity).copied() else {
             return Err(GridError::UnknownView(identity));
         };
+        let axes_revision = validate_axes(axes, identity, state.axes_revision)?;
         if selected_sheet_id(model)? != identity.sheet_id {
             return Err(GridError::IdentityMismatch);
         }
-        Ok(state)
+        Ok(ViewState {
+            axes_revision,
+            ..state
+        })
     }
 
     fn scroll_pixels(
@@ -181,10 +209,10 @@ impl NavigationController {
         axes: &WorksheetAxes,
         pane: Pane,
     ) -> Result<Outcome, GridError> {
-        validate_axes(axes, identity)?;
         let Some(mut state) = self.views.get(&identity).copied() else {
             return Err(GridError::UnknownView(identity));
         };
+        state.axes_revision = validate_axes(axes, identity, state.axes_revision)?;
         if !dx.is_finite() || !dy.is_finite() {
             return Err(GridError::InvalidDelta);
         }
@@ -337,9 +365,13 @@ impl NavigationController {
         axes: &WorksheetAxes,
         pane: Pane,
     ) -> Result<Outcome, GridError> {
-        validate_axes(axes, identity)?;
         let Some(state) = self.views.get(&identity).copied() else {
             return Err(GridError::UnknownView(identity));
+        };
+        let axes_revision = validate_axes(axes, identity, state.axes_revision)?;
+        let state = ViewState {
+            axes_revision,
+            ..state
         };
         let position = self.normalize(state.position, axes, pane, true);
         self.commit(
@@ -1186,6 +1218,58 @@ mod tests {
             ),
             Err(GridError::AxesMismatch)
         ));
+    }
+
+    #[test]
+    fn stale_axes_are_rejected_after_a_newer_revision_is_accepted() {
+        let mut model = model();
+        let plain = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let older = plain.clone().with_scope(AxesScope {
+            workbook_id: scope.workbook_id,
+            sheet_id: scope.sheet_id,
+            revision: 4,
+        });
+        let newer = plain.with_scope(AxesScope {
+            workbook_id: scope.workbook_id,
+            sheet_id: scope.sheet_id,
+            revision: 5,
+        });
+        let mut controller = NavigationController::default();
+        controller
+            .attach(&mut model, scope, &older, viewport, None)
+            .unwrap();
+        // A dimension change rebuilds the axes at the new revision.
+        controller
+            .resize(&mut model, scope, &newer, viewport)
+            .unwrap();
+        // A cached old revision must not move the view against old extents.
+        assert_eq!(
+            controller.command(
+                &mut model,
+                scope,
+                GridCommand::Scroll { dx: 0.0, dy: 5.0 },
+                &older,
+                viewport,
+            ),
+            Err(GridError::AxesMismatch)
+        );
+        assert!(matches!(
+            controller.attach(&mut model, scope, &older, viewport, None),
+            Err(GridError::AxesMismatch)
+        ));
+        assert!(
+            controller
+                .command(
+                    &mut model,
+                    scope,
+                    GridCommand::Scroll { dx: 0.0, dy: 5.0 },
+                    &newer,
+                    viewport,
+                )
+                .is_ok()
+        );
     }
 
     #[test]
