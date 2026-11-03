@@ -117,6 +117,7 @@ pub enum GridError {
     AxesMismatch,
     GenerationExhausted,
     InvalidDelta,
+    /// The target is outside the sheet or has no visible extent.
     NotVisible,
     Navigation(NavigationError),
     Engine(String),
@@ -134,7 +135,9 @@ impl std::fmt::Display for GridError {
             Self::AxesMismatch => f.write_str("axis sizes do not match the view identity"),
             Self::GenerationExhausted => f.write_str("view generation is exhausted"),
             Self::InvalidDelta => f.write_str("scroll delta is not finite"),
-            Self::NotVisible => f.write_str("reveal target has no visible extent"),
+            Self::NotVisible => {
+                f.write_str("reveal target is outside the sheet or has no visible extent")
+            }
             Self::Navigation(error) => write!(f, "{error}"),
             Self::Engine(error) => write!(f, "engine scroll update failed: {error}"),
         }

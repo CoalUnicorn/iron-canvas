@@ -320,6 +320,7 @@ impl NavigationController {
                 self.commit(model, identity, state, position, reveal)
             }
             GridCommand::Reveal(target) => {
+                validate_reveal_target(&target)?;
                 let state = self.validated_state(model, identity, axes)?;
                 let mut position = state.position;
                 let reveal =
@@ -484,6 +485,34 @@ impl NavigationController {
             RevealOutcome::AlreadyVisible
         })
     }
+}
+
+/// Reject a target outside the sheet or with an inconsistent focus.
+///
+/// A clamped reveal would report `AlreadyVisible` for a cell that does not
+/// exist. Return `NotVisible` instead so the host sees the bad target.
+fn validate_reveal_target(target: &RevealTarget) -> Result<(), GridError> {
+    if !crate::in_bounds(target.first)
+        || !crate::in_bounds(target.last)
+        || target.first.row > target.last.row
+        || target.first.col > target.last.col
+    {
+        return Err(GridError::NotVisible);
+    }
+    let focus_ok = match target.focus {
+        None => true,
+        Some(focus) => {
+            crate::in_bounds(focus)
+                && focus.row >= target.first.row
+                && focus.row <= target.last.row
+                && focus.col >= target.first.col
+                && focus.col <= target.last.col
+        }
+    };
+    if !focus_ok {
+        return Err(GridError::NotVisible);
+    }
+    Ok(())
 }
 
 fn skip_reason(target: &RevealTarget, pane: Pane) -> Option<SkipReason> {
@@ -1526,6 +1555,63 @@ mod tests {
         // The focus at row 11 ends at 220. The pane starts at row 7.
         assert_eq!(update.position.first_cell.row, 7);
         assert_eq!(update.reveal, RevealOutcome::Moved);
+    }
+
+    #[test]
+    fn reveal_rejects_targets_outside_the_sheet() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+        controller
+            .attach(&mut model, scope, &axes, viewport, None)
+            .unwrap();
+        let before = controller.view_position(scope).unwrap();
+        let target = |row, col| RevealTarget {
+            first: CellCoord { row, col },
+            last: CellCoord { row, col },
+            focus: None,
+        };
+        for invalid in [
+            target(0, 1),
+            target(LAST_ROW + 1, 1),
+            target(1, 0),
+            target(1, LAST_COLUMN + 1),
+            RevealTarget {
+                first: CellCoord { row: 4, col: 1 },
+                last: CellCoord { row: 3, col: 1 },
+                focus: None,
+            },
+            RevealTarget {
+                first: CellCoord { row: 1, col: 1 },
+                last: CellCoord { row: 3, col: 1 },
+                focus: Some(CellCoord { row: 4, col: 1 }),
+            },
+        ] {
+            assert_eq!(
+                controller.command(
+                    &mut model,
+                    scope,
+                    GridCommand::Reveal(invalid),
+                    &axes,
+                    viewport,
+                ),
+                Err(GridError::NotVisible)
+            );
+            assert_eq!(controller.view_position(scope), Some(before));
+        }
+        assert!(
+            controller
+                .command(
+                    &mut model,
+                    scope,
+                    GridCommand::Reveal(target(80, 1)),
+                    &axes,
+                    viewport,
+                )
+                .is_ok()
+        );
     }
 
     #[test]
