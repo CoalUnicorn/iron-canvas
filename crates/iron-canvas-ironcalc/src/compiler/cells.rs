@@ -3,7 +3,7 @@ use super::{CellView, LAST_COLUMN, LAST_ROW};
 use iron_canvas_core::CellCoord;
 use iron_canvas_core::scene_geometry::{AxisCell, GridPane};
 use ironcalc_base::{CellsBlock, types::CellType};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct BlockRect {
@@ -219,7 +219,17 @@ fn plan_absolute(
     Ok((blocks, total_cells))
 }
 
+/// Sort exact blocks by position after the limits select them in pane order.
+fn finish_exact(mut blocks: Vec<BlockRect>) -> Vec<BlockRect> {
+    blocks.sort_unstable_by_key(|block| (block.row, block.column));
+    blocks
+}
+
 /// Split each consecutive run into tiles that start at the run origin.
+///
+/// Repeated panes can request the same rectangle. Skip a duplicate without
+/// spending the attempt budget. The limits still select blocks in pane order;
+/// the returned set is sorted by position.
 fn plan_exact(
     panes: &[GridPane],
     limits: BlockLimits,
@@ -227,6 +237,7 @@ fn plan_exact(
     tile_height: usize,
 ) -> Result<Vec<BlockRect>, BlockPlanError> {
     let mut blocks = Vec::new();
+    let mut seen = HashSet::new();
     let mut remaining = limits.cells_per_attempt;
     for pane in panes {
         let mut row_start = 0;
@@ -245,22 +256,30 @@ fn plan_exact(
                     while column_chunk < column_run.len() {
                         let column_chunk_end = (column_chunk + tile_width).min(column_run.len());
                         let columns = &column_run[column_chunk..column_chunk_end];
-                        let count = rows
-                            .len()
-                            .checked_mul(columns.len())
-                            .ok_or(BlockPlanError::Arithmetic)?;
-                        if blocks.len() == limits.blocks_per_attempt || count > remaining {
-                            return Ok(blocks);
+                        if blocks.len() == limits.blocks_per_attempt {
+                            return Ok(finish_exact(blocks));
                         }
-                        blocks.push(BlockRect::checked(
+                        let rect = BlockRect::checked(
                             rows[0].index,
                             columns[0].index,
                             columns.len(),
                             rows.len(),
-                        )?);
+                        )?;
+                        if !seen.insert(rect) {
+                            column_chunk = column_chunk_end;
+                            continue;
+                        }
+                        let count = rows
+                            .len()
+                            .checked_mul(columns.len())
+                            .ok_or(BlockPlanError::Arithmetic)?;
+                        if count > remaining {
+                            return Ok(finish_exact(blocks));
+                        }
+                        blocks.push(rect);
                         remaining -= count;
                         if remaining == 0 || blocks.len() == limits.blocks_per_attempt {
-                            return Ok(blocks);
+                            return Ok(finish_exact(blocks));
                         }
                         column_chunk = column_chunk_end;
                     }
@@ -271,7 +290,7 @@ fn plan_exact(
             row_start = row_end;
         }
     }
-    Ok(blocks)
+    Ok(finish_exact(blocks))
 }
 
 /// Return the end of the consecutive run that starts at `start`.
@@ -657,6 +676,21 @@ mod tests {
         let blocks = plan_blocks(&[pane(&rows, &columns)], BlockLimits::default()).unwrap();
         assert_eq!(blocks.len(), 1);
         assert_eq!((blocks[0].width, blocks[0].height), (20, 20));
+    }
+
+    #[test]
+    fn exact_plan_is_deduplicated_and_ordered() {
+        let panes = [
+            pane(&[1, 1_000], &[1, 1_000]),
+            pane(&[1, 1_000], &[1, 1_000]),
+        ];
+        let blocks = plan_blocks(&panes, BlockLimits::default()).unwrap();
+        assert_eq!(blocks.len(), 4);
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| { (pair[0].row, pair[0].column) <= (pair[1].row, pair[1].column) })
+        );
     }
 
     #[test]
