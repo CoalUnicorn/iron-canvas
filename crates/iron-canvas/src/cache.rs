@@ -363,7 +363,6 @@ mod tests {
             .unwrap();
         assert_eq!(retry.sequence, 3);
         assert!(!retry.content_cached);
-        assert!(retry.extended_style_reads > 0);
         assert_eq!(cache.entries.back().unwrap().key.sheet, 0);
         assert!(
             session

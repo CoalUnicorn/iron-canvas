@@ -312,6 +312,7 @@ fn block_records_preserve_occupancy_and_count_styles_and_fallback_once() {
         .load_blocks(
             prepared.geometry.as_ref().unwrap(),
             cells::BlockLimits::default(),
+            None,
         )
         .unwrap();
     let style_count = attempt.reads;
@@ -326,6 +327,53 @@ fn block_records_preserve_occupancy_and_count_styles_and_fallback_once() {
     assert_eq!(attempt.cached.view(CellCoord { row: 1, col: 1 }).value, "");
     assert_eq!(attempt.read_stats.fallback_cells, 1);
     assert_eq!(attempt.reads, style_count + 1);
+}
+
+#[test]
+fn block_cache_reuses_absolute_tiles_across_scroll_frames() {
+    let mut model = UserModel::new_empty("cache", "en", "UTC", "en").unwrap();
+    for row in 1..=80 {
+        for column in 1..=80 {
+            model.set_user_input(0, row, column, "x").unwrap();
+        }
+    }
+    let compiler = WorksheetCompiler::new();
+    let theme = CanvasTheme::light();
+    let mut cache = WorksheetBlockCache::default();
+    let identity = BlockCacheIdentity {
+        workbook_id: 1,
+        sheet: 0,
+        revision: 1,
+    };
+    let mut layouts = TextLayoutCache::default();
+    let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut layouts);
+    let mut frames = Vec::new();
+    for row in 1..=3 {
+        let prepared = compiler
+            .prepare_with_cache(
+                WorksheetContext {
+                    workbook: &model,
+                    sheet: 0,
+                    theme: &theme,
+                },
+                WorksheetViewport::aligned(CellCoord { row, col: 1 }, 4_000, 3_000),
+                &mut shaper,
+                WorksheetReuse::default(),
+                identity,
+                &mut cache,
+            )
+            .unwrap();
+        frames.push((
+            prepared.extended_style_reads,
+            prepared.read_stats.block_calls,
+            prepared.read_stats.block_reuses,
+        ));
+    }
+    assert!(frames[0].1 > 0, "{frames:?}");
+    for frame in &frames[1..] {
+        assert_eq!(frame.1, 0, "{frames:?}");
+        assert!(frame.2 > 0, "{frames:?}");
+    }
 }
 
 #[test]
@@ -353,6 +401,7 @@ fn failed_block_read_reports_bounds_and_does_not_retry_individual_cells() {
         .load_blocks(
             prepared.geometry.as_ref().unwrap(),
             cells::BlockLimits::default(),
+            None,
         )
         .unwrap_err();
     assert_eq!(error.operation, CellReadOperation::CellsBlock);

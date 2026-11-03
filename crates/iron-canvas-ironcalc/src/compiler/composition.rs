@@ -55,6 +55,7 @@ pub(super) fn prepare(
         reuse,
         Some(cells::BlockLimits::default()),
         cells::FillPaint::Runs,
+        None,
     )
 }
 
@@ -73,6 +74,7 @@ pub(super) fn prepare_with_blocks(
         reuse,
         blocks,
         cells::FillPaint::Cells,
+        None,
     )
 }
 
@@ -83,6 +85,7 @@ pub(super) fn prepare_with_fill_paint(
     reuse: WorksheetReuse<'_>,
     blocks: Option<cells::BlockLimits>,
     fill_paint: cells::FillPaint,
+    block_cache: Option<(&mut WorksheetBlockCache, BlockCacheIdentity)>,
 ) -> Result<PreparedWorksheet, WorksheetCompileError> {
     let WorksheetContext {
         workbook,
@@ -106,7 +109,7 @@ pub(super) fn prepare_with_fill_paint(
 
     // Load visible data before spill searches request offscreen cells.
     if let Some(limits) = blocks {
-        attempt.load_blocks(&geometry, limits)?;
+        attempt.load_blocks(&geometry, limits, block_cache)?;
     }
     // Read every visible cell once. Paint and spill use pane slots after this.
     attempt.load_visible(&geometry)?;

@@ -268,13 +268,7 @@ fn local_metadata_survives_scroll_resize_and_theme_changes() {
             1 => request.viewport.width += 30,
             _ => request.theme = CanvasTheme::dark(),
         }
-        assert!(
-            session
-                .render(&model, &request)
-                .unwrap()
-                .extended_style_reads
-                > 0
-        );
+        assert!(!session.render(&model, &request).unwrap().content_cached);
         let current = &session.committed_frame().unwrap().worksheet;
         assert!(Rc::ptr_eq(&original.links, &current.links));
         assert!(Rc::ptr_eq(&original.merges, &current.merges));
@@ -603,7 +597,6 @@ fn metric_profiles_generations_and_invalidation_rebuild_layout() {
         .render_cached(&mut cache, &model, &request, TextMetricsKey::new(2, 1))
         .unwrap();
     assert!(!result.content_cached);
-    assert!(result.extended_style_reads > 0);
     assert_eq!(result.strategy, RenderStrategy::Fresh);
     assert_fresh(&wide, &model, &request);
 }
@@ -663,7 +656,6 @@ fn capacity_zero_and_fresh_bypass_shared_content() {
             .render_cached(&mut cache, &model, &request, METRICS)
             .unwrap();
         assert!(!result.content_cached);
-        assert!(result.extended_style_reads > 0);
         assert!(cache.is_empty());
     }
     cache.set_capacity(1);
@@ -672,7 +664,6 @@ fn capacity_zero_and_fresh_bypass_shared_content() {
         .unwrap();
     let result = session.render_fresh(&model, &request).unwrap();
     assert!(!result.content_cached);
-    assert!(result.extended_style_reads > 0);
     assert_eq!(result.strategy, RenderStrategy::Fresh);
     assert!(
         session
@@ -680,14 +671,8 @@ fn capacity_zero_and_fresh_bypass_shared_content() {
             .unwrap()
             .content_cached
     );
-    // A plain render cannot reuse content under an untracked metric key.
-    assert!(
-        session
-            .render(&model, &request)
-            .unwrap()
-            .extended_style_reads
-            > 0
-    );
+    // A plain render cannot reuse shared content under an untracked key.
+    assert!(!session.render(&model, &request).unwrap().content_cached);
     assert_fresh(&session, &model, &request);
 }
 

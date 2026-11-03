@@ -34,7 +34,10 @@ use ironcalc_base::{
     types::{CellType, MergedCell},
 };
 use std::rc::Rc;
-use std::{collections::HashMap, fmt};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+};
 
 // The pinned engine keeps these limits private. Keep the worksheet limits
 // here, outside the generic core geometry.
@@ -269,6 +272,28 @@ impl WorksheetCompiler {
         composition::prepare(context, viewport, shaper, reuse)
     }
 
+    /// Prepare with a reusable block cache. The identity must describe the
+    /// workbook, sheet, and content revision. A new identity clears the cache.
+    pub fn prepare_with_cache(
+        &self,
+        context: WorksheetContext<'_, '_>,
+        viewport: WorksheetViewport,
+        shaper: &mut TextShaper<'_>,
+        reuse: WorksheetReuse<'_>,
+        identity: BlockCacheIdentity,
+        cache: &mut WorksheetBlockCache,
+    ) -> Result<PreparedWorksheet, WorksheetCompileError> {
+        composition::prepare_with_fill_paint(
+            context,
+            viewport,
+            shaper,
+            reuse,
+            Some(cells::BlockLimits::default()),
+            cells::FillPaint::Runs,
+            Some((cache, identity)),
+        )
+    }
+
     /// Lower positioned cells into five shared paint buffers. Repeated
     /// coordinates reuse one preparation-local engine record. Text stays
     /// clipped because arbitrary placements do not establish adjacent geometry.
@@ -445,11 +470,65 @@ impl CellRecords {
     }
 }
 
+const MAX_BLOCK_CACHE_CELLS: usize = 131_072;
+const MAX_BLOCK_CACHE_BLOCKS: usize = 512;
+
+/// Content identity for reusable block data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BlockCacheIdentity {
+    pub workbook_id: u64,
+    pub sheet: u32,
+    pub revision: u64,
+}
+
+/// Bounded cache of validated cell blocks across frames for one content
+/// identity. A host owns one value per rendering session.
+#[derive(Default)]
+pub struct WorksheetBlockCache {
+    identity: Option<BlockCacheIdentity>,
+    blocks: HashMap<cells::BlockRect, Rc<cells::ValidatedBlock>>,
+    cells: usize,
+}
+
+impl WorksheetBlockCache {
+    /// Drop every cached block.
+    pub fn clear(&mut self) {
+        self.identity = None;
+        self.blocks.clear();
+        self.cells = 0;
+    }
+    fn begin(&mut self, identity: BlockCacheIdentity) {
+        if self.identity != Some(identity) {
+            self.clear();
+            self.identity = Some(identity);
+        }
+    }
+    fn get(&self, rect: cells::BlockRect) -> Option<Rc<cells::ValidatedBlock>> {
+        self.blocks.get(&rect).map(Rc::clone)
+    }
+    fn insert(&mut self, rect: cells::BlockRect, block: Rc<cells::ValidatedBlock>) {
+        let count = block.cell_count();
+        if self.blocks.len() >= MAX_BLOCK_CACHE_BLOCKS
+            || self.cells.saturating_add(count) > MAX_BLOCK_CACHE_CELLS
+        {
+            return;
+        }
+        self.cells += count;
+        self.blocks.insert(rect, block);
+    }
+    /// Keep only blocks used by the current frame.
+    fn retain(&mut self, used: &HashSet<cells::BlockRect>) {
+        self.blocks.retain(|rect, _| used.contains(rect));
+        self.cells = self.blocks.values().map(|block| block.cell_count()).sum();
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 struct ReadStats {
     block_calls: usize,
     block_cells: usize,
     block_styles: usize,
+    block_reuses: usize,
     fallback_cells: usize,
 }
 
@@ -524,6 +603,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         &mut self,
         geometry: &GridGeometry,
         limits: cells::BlockLimits,
+        reuse: Option<(&mut WorksheetBlockCache, BlockCacheIdentity)>,
     ) -> Result<(), WorksheetCompileError> {
         let rectangles = cells::plan_blocks(&geometry.panes, limits).map_err(|e| {
             self.error(
@@ -532,42 +612,63 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 format!("invalid block plan: {e:?}"),
             )
         })?;
+        let mut reuse = reuse;
+        if let Some((cache, identity)) = reuse.as_mut() {
+            cache.begin(*identity);
+        }
+        let mut used = HashSet::with_capacity(rectangles.len());
         for rect in rectangles {
-            let error = |message| {
-                self.error(
-                    CellCoord {
-                        row: rect.row,
-                        col: rect.column,
-                    },
-                    CellReadOperation::CellsBlock,
-                    format!("block {}x{}: {message}", rect.width, rect.height),
-                )
+            used.insert(rect);
+            let cached = reuse.as_ref().and_then(|(cache, _)| cache.get(rect));
+            let block = match cached {
+                Some(block) => {
+                    self.read_stats.block_reuses += 1;
+                    block
+                }
+                None => {
+                    let error = |message| {
+                        self.error(
+                            CellCoord {
+                                row: rect.row,
+                                col: rect.column,
+                            },
+                            CellReadOperation::CellsBlock,
+                            format!("block {}x{}: {message}", rect.width, rect.height),
+                        )
+                    };
+                    let data = self
+                        .context
+                        .workbook
+                        .get_cells_block(
+                            self.context.sheet,
+                            rect.row,
+                            rect.column,
+                            rect.width,
+                            rect.height,
+                        )
+                        .map_err(error)?;
+                    let validated = Rc::new(
+                        cells::ValidatedBlock::new(rect, data)
+                            .map_err(|message| error(message.into()))?,
+                    );
+                    self.read_stats.block_calls += 1;
+                    self.read_stats.block_cells += validated.cell_count();
+                    self.read_stats.block_styles += validated.style_count();
+                    self.reads += validated.style_count();
+                    if let Some((cache, _)) = reuse.as_mut() {
+                        cache.insert(rect, Rc::clone(&validated));
+                    }
+                    validated
+                }
             };
-            let block = self
-                .context
-                .workbook
-                .get_cells_block(
-                    self.context.sheet,
-                    rect.row,
-                    rect.column,
-                    rect.width,
-                    rect.height,
-                )
-                .map_err(error)?;
-            let block =
-                cells::ValidatedBlock::new(rect, block).map_err(|message| error(message.into()))?;
-            self.read_stats.block_calls += 1;
-            self.read_stats.block_cells += block.cell_count();
-            self.read_stats.block_styles += block.style_count();
-            self.reads += block.style_count();
             self.cached.blocks.insert(block);
+        }
+        if let Some((cache, _)) = reuse {
+            cache.retain(&used);
         }
         Ok(())
     }
 
-    /// Read every visible cell once, in pane order. Paint then indexes this
-    /// flat storage by slot. Offscreen spill and merge cells keep the keyed
-    /// path.
     fn load_visible(&mut self, geometry: &GridGeometry) -> Result<(), WorksheetCompileError> {
         let cell_count: usize = geometry
             .panes

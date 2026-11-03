@@ -45,6 +45,7 @@ struct Options {
     frames: i32,
     plain: bool,
     partial: bool,
+    verbose: bool,
 }
 
 #[cfg(target_os = "linux")]
@@ -53,7 +54,7 @@ impl Options {
         let mut args = env::args().skip(1);
         let path = args.next().unwrap_or_else(|| {
             eprintln!(
-                "usage: scroll_perf <file.xlsx> [width] [height] [row|pixel|both] [frames] [plain]"
+                "usage: scroll_perf <file.xlsx> [width] [height] [row|pixel|both] [frames] [plain] [partial] [verbose]"
             );
             std::process::exit(2);
         });
@@ -75,6 +76,7 @@ impl Options {
             frames,
             plain: flags.iter().any(|flag| flag == "plain"),
             partial: flags.iter().any(|flag| flag == "partial"),
+            verbose: flags.iter().any(|flag| flag == "verbose"),
         }
     }
 }
@@ -249,7 +251,14 @@ where
         let outcome = session
             .render_cached(&mut cache, workbook, &request, TextMetricsKey::new(1, 0))
             .expect("frame");
-        timings.push(started.elapsed().as_secs_f64() * 1e3);
+        let elapsed = started.elapsed().as_secs_f64() * 1e3;
+        if options.verbose {
+            println!(
+                "frame step={step} {elapsed:.1}ms cells={} styles={} strategy={:?}",
+                outcome.cell_count, outcome.extended_style_reads, outcome.strategy
+            );
+        }
+        timings.push(elapsed);
         *strategies
             .entry(format!("{:?}", outcome.strategy))
             .or_insert(0) += 1;

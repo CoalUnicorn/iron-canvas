@@ -15,8 +15,8 @@ pub use axis_sizes::{
 };
 
 pub use compiler::{
-    CellPlacement, CellReadOperation, CfDataBarPaint, CfDecorationPaint, CfIconPaint,
-    CfRatingPaint, FrozenAxes, PreparedWorksheet, ScrollPosition, WorksheetCompileError,
-    WorksheetCompiler, WorksheetContext, WorksheetMetadata, WorksheetReuse, WorksheetViewport,
-    row_header_width,
+    BlockCacheIdentity, CellPlacement, CellReadOperation, CfDataBarPaint, CfDecorationPaint,
+    CfIconPaint, CfRatingPaint, FrozenAxes, PreparedWorksheet, ScrollPosition, WorksheetBlockCache,
+    WorksheetCompileError, WorksheetCompiler, WorksheetContext, WorksheetMetadata, WorksheetReuse,
+    WorksheetViewport, row_header_width,
 };

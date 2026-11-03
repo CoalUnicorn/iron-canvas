@@ -26,8 +26,8 @@ use iron_canvas_core::CanvasTheme;
 pub use iron_canvas_core::scene::RenderBackend;
 use iron_canvas_core::text_shaper::{TextLayoutCache, TextShaper};
 use iron_canvas_ironcalc::{
-    PreparedWorksheet, WorksheetCompileError, WorksheetCompiler, WorksheetContext, WorksheetReuse,
-    WorksheetViewport,
+    BlockCacheIdentity, PreparedWorksheet, WorksheetBlockCache, WorksheetCompileError,
+    WorksheetCompiler, WorksheetContext, WorksheetReuse, WorksheetViewport,
 };
 use ironcalc_base::UserModel;
 
@@ -138,6 +138,7 @@ pub struct CanvasSession<B> {
     invalidated: bool,
     text_layouts: TextLayoutCache,
     text_metrics_key: Option<TextMetricsKey>,
+    block_cache: WorksheetBlockCache,
 }
 
 impl<B: RenderBackend> CanvasSession<B> {
@@ -150,6 +151,7 @@ impl<B: RenderBackend> CanvasSession<B> {
             invalidated: false,
             text_layouts: TextLayoutCache::default(),
             text_metrics_key: None,
+            block_cache: WorksheetBlockCache::default(),
         }
     }
 
@@ -284,7 +286,7 @@ impl<B: RenderBackend> CanvasSession<B> {
             CacheLookup::Content(base) => base.clone(),
             CacheLookup::Geometry(_) | CacheLookup::Miss => self
                 .compiler
-                .prepare_with_shaper(
+                .prepare_with_cache(
                     WorksheetContext {
                         workbook,
                         sheet: request.sheet,
@@ -296,6 +298,12 @@ impl<B: RenderBackend> CanvasSession<B> {
                         geometry: donor,
                         metadata,
                     },
+                    BlockCacheIdentity {
+                        workbook_id: request.revision.workbook_id,
+                        sheet: request.sheet,
+                        revision: request.revision.revision,
+                    },
+                    &mut self.block_cache,
                 )
                 .map_err(RenderError::Preparation)?,
         };

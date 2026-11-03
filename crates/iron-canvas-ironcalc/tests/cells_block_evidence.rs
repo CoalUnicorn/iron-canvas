@@ -168,6 +168,7 @@ fn measure_preparation() {
             } else {
                 cells::FillPaint::Cells
             },
+            None,
         )
         .unwrap()
     };

@@ -3,9 +3,9 @@ use super::{CellView, LAST_COLUMN, LAST_ROW};
 use iron_canvas_core::CellCoord;
 use iron_canvas_core::scene_geometry::{AxisCell, GridPane};
 use ironcalc_base::{CellsBlock, types::CellType};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct BlockRect {
     pub row: i32,
     pub column: i32,
@@ -28,7 +28,7 @@ impl Default for BlockLimits {
             width: 64,
             height: 64,
             cells_per_block: 4_096,
-            cells_per_attempt: 65_536,
+            cells_per_attempt: 131_072,
             blocks_per_attempt: 256,
         }
     }
@@ -91,26 +91,114 @@ fn valid_axis(cells: &[AxisCell], last: i32) -> bool {
         && cells.windows(2).all(|pair| pair[0].index < pair[1].index)
 }
 
-/// Return a bounded prefix of visible tiles. Uncovered cells retain individual reads.
-// This function runs synchronously in the render path. Keep the row and column
-// loops explicit so the read order and the stop condition stay visible.
+/// Return reusable tiles for the visible cells. Dense panes use absolute
+/// 64-cell tiles so the same rectangles return across scroll frames. Sparse or
+/// fragmented panes keep the exact visible tiling to avoid wide reads.
 pub(super) fn plan_blocks(
     panes: &[GridPane],
     limits: BlockLimits,
 ) -> Result<Vec<BlockRect>, BlockPlanError> {
-    let mut blocks = Vec::new();
-    let mut remaining = limits.cells_per_attempt;
-    let tile_width = limits.width.min(limits.cells_per_block);
-    if tile_width == 0 || limits.height == 0 || remaining == 0 || limits.blocks_per_attempt == 0 {
-        return Ok(blocks);
-    }
-    let tile_height = limits.height.min(limits.cells_per_block / tile_width);
     for pane in panes {
         if !valid_axis(&pane.rows, LAST_ROW) || !valid_axis(&pane.columns, LAST_COLUMN) {
             return Err(BlockPlanError::Bounds);
         }
-        // Keep coordinate gaps out of dense requests. Walk borrowed runs so
-        // fragmented axes do not allocate a list of every run combination.
+    }
+    let tile_width = limits.width.min(limits.cells_per_block);
+    if tile_width == 0 || limits.height == 0 || limits.blocks_per_attempt == 0 {
+        return Ok(Vec::new());
+    }
+    let tile_height = limits.height.min(limits.cells_per_block / tile_width);
+    let exact = plan_exact(panes, limits, tile_width, tile_height)?;
+    let Some(absolute) = plan_absolute(panes, tile_width, tile_height)? else {
+        return Ok(exact);
+    };
+    let visible_cells: usize = panes
+        .iter()
+        .map(|pane| pane.rows.len() * pane.columns.len())
+        .sum();
+    let visible_rows: usize = panes.iter().map(|pane| pane.rows.len()).sum();
+    let visible_columns: usize = panes.iter().map(|pane| pane.columns.len()).sum();
+    let absolute_cells: usize = absolute
+        .iter()
+        .map(|rect| (rect.width as usize) * (rect.height as usize))
+        .sum();
+    // Wide absolute tiles are a cache trade. Bound the two alignment strips
+    // outside the visible cells. Small and sparse panes keep the exact plan.
+    let budget = visible_cells.saturating_add(
+        2usize.saturating_mul(
+            tile_width
+                .saturating_mul(visible_rows)
+                .saturating_add(tile_height.saturating_mul(visible_columns)),
+        ),
+    );
+    if absolute_cells > budget {
+        return Ok(exact);
+    }
+    Ok(limit_blocks(absolute, limits))
+}
+
+/// Absolute tiles that contain at least one visible row and column.
+fn plan_absolute(
+    panes: &[GridPane],
+    tile_width: usize,
+    tile_height: usize,
+) -> Result<Option<Vec<BlockRect>>, BlockPlanError> {
+    let mut row_tiles = BTreeSet::new();
+    let mut column_tiles = BTreeSet::new();
+    for pane in panes {
+        for row in pane.rows.iter() {
+            row_tiles.insert((row.index - 1) / tile_height as i32);
+        }
+        for column in pane.columns.iter() {
+            column_tiles.insert((column.index - 1) / tile_width as i32);
+        }
+    }
+    if row_tiles.is_empty() || column_tiles.is_empty() {
+        return Ok(Some(Vec::new()));
+    }
+    let mut blocks = Vec::with_capacity(row_tiles.len() * column_tiles.len());
+    for row_tile in row_tiles {
+        let row = row_tile * tile_height as i32 + 1;
+        let height = (tile_height as i32).min(LAST_ROW - row + 1);
+        for column_tile in &column_tiles {
+            let column = column_tile * tile_width as i32 + 1;
+            let width = (tile_width as i32).min(LAST_COLUMN - column + 1);
+            blocks.push(BlockRect::checked(
+                row,
+                column,
+                width as usize,
+                height as usize,
+            )?);
+        }
+    }
+    Ok(Some(blocks))
+}
+
+/// Apply the per-attempt cell and block limits to an ordered plan.
+fn limit_blocks(blocks: Vec<BlockRect>, limits: BlockLimits) -> Vec<BlockRect> {
+    let mut out = Vec::new();
+    let mut remaining = limits.cells_per_attempt;
+    for rect in blocks {
+        let count = (rect.width as usize) * (rect.height as usize);
+        if out.len() == limits.blocks_per_attempt || count > remaining {
+            break;
+        }
+        remaining -= count;
+        out.push(rect);
+    }
+    out
+}
+
+/// Split each consecutive run into tiles that start at the run origin.
+fn plan_exact(
+    panes: &[GridPane],
+    limits: BlockLimits,
+    tile_width: usize,
+    tile_height: usize,
+) -> Result<Vec<BlockRect>, BlockPlanError> {
+    let mut blocks = Vec::new();
+    let mut remaining = limits.cells_per_attempt;
+    for pane in panes {
         let mut row_start = 0;
         while row_start < pane.rows.len() {
             let row_end = run_end(&pane.rows, row_start);
@@ -294,11 +382,11 @@ struct RowInterval {
 
 #[derive(Default)]
 pub(super) struct CellBlocks {
-    blocks: Vec<ValidatedBlock>,
+    blocks: Vec<std::rc::Rc<ValidatedBlock>>,
     rows: BTreeMap<i32, Vec<RowInterval>>,
 }
 impl CellBlocks {
-    pub(super) fn insert(&mut self, block: ValidatedBlock) {
+    pub(super) fn insert(&mut self, block: std::rc::Rc<ValidatedBlock>) {
         let index = self.blocks.len();
         let data = &block.data;
         for row in data.row..data.row + data.height {
@@ -509,17 +597,22 @@ mod tests {
     }
 
     #[test]
-    fn tiles_cover_visible_cells_once_and_include_clipped_last_cells() {
+    fn absolute_tiles_cover_visible_cells_and_stay_bounded() {
         let rows: Vec<_> = (1..=130).collect();
         let columns: Vec<_> = (1..=129).collect();
         let blocks = plan_blocks(&[pane(&rows, &columns)], BlockLimits::default()).unwrap();
         assert_eq!(blocks.len(), 9);
         let mut covered = std::collections::HashSet::new();
-        for b in blocks {
-            assert!(b.width <= 64 && b.height <= 64 && b.width * b.height <= 4096);
-            for row in b.row..b.row + b.height {
-                for col in b.column..b.column + b.width {
-                    assert!(covered.insert((row, col)));
+        for block in blocks {
+            assert!(block.width <= 64 && block.height <= 64);
+            assert!(block.width * block.height <= 4096);
+            assert!(block.row + block.height - 1 <= LAST_ROW);
+            assert!(block.column + block.width - 1 <= LAST_COLUMN);
+            for row in block.row..block.row + block.height {
+                for column in block.column..block.column + block.width {
+                    if (1..=130).contains(&row) && (1..=129).contains(&column) {
+                        assert!(covered.insert((row, column)));
+                    }
                 }
             }
         }
@@ -533,10 +626,10 @@ mod tests {
         let columns: Vec<_> = (1..=512).collect();
         let panes = [pane(&rows, &columns)];
         let blocks = plan_blocks(&panes, BlockLimits::default()).unwrap();
-        assert_eq!(blocks.len(), 16);
+        assert_eq!(blocks.len(), 32);
         assert_eq!(
             blocks.iter().map(|b| b.width * b.height).sum::<i32>(),
-            65_536
+            131_072
         );
         let limits = BlockLimits {
             blocks_per_attempt: 2,
