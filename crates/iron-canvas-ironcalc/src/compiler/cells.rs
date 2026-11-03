@@ -108,17 +108,13 @@ pub(super) fn plan_blocks(
         return Ok(Vec::new());
     }
     let tile_height = limits.height.min(limits.cells_per_block / tile_width);
-    let absolute = plan_absolute(panes, tile_width, tile_height)?;
+    let (absolute, absolute_cells) = plan_absolute(panes, tile_width, tile_height, limits)?;
     let visible_cells: usize = panes
         .iter()
         .map(|pane| pane.rows.len() * pane.columns.len())
         .sum();
     let visible_rows: usize = panes.iter().map(|pane| pane.rows.len()).sum();
     let visible_columns: usize = panes.iter().map(|pane| pane.columns.len()).sum();
-    let absolute_cells: usize = absolute
-        .iter()
-        .map(|rect| (rect.width as usize) * (rect.height as usize))
-        .sum();
     // Wide absolute tiles are a cache trade. Bound the two alignment strips
     // outside the visible cells. Small and sparse panes keep the exact plan.
     let budget = visible_cells.saturating_add(
@@ -131,15 +127,20 @@ pub(super) fn plan_blocks(
     if absolute_cells > budget {
         return plan_exact(panes, limits, tile_width, tile_height);
     }
-    Ok(limit_blocks(absolute, limits))
+    Ok(absolute)
 }
 
 /// Absolute tiles that contain at least one visible row and column.
+///
+/// Return only the prefix that the attempt limits accept. The second value is
+/// the cell count of the complete product, which selects absolute or exact
+/// tiling without allocating the full product.
 fn plan_absolute(
     panes: &[GridPane],
     tile_width: usize,
     tile_height: usize,
-) -> Result<Vec<BlockRect>, BlockPlanError> {
+    limits: BlockLimits,
+) -> Result<(Vec<BlockRect>, usize), BlockPlanError> {
     let mut row_tiles = BTreeSet::new();
     let mut column_tiles = BTreeSet::new();
     for pane in panes {
@@ -151,39 +152,48 @@ fn plan_absolute(
         }
     }
     if row_tiles.is_empty() || column_tiles.is_empty() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
-    let mut blocks = Vec::with_capacity(row_tiles.len() * column_tiles.len());
-    for row_tile in row_tiles {
+    // The product is separable, so count the full plan without building it.
+    let row_cells: usize = row_tiles
+        .iter()
+        .map(|tile| {
+            let row = tile * tile_height as i32 + 1;
+            (tile_height as i32).min(LAST_ROW - row + 1) as usize
+        })
+        .sum();
+    let column_cells: usize = column_tiles
+        .iter()
+        .map(|tile| {
+            let column = tile * tile_width as i32 + 1;
+            (tile_width as i32).min(LAST_COLUMN - column + 1) as usize
+        })
+        .sum();
+    let total_cells = row_cells.saturating_mul(column_cells);
+    // Store no more than the limits can accept. Tiles beyond this prefix were
+    // never read by the previous full-plan build either.
+    let capacity = row_tiles
+        .len()
+        .saturating_mul(column_tiles.len())
+        .min(limits.blocks_per_attempt);
+    let mut blocks = Vec::with_capacity(capacity);
+    let mut remaining = limits.cells_per_attempt;
+    'tiles: for row_tile in row_tiles {
         let row = row_tile * tile_height as i32 + 1;
         let height = (tile_height as i32).min(LAST_ROW - row + 1);
         for column_tile in &column_tiles {
             let column = column_tile * tile_width as i32 + 1;
             let width = (tile_width as i32).min(LAST_COLUMN - column + 1);
-            blocks.push(BlockRect::checked(
-                row,
-                column,
-                width as usize,
-                height as usize,
-            )?);
+            let rect = BlockRect::checked(row, column, width as usize, height as usize)?;
+            let count = (rect.width as usize) * (rect.height as usize);
+            if blocks.len() == limits.blocks_per_attempt || count > remaining {
+                break 'tiles;
+            }
+            remaining -= count;
+            blocks.push(rect);
         }
     }
-    Ok(blocks)
-}
-
-/// Apply the per-attempt cell and block limits to an ordered plan.
-fn limit_blocks(blocks: Vec<BlockRect>, limits: BlockLimits) -> Vec<BlockRect> {
-    let mut out = Vec::new();
-    let mut remaining = limits.cells_per_attempt;
-    for rect in blocks {
-        let count = (rect.width as usize) * (rect.height as usize);
-        if out.len() == limits.blocks_per_attempt || count > remaining {
-            break;
-        }
-        remaining -= count;
-        out.push(rect);
-    }
-    out
+    Ok((blocks, total_cells))
 }
 
 /// Split each consecutive run into tiles that start at the run origin.
