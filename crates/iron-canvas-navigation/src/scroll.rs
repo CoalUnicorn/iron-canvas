@@ -8,11 +8,12 @@ use crate::{
     GridCommand, GridError, LAST_COLUMN, LAST_ROW, NavigationController, Outcome, Pane,
     RevealOutcome, RevealTarget, SkipReason, ViewIdentity, apply_navigation,
 };
+use iron_canvas_core::scroll::scrolling_extent;
 use iron_canvas_core::{
-    AxisExtents, AxisScroll, CellCoord, ScrollAxisWindow, ScrollPosition, move_position,
+    AxisExtents, AxisScroll, CellCoord, RunAxis, ScrollAxisWindow, ScrollPosition, move_position,
     normalize_position,
 };
-use iron_canvas_ironcalc::{WorksheetAxes, WorksheetAxis};
+use iron_canvas_ironcalc::WorksheetAxes;
 use ironcalc_base::UserModel;
 use std::collections::HashMap;
 
@@ -57,14 +58,7 @@ fn column_window(axes: &WorksheetAxes, frozen: i32) -> ScrollAxisWindow {
     ScrollAxisWindow::after_frozen(frozen, axes.cols.last_index())
 }
 
-fn scrolling_extent(axis: &WorksheetAxis, window: ScrollAxisWindow) -> i64 {
-    if window.is_empty() {
-        return 0;
-    }
-    (axis.total_extent() - axis.extent_before(window.first)).max(0)
-}
-
-fn distance(axis: &WorksheetAxis, window: ScrollAxisWindow, first: i32, offset: i32) -> i64 {
+fn distance(axis: &RunAxis, window: ScrollAxisWindow, first: i32, offset: i32) -> i64 {
     if window.is_empty() {
         return 0;
     }
@@ -72,7 +66,7 @@ fn distance(axis: &WorksheetAxis, window: ScrollAxisWindow, first: i32, offset: 
     (axis.extent_before(first) - axis.extent_before(window.first) + i64::from(offset)).max(0)
 }
 
-fn located(axis: &WorksheetAxis, window: ScrollAxisWindow, distance: i64) -> AxisScroll {
+fn located(axis: &RunAxis, window: ScrollAxisWindow, distance: i64) -> AxisScroll {
     match axis.locate(distance, window) {
         Some((first, offset)) => AxisScroll { first, offset },
         None => AxisScroll {
@@ -610,7 +604,7 @@ fn merged_range(
 /// A zero delta keeps an existing remainder. A pane that cannot scroll has no
 /// reachable boundary, so its fraction is always discarded.
 fn clears_fraction(
-    axis: &WorksheetAxis,
+    axis: &RunAxis,
     window: ScrollAxisWindow,
     first: i32,
     offset: i32,
@@ -661,7 +655,7 @@ fn clamp_end_position(
 fn clamp_axis(
     first: i32,
     offset: i32,
-    axis: &WorksheetAxis,
+    axis: &RunAxis,
     window: ScrollAxisWindow,
     pane: i32,
 ) -> AxisScroll {
@@ -689,7 +683,7 @@ fn reveal_axis(
     offset: i32,
     target_first: i32,
     target_last: i32,
-    axis: &WorksheetAxis,
+    axis: &RunAxis,
     window: ScrollAxisWindow,
     pane: i32,
 ) -> Result<AxisScroll, GridError> {
@@ -757,9 +751,7 @@ fn reveal_axis(
 mod tests {
     use super::*;
     use iron_canvas_core::navigation::NavigationIntent;
-    use iron_canvas_ironcalc::{
-        AxesScope, AxisSizes, SizeRun, WorksheetAxis, get_column_sizes, get_row_sizes,
-    };
+    use iron_canvas_ironcalc::{AxesScope, AxisSizes, SizeRun, get_column_sizes, get_row_sizes};
 
     fn model() -> UserModel<'static> {
         let mut model = UserModel::new_empty("scroll", "en", "UTC", "en").unwrap();
@@ -895,14 +887,12 @@ mod tests {
                 size: 0.0,
             }],
         };
-        let rows = WorksheetAxis::from_sizes(&hidden, 1_048_576).unwrap();
-        let columns = WorksheetAxis::from_sizes(
-            &AxisSizes {
-                default_size: 90.0,
-                runs: Vec::new(),
-            },
-            16_384,
-        )
+        let rows = hidden.to_run_axis(1_048_576).unwrap();
+        let columns = AxisSizes {
+            default_size: 90.0,
+            runs: Vec::new(),
+        }
+        .to_run_axis(16_384)
         .unwrap();
         let axes = WorksheetAxes {
             rows,

@@ -5,8 +5,9 @@ use iron_canvas_core::{
     text_shaper::{TextLayoutCache, TextMetricsKey, TextShaper},
 };
 use iron_canvas_ironcalc::{
-    CellPlacement, PreparedWorksheet, WorksheetCompiler, WorksheetContext, WorksheetReuse,
-    WorksheetViewport,
+    AxesScope, AxisSource, CellPlacement, CellReadOperation, PreparedWorksheet, WorksheetAxes,
+    WorksheetAxesInput, WorksheetCompiler, WorksheetContext, WorksheetReuse, WorksheetViewport,
+    get_column_sizes, get_row_sizes,
 };
 use ironcalc_base::UserModel;
 use ironcalc_base::expressions::types::Area;
@@ -112,6 +113,127 @@ fn geometry_and_metadata_reuse_remain_independent() {
             );
         }
     }
+}
+
+#[test]
+fn supplied_axes_match_the_individual_dimension_path() {
+    let mut workbook = UserModel::new_empty("axes", "en", "UTC", "en").unwrap();
+    for row in 1..=40 {
+        workbook
+            .set_rows_height(0, row, row, 10.0 + f64::from(row % 7))
+            .unwrap();
+    }
+    for column in 1..=20 {
+        workbook
+            .set_columns_width(0, column, column, 20.0 + f64::from(column % 5))
+            .unwrap();
+    }
+    workbook.set_rows_hidden(0, 5, 7, true).unwrap();
+    workbook.set_columns_hidden(0, 3, 3, true).unwrap();
+    workbook
+        .set_user_input(0, 1, 1, "text that spills past a cell")
+        .unwrap();
+    workbook.set_user_input(0, 6, 2, "hidden value").unwrap();
+    workbook
+        .merge_cells(&Area {
+            sheet: 0,
+            row: 10,
+            column: 2,
+            width: 3,
+            height: 2,
+        })
+        .unwrap();
+    let compiler = WorksheetCompiler::new();
+    let theme = CanvasTheme::light();
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 700, 400);
+
+    let direct = compiler
+        .prepare(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &theme,
+            },
+            viewport,
+            &Metrics,
+        )
+        .unwrap();
+    let source = AxisSource::resolve(&workbook, 0, 9, 4).unwrap();
+    let axes = WorksheetAxes::from_sizes(
+        &get_row_sizes(&workbook, 0).unwrap(),
+        &get_column_sizes(&workbook, 0).unwrap(),
+    )
+    .unwrap()
+    .with_scope(AxesScope {
+        workbook_id: 9,
+        sheet_id: source.sheet_id,
+        revision: 4,
+    });
+    let mut layouts = TextLayoutCache::default();
+    let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut layouts);
+    let reuse = WorksheetReuse {
+        axes: Some(WorksheetAxesInput {
+            axes: &axes,
+            workbook_id: 9,
+            revision: 4,
+        }),
+        ..WorksheetReuse::default()
+    };
+    let supplied = compiler
+        .prepare_with_shaper(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 0,
+                theme: &theme,
+            },
+            viewport,
+            &mut shaper,
+            reuse,
+        )
+        .unwrap();
+    assert_eq!(supplied.scene, direct.scene);
+    assert_eq!(supplied.geometry, direct.geometry);
+    assert_eq!(supplied.merges, direct.merges);
+
+    // Another workbook or revision is a request error, not a silent resample.
+    for (workbook_id, revision) in [(8, 4), (9, 5)] {
+        let stale = WorksheetReuse {
+            axes: Some(WorksheetAxesInput {
+                axes: &axes,
+                workbook_id,
+                revision,
+            }),
+            ..WorksheetReuse::default()
+        };
+        let error = compiler
+            .prepare_with_shaper(
+                WorksheetContext {
+                    workbook: &workbook,
+                    sheet: 0,
+                    theme: &theme,
+                },
+                viewport,
+                &mut shaper,
+                stale,
+            )
+            .unwrap_err();
+        assert_eq!(error.operation, CellReadOperation::Request, "{error}");
+    }
+    // The scope sheet ID must match the compiled worksheet index.
+    workbook.new_sheet().unwrap();
+    let error = compiler
+        .prepare_with_shaper(
+            WorksheetContext {
+                workbook: &workbook,
+                sheet: 1,
+                theme: &theme,
+            },
+            viewport,
+            &mut shaper,
+            reuse,
+        )
+        .unwrap_err();
+    assert_eq!(error.operation, CellReadOperation::Request, "{error}");
 }
 
 #[test]

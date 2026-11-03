@@ -284,28 +284,39 @@ impl<B: RenderBackend> CanvasSession<B> {
         let content_cached = content_reused && matches!(source, ContentSource::Cache(_, _));
         let base = match lookup {
             CacheLookup::Content(base) => base.clone(),
-            CacheLookup::Geometry(_) | CacheLookup::Miss => self
-                .compiler
-                .prepare_with_cache(
-                    WorksheetContext {
-                        workbook,
-                        sheet: request.sheet,
-                        theme: &request.theme,
-                    },
-                    request.viewport,
-                    &mut shaper,
-                    WorksheetReuse {
-                        geometry: donor,
-                        metadata,
-                    },
-                    BlockCacheIdentity {
-                        workbook_id: request.revision.workbook_id,
-                        sheet: request.sheet,
-                        revision: request.revision.revision,
-                    },
-                    &mut self.block_cache,
-                )
-                .map_err(RenderError::Preparation)?,
+            CacheLookup::Geometry(_) | CacheLookup::Miss => {
+                let context = WorksheetContext {
+                    workbook,
+                    sheet: request.sheet,
+                    theme: &request.theme,
+                };
+                let reuse = WorksheetReuse {
+                    geometry: donor,
+                    metadata,
+                    axes: None,
+                };
+                // An independent reference frame must read engine blocks again.
+                // Block reuse would make it depend on an earlier frame.
+                // Invalidation only changes metrics, so it keeps block reuse.
+                let prepared = if matches!(source, ContentSource::Fresh) {
+                    self.compiler
+                        .prepare_with_shaper(context, request.viewport, &mut shaper, reuse)
+                } else {
+                    self.compiler.prepare_with_cache(
+                        context,
+                        request.viewport,
+                        &mut shaper,
+                        reuse,
+                        BlockCacheIdentity {
+                            workbook_id: request.revision.workbook_id,
+                            sheet: request.sheet,
+                            revision: request.revision.revision,
+                        },
+                        &mut self.block_cache,
+                    )
+                };
+                prepared.map_err(RenderError::Preparation)?
+            }
         };
         let reads = if content_reused {
             0

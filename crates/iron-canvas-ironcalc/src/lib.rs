@@ -11,12 +11,12 @@ pub mod compiler;
 
 pub use axis_sizes::{
     AxesScope, Axis, AxisRun, AxisSizeBuilder, AxisSizeError, AxisSizeProgress, AxisSizes,
-    AxisSource, SizeRun, WorksheetAxes, WorksheetAxis, get_column_sizes, get_row_sizes,
+    AxisSource, SizeRun, WorksheetAxes, get_column_sizes, get_row_sizes,
 };
 
 pub use compiler::{
     BlockCacheIdentity, CellPlacement, CellReadOperation, CfDataBarPaint, CfDecorationPaint,
-    CfIconPaint, CfRatingPaint, FrozenAxes, PreparedWorksheet, ScrollPosition, WorksheetBlockCache,
-    WorksheetCompileError, WorksheetCompiler, WorksheetContext, WorksheetMetadata, WorksheetReuse,
-    WorksheetViewport, row_header_width,
+    CfIconPaint, CfRatingPaint, FrozenAxes, PreparedWorksheet, ScrollPosition, WorksheetAxesInput,
+    WorksheetBlockCache, WorksheetCompileError, WorksheetCompiler, WorksheetContext,
+    WorksheetMetadata, WorksheetReuse, WorksheetViewport, row_header_width,
 };

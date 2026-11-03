@@ -1,6 +1,6 @@
 use super::*;
 use iron_canvas_core::{
-    Axis, Point, Side,
+    Axis, AxisExtents, Point, RunAxis, Side,
     geometry::path::PointF,
     painter::{TextAlign, TextBaseline},
     scene::Primitive,
@@ -95,13 +95,22 @@ pub(super) fn prepare_with_fill_paint(
     let WorksheetReuse {
         geometry: previous,
         metadata,
+        axes,
     } = reuse;
     let mut attempt = Attempt::new(context, shaper, metadata.map(|data| data.links))?;
     attempt.fill_paint = fill_paint;
+    let supplied_axes = match axes {
+        Some(input) => {
+            validate_axes(&attempt, input)?;
+            Some(input.axes)
+        }
+        None => None,
+    };
     let (frozen, merges) = read_structure(&attempt, viewport, metadata)?;
     let mut dimensions = Dimensions {
         workbook,
         sheet,
+        axes: supplied_axes.map(|axes| (&axes.rows, &axes.cols)),
         rows: HashMap::new(),
         cols: HashMap::new(),
     };
@@ -140,6 +149,34 @@ pub(super) fn prepare_with_fill_paint(
         #[cfg(test)]
         read_stats: attempt.read_stats,
     })
+}
+
+/// Reject axes from another source before any dimension is read.
+/// The live worksheet supplies the stable sheet ID for the comparison.
+fn validate_axes(
+    attempt: &Attempt<'_, '_, '_>,
+    input: WorksheetAxesInput<'_>,
+) -> Result<(), WorksheetCompileError> {
+    let cell = CellCoord { row: 1, col: 1 };
+    let error = |message: &str| attempt.error(cell, CellReadOperation::Request, message.into());
+    let Some(scope) = input.axes.scope else {
+        return Err(error("axes have no source identity"));
+    };
+    let sheet_id = attempt
+        .context
+        .workbook
+        .get_model()
+        .workbook
+        .worksheet(attempt.context.sheet)
+        .map_err(|e| attempt.error(cell, CellReadOperation::Sheet, e))?
+        .sheet_id;
+    if scope.workbook_id != input.workbook_id || scope.revision != input.revision {
+        return Err(error("axes belong to another workbook or revision"));
+    }
+    if scope.sheet_id != sheet_id {
+        return Err(error("axes belong to another sheet"));
+    }
+    Ok(())
 }
 
 fn read_structure(
@@ -213,7 +250,7 @@ fn read_structure(
 /// for exports; a nonzero offset there is rejected.
 fn validate_scroll_axis(
     attempt: &Attempt<'_, '_, '_>,
-    dimensions: &mut Dimensions<'_, '_>,
+    dimensions: &mut Dimensions<'_, '_, '_>,
     axis: Axis,
     first: i32,
     offset: i32,
@@ -264,7 +301,7 @@ fn prepare_geometry(
     attempt: &mut Attempt<'_, '_, '_>,
     viewport: WorksheetViewport,
     frozen: FrozenAxes,
-    dimensions: &mut Dimensions<'_, '_>,
+    dimensions: &mut Dimensions<'_, '_, '_>,
     previous: Option<&Rc<GridGeometry>>,
 ) -> Result<Rc<GridGeometry>, WorksheetCompileError> {
     let first = viewport.scroll.first_cell;
@@ -340,7 +377,7 @@ fn paint_cells(
     geometry: &GridGeometry,
     frozen: FrozenAxes,
     merges: &[MergedCell],
-    dimensions: &mut Dimensions<'_, '_>,
+    dimensions: &mut Dimensions<'_, '_, '_>,
 ) -> Result<GridScene, WorksheetCompileError> {
     let cell_count: usize = geometry
         .panes
@@ -451,7 +488,7 @@ fn paint_merges(
     attempt: &mut Attempt<'_, '_, '_>,
     geometry: &GridGeometry,
     merges: &[MergedCell],
-    dimensions: &mut Dimensions<'_, '_>,
+    dimensions: &mut Dimensions<'_, '_, '_>,
     scene: &mut GridScene,
 ) -> Result<(), WorksheetCompileError> {
     // Merges cover the completed ordinary-cell passes. Each pane uses the
@@ -747,14 +784,23 @@ fn headers(out: &mut SceneBuilder, geometry: &GridGeometry, theme: &CanvasTheme)
         1.0,
     );
 }
-struct Dimensions<'w, 'm> {
+struct Dimensions<'w, 'm, 'a> {
     workbook: &'w UserModel<'m>,
     sheet: u32,
+    /// Supplied rounded runs. `None` selects the individual getters.
+    axes: Option<(&'a RunAxis, &'a RunAxis)>,
     rows: HashMap<i32, i32>,
     cols: HashMap<i32, i32>,
 }
-impl Dimensions<'_, '_> {
+impl Dimensions<'_, '_, '_> {
     fn extent(&mut self, axis: Axis, index: i32) -> Result<f64, String> {
+        if let Some((rows, cols)) = self.axes {
+            let extents = match axis {
+                Axis::Row => rows,
+                Axis::Column => cols,
+            };
+            return Ok(f64::from(AxisExtents::extent(extents, index)));
+        }
         let cache = match axis {
             Axis::Row => &mut self.rows,
             Axis::Column => &mut self.cols,
@@ -774,6 +820,17 @@ impl Dimensions<'_, '_> {
         Ok(f64::from(value))
     }
     fn sum(&mut self, axis: Axis, first: i32, end: i32) -> Result<i32, String> {
+        // A prefix difference replaces the per-index loop on the axes path.
+        if let Some((rows, cols)) = self.axes {
+            let extents = match axis {
+                Axis::Row => rows,
+                Axis::Column => cols,
+            };
+            let after = AxisExtents::extent_before(extents, end);
+            let before = AxisExtents::extent_before(extents, first);
+            let total = after.checked_sub(before).ok_or("merge extent overflow")?;
+            return i32::try_from(total).map_err(|_| "merge extent overflow".into());
+        }
         let mut total = 0_i32;
         for i in first..end {
             total = total

@@ -1,5 +1,6 @@
 use iron_canvas::{
-    CanvasSession, HostIntent, RenderBackend, RenderError, RenderRequest, RevisionToken,
+    CanvasSession, HostIntent, RenderBackend, RenderError, RenderRequest, RenderStrategy,
+    RevisionToken,
 };
 use iron_canvas_core::{
     CanvasTheme, CellCoord, PixelRect, Point,
@@ -127,6 +128,25 @@ fn revision_theme_and_workbook_replacement_recompile_visible_content() {
         session.committed_frame().unwrap().revision,
         request.revision
     );
+}
+
+#[test]
+fn render_fresh_reads_blocks_again_after_a_warm_frame() {
+    let mut workbook = UserModel::new_empty("fresh", "en", "UTC", "en").unwrap();
+    workbook.set_user_input(0, 1, 1, "first").unwrap();
+    workbook.set_user_input(0, 2, 2, "second").unwrap();
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    let request = request();
+    let warm = session.render(&workbook, &request).unwrap();
+    assert!(warm.extended_style_reads > 0, "{warm:?}");
+    let warmed = session.committed_frame().unwrap().worksheet.scene.clone();
+    // The session block cache now holds every block of this rectangle.
+    let fresh = session.render_fresh(&workbook, &request).unwrap();
+    assert_eq!(fresh.strategy, RenderStrategy::Fresh);
+    // Block reuse would leave only fallback reads and make the reference
+    // frame depend on the warm one. Fresh must repeat the same engine reads.
+    assert_eq!(fresh.extended_style_reads, warm.extended_style_reads);
+    assert_eq!(session.committed_frame().unwrap().worksheet.scene, warmed);
 }
 
 #[test]

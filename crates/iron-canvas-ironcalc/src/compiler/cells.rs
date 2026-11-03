@@ -108,10 +108,7 @@ pub(super) fn plan_blocks(
         return Ok(Vec::new());
     }
     let tile_height = limits.height.min(limits.cells_per_block / tile_width);
-    let exact = plan_exact(panes, limits, tile_width, tile_height)?;
-    let Some(absolute) = plan_absolute(panes, tile_width, tile_height)? else {
-        return Ok(exact);
-    };
+    let absolute = plan_absolute(panes, tile_width, tile_height)?;
     let visible_cells: usize = panes
         .iter()
         .map(|pane| pane.rows.len() * pane.columns.len())
@@ -132,7 +129,7 @@ pub(super) fn plan_blocks(
         ),
     );
     if absolute_cells > budget {
-        return Ok(exact);
+        return plan_exact(panes, limits, tile_width, tile_height);
     }
     Ok(limit_blocks(absolute, limits))
 }
@@ -142,7 +139,7 @@ fn plan_absolute(
     panes: &[GridPane],
     tile_width: usize,
     tile_height: usize,
-) -> Result<Option<Vec<BlockRect>>, BlockPlanError> {
+) -> Result<Vec<BlockRect>, BlockPlanError> {
     let mut row_tiles = BTreeSet::new();
     let mut column_tiles = BTreeSet::new();
     for pane in panes {
@@ -154,7 +151,7 @@ fn plan_absolute(
         }
     }
     if row_tiles.is_empty() || column_tiles.is_empty() {
-        return Ok(Some(Vec::new()));
+        return Ok(Vec::new());
     }
     let mut blocks = Vec::with_capacity(row_tiles.len() * column_tiles.len());
     for row_tile in row_tiles {
@@ -171,7 +168,7 @@ fn plan_absolute(
             )?);
         }
     }
-    Ok(Some(blocks))
+    Ok(blocks)
 }
 
 /// Apply the per-attempt cell and block limits to an ordered plan.

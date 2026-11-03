@@ -91,10 +91,6 @@ impl Attempt<'_, '_, '_> {
         }))
     }
 
-    pub(super) fn occupied(&self, cell: CellCoord) -> Result<bool, WorksheetCompileError> {
-        Ok(self.occupied_kind(cell)?.is_some())
-    }
-
     fn blocker(&self, cell: CellCoord, slot: Option<usize>, merges: &[MergedCell]) -> bool {
         let record = match slot {
             Some(index) => self.cached.view_index(index),

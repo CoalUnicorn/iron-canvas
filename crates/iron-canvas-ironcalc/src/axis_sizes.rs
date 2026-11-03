@@ -2,15 +2,18 @@
 //!
 //! The engine returns one size at a time. This module resolves stored records
 //! into ordered runs and keeps the same rules as the individual getters.
-//! Rules checked against IronCalc revision `0be0ff0c`.
+//! Rules checked against IronCalc revision `b063c523`.
 //!
-//! The resumable builder reads a bounded number of source records per step.
-//! Interactive hosts can advance it between frames; synchronous callers run it
-//! to completion.
+//! The resumable builder counts record reads, overlap checks, cover merges, and
+//! interval pops per step. A step does not count the one sort of resolved
+//! intervals, the adjacent duplicate scan, or the entries that one cover
+//! insertion or removal moves. Interactive hosts can advance it between frames;
+//! synchronous callers run it to completion.
 
+pub use iron_canvas_core::Axis;
 pub use iron_canvas_core::scroll::AxisRun;
 use iron_canvas_core::{
-    AxisExtents, ScrollAxisWindow,
+    ScrollAxisWindow,
     scroll::{ExtentRun, RunAxis, RunAxisError, scrolling_extent},
 };
 use ironcalc_base::{UserModel, types::Worksheet};
@@ -30,13 +33,6 @@ const CONSTRUCTION_LIMIT: usize = 1_048_576;
 
 /// Default number of operations in one resumable builder step.
 pub const DEFAULT_SLICE_OPERATIONS: usize = 4096;
-
-/// Axis of a worksheet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Axis {
-    Row,
-    Column,
-}
 
 /// Workbook, sheet, and content identity for one build.
 ///
@@ -91,6 +87,56 @@ impl AxisSizes {
             .iter()
             .find(|run| run.first <= index && index <= run.last)
             .map_or(self.default_size, |run| run.size)
+    }
+
+    /// Round and join sizes into contiguous runs with checked prefix sums.
+    /// Keep the engine error context for invalid records and sizes.
+    pub fn to_run_axis(&self, last_index: i32) -> Result<RunAxis, AxisSizeError> {
+        if last_index < 1 {
+            return Err(AxisSizeError::Limit);
+        }
+        let default_extent = rounded_extent(self.default_size, 0)?;
+        let mut runs = Vec::with_capacity(self.runs.len());
+        let mut cursor = 1_i32;
+        for (record, run) in self.runs.iter().enumerate() {
+            if run.first < 1 || run.last < run.first || run.last > last_index {
+                return Err(AxisSizeError::InvalidRecord {
+                    record,
+                    first: run.first,
+                    last: run.last,
+                });
+            }
+            if run.first < cursor {
+                return Err(AxisSizeError::InvalidRecord {
+                    record,
+                    first: run.first,
+                    last: run.last,
+                });
+            }
+            runs.push(ExtentRun {
+                first: run.first,
+                last: run.last,
+                extent: rounded_extent(run.size, record)?,
+            });
+            cursor = run.last.checked_add(1).ok_or(AxisSizeError::Limit)?;
+        }
+        RunAxis::from_runs(default_extent, last_index, &runs).map_err(|error| match error {
+            RunAxisError::InvalidRun { run } => {
+                let record = &self.runs[run];
+                AxisSizeError::InvalidRecord {
+                    record: run,
+                    first: record.first,
+                    last: record.last,
+                }
+            }
+            RunAxisError::InvalidDefaultExtent => AxisSizeError::InvalidSize {
+                record: 0,
+                size: self.default_size,
+            },
+            RunAxisError::InvalidLimit | RunAxisError::Overflow | RunAxisError::Limit => {
+                AxisSizeError::Limit
+            }
+        })
     }
 }
 
@@ -190,7 +236,6 @@ pub struct AxisSizeBuilder {
     resolved: Vec<ResolvedInterval>,
     resolved_sorted: bool,
     runs: Vec<SizeRun>,
-    done: bool,
 }
 
 impl AxisSizeBuilder {
@@ -233,12 +278,20 @@ impl AxisSizeBuilder {
             resolved: Vec::new(),
             resolved_sorted: false,
             runs: Vec::new(),
-            done: false,
         })
     }
 
+    /// Completion has one source: the phase that reached emission end.
+    fn is_complete(&self) -> bool {
+        matches!(self.phase, Phase::Done)
+    }
+
     /// Advance the build by at most the configured number of operations.
-    /// The model borrow ends before this method returns.
+    /// The count covers record reads, overlap checks, cover merges, and
+    /// interval pops. The first emission step also sorts all resolved
+    /// intervals and scans them for duplicate starts; a cover insertion or
+    /// removal can move many vector entries. The model borrow ends before
+    /// this method returns.
     pub fn step(
         &mut self,
         workbook: &UserModel<'_>,
@@ -260,7 +313,7 @@ impl AxisSizeBuilder {
         }
         let mut budget = self.slice_operations;
         self.advance(Some(sheet), &mut budget)?;
-        Ok(if self.done {
+        Ok(if self.is_complete() {
             AxisSizeProgress::Complete
         } else {
             AxisSizeProgress::Pending
@@ -269,7 +322,7 @@ impl AxisSizeBuilder {
 
     /// Return the finished sizes. Partial results are never returned.
     pub fn into_sizes(self) -> Result<AxisSizes, AxisSizeError> {
-        if !self.done {
+        if !self.is_complete() {
             return Err(AxisSizeError::Incomplete);
         }
         Ok(AxisSizes {
@@ -327,13 +380,9 @@ impl AxisSizeBuilder {
                         return Ok(());
                     }
                     self.phase = Phase::Done;
-                    self.done = true;
                     return Ok(());
                 }
-                Phase::Done => {
-                    self.done = true;
-                    return Ok(());
-                }
+                Phase::Done => return Ok(()),
             }
         }
     }
@@ -542,14 +591,13 @@ impl AxisSizeBuilder {
             resolved: Vec::new(),
             resolved_sorted: false,
             runs: Vec::new(),
-            done: false,
         }
     }
 
     #[cfg(test)]
     fn finish_synthetic(mut self) -> Vec<SizeRun> {
         let mut steps = 0;
-        while !self.done {
+        while !self.is_complete() {
             let mut budget = 1;
             self.advance(None, &mut budget).unwrap();
             steps += 1;
@@ -652,104 +700,6 @@ fn finish_sync(
     builder.into_sizes()
 }
 
-/// Rounded, contiguous extents for one axis. Every index in
-/// `1..=last_index` belongs to exactly one run.
-#[derive(Debug, Clone, PartialEq)]
-pub struct WorksheetAxis {
-    axis: RunAxis,
-}
-
-impl WorksheetAxis {
-    /// Round and join sizes into contiguous runs with checked prefix sums.
-    pub fn from_sizes(sizes: &AxisSizes, last_index: i32) -> Result<Self, AxisSizeError> {
-        if last_index < 1 {
-            return Err(AxisSizeError::Limit);
-        }
-        let default_extent = rounded_extent(sizes.default_size, 0)?;
-        let mut runs = Vec::with_capacity(sizes.runs.len());
-        let mut cursor = 1_i32;
-        for (record, run) in sizes.runs.iter().enumerate() {
-            if run.first < 1 || run.last < run.first || run.last > last_index {
-                return Err(AxisSizeError::InvalidRecord {
-                    record,
-                    first: run.first,
-                    last: run.last,
-                });
-            }
-            if run.first < cursor {
-                return Err(AxisSizeError::InvalidRecord {
-                    record,
-                    first: run.first,
-                    last: run.last,
-                });
-            }
-            runs.push(ExtentRun {
-                first: run.first,
-                last: run.last,
-                extent: rounded_extent(run.size, record)?,
-            });
-            cursor = run.last.checked_add(1).ok_or(AxisSizeError::Limit)?;
-        }
-        let axis =
-            RunAxis::from_runs(default_extent, last_index, &runs).map_err(|error| match error {
-                RunAxisError::InvalidRun { run } => {
-                    let record = &sizes.runs[run];
-                    AxisSizeError::InvalidRecord {
-                        record: run,
-                        first: record.first,
-                        last: record.last,
-                    }
-                }
-                RunAxisError::InvalidDefaultExtent => AxisSizeError::InvalidSize {
-                    record: 0,
-                    size: sizes.default_size,
-                },
-                RunAxisError::InvalidLimit | RunAxisError::Overflow | RunAxisError::Limit => {
-                    AxisSizeError::Limit
-                }
-            })?;
-        Ok(Self { axis })
-    }
-
-    pub fn default_extent(&self) -> i32 {
-        self.axis.default_extent()
-    }
-
-    pub fn total_extent(&self) -> i64 {
-        self.axis.total_extent()
-    }
-
-    pub fn last_index(&self) -> i32 {
-        self.axis.last_index()
-    }
-
-    pub fn runs(&self) -> &[AxisRun] {
-        self.axis.runs()
-    }
-}
-
-impl AxisExtents for WorksheetAxis {
-    fn default_extent(&self) -> i32 {
-        self.axis.default_extent()
-    }
-
-    fn extent(&self, index: i32) -> i32 {
-        AxisExtents::extent(&self.axis, index)
-    }
-
-    fn extent_before(&self, index: i32) -> i64 {
-        AxisExtents::extent_before(&self.axis, index)
-    }
-
-    fn total_extent(&self) -> i64 {
-        self.axis.total_extent()
-    }
-
-    fn locate(&self, distance: i64, window: ScrollAxisWindow) -> Option<(i32, i32)> {
-        AxisExtents::locate(&self.axis, distance, window)
-    }
-}
-
 /// Identity of the worksheet and content that produced axis sizes.
 ///
 /// A host stores one value with each cached [`WorksheetAxes`]. Navigation
@@ -765,8 +715,8 @@ pub struct AxesScope {
 /// Rounded runs for both worksheet axes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorksheetAxes {
-    pub rows: WorksheetAxis,
-    pub cols: WorksheetAxis,
+    pub rows: RunAxis,
+    pub cols: RunAxis,
     /// Source identity. `None` accepts unscoped axes for tests and exports.
     pub scope: Option<AxesScope>,
 }
@@ -774,8 +724,8 @@ pub struct WorksheetAxes {
 impl WorksheetAxes {
     pub fn from_sizes(rows: &AxisSizes, cols: &AxisSizes) -> Result<Self, AxisSizeError> {
         Ok(Self {
-            rows: WorksheetAxis::from_sizes(rows, LAST_ROW)?,
-            cols: WorksheetAxis::from_sizes(cols, LAST_COLUMN)?,
+            rows: rows.to_run_axis(LAST_ROW)?,
+            cols: cols.to_run_axis(LAST_COLUMN)?,
             scope: None,
         })
     }
@@ -806,6 +756,7 @@ impl WorksheetAxes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iron_canvas_core::AxisExtents;
     use iron_canvas_core::scroll::{ScrollPosition, move_axis, normalize_axis, normalize_position};
 
     fn row_run(first: i32, last: i32, size: f64) -> SizeRun {
@@ -885,7 +836,7 @@ mod tests {
     fn engine_axis_sums_are_checked() {
         // Core covers prefix-sum overflow on `RunAxis`. Engine sizes cannot
         // exceed the i64 sum over at most one million rows.
-        let axis = WorksheetAxis::from_sizes(&sizes(DEFAULT_ROW_HEIGHT, vec![]), 3).unwrap();
+        let axis = sizes(DEFAULT_ROW_HEIGHT, vec![]).to_run_axis(3).unwrap();
         assert_eq!(axis.total_extent(), 75);
     }
 
@@ -927,6 +878,56 @@ mod tests {
         )
         .finish_synthetic();
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn adversarial_record_orders_finish_with_single_operation_steps() {
+        // Later records overlap earlier ones, so covers merge and move entries.
+        let overlapping = AxisSizeBuilder::synthetic(
+            Axis::Row,
+            DEFAULT_ROW_HEIGHT,
+            &[(8, 9, 20.0), (6, 10, 30.0), (1, 7, 10.0)],
+        )
+        .finish_synthetic();
+        assert_eq!(
+            overlapping,
+            [
+                row_run(1, 5, 10.0),
+                row_run(6, 7, 30.0),
+                row_run(8, 9, 20.0),
+                row_run(10, 10, 30.0)
+            ]
+        );
+        // Reverse order emits in ascending index order.
+        let reverse = AxisSizeBuilder::synthetic(
+            Axis::Row,
+            DEFAULT_ROW_HEIGHT,
+            &[(5, 5, 50.0), (3, 3, 30.0), (1, 1, 10.0)],
+        )
+        .finish_synthetic();
+        assert_eq!(
+            reverse,
+            [
+                row_run(1, 1, 10.0),
+                row_run(3, 3, 30.0),
+                row_run(5, 5, 50.0)
+            ]
+        );
+        // Sparse records keep large default gaps.
+        let sparse = AxisSizeBuilder::synthetic(
+            Axis::Column,
+            DEFAULT_COLUMN_WIDTH,
+            &[(1, 1, 40.0), (100, 100, 50.0), (1_000, 1_000, 60.0)],
+        )
+        .finish_synthetic();
+        assert_eq!(
+            sparse,
+            [
+                row_run(1, 1, 40.0),
+                row_run(100, 100, 50.0),
+                row_run(1_000, 1_000, 60.0)
+            ]
+        );
     }
 
     #[test]
@@ -1001,24 +1002,19 @@ mod tests {
             Err(AxisSizeError::Sheet { sheet: 9 })
         );
         assert!(matches!(
-            WorksheetAxis::from_sizes(&sizes(DEFAULT_ROW_HEIGHT, vec![row_run(3, 2, 10.0)]), 10),
+            sizes(DEFAULT_ROW_HEIGHT, vec![row_run(3, 2, 10.0)]).to_run_axis(10),
             Err(AxisSizeError::InvalidRecord { .. })
         ));
         assert!(matches!(
-            WorksheetAxis::from_sizes(
-                &sizes(
-                    DEFAULT_ROW_HEIGHT,
-                    vec![row_run(1, 3, 10.0), row_run(3, 4, 20.0)]
-                ),
-                10
-            ),
+            sizes(
+                DEFAULT_ROW_HEIGHT,
+                vec![row_run(1, 3, 10.0), row_run(3, 4, 20.0)]
+            )
+            .to_run_axis(10),
             Err(AxisSizeError::InvalidRecord { .. })
         ));
         assert!(matches!(
-            WorksheetAxis::from_sizes(
-                &sizes(DEFAULT_ROW_HEIGHT, vec![row_run(1, 1, f64::NAN)]),
-                10
-            ),
+            sizes(DEFAULT_ROW_HEIGHT, vec![row_run(1, 1, f64::NAN)]).to_run_axis(10),
             Err(AxisSizeError::InvalidSize { .. })
         ));
     }
@@ -1029,7 +1025,7 @@ mod tests {
             DEFAULT_ROW_HEIGHT,
             vec![row_run(2, 3, 32.4), row_run(5, 5, 0.0)],
         );
-        let axis = WorksheetAxis::from_sizes(&rows, 6).unwrap();
+        let axis = rows.to_run_axis(6).unwrap();
         assert_eq!(
             axis.runs(),
             [
@@ -1071,22 +1067,20 @@ mod tests {
         assert_eq!(axis.extent(5), 0);
         assert_eq!(axis.extent(6), 25);
         // Equal adjacent extents combine into one run.
-        let combined =
-            WorksheetAxis::from_sizes(&sizes(DEFAULT_ROW_HEIGHT, vec![row_run(1, 2, 30.2)]), 3)
-                .unwrap();
+        let combined = sizes(DEFAULT_ROW_HEIGHT, vec![row_run(1, 2, 30.2)])
+            .to_run_axis(3)
+            .unwrap();
         assert_eq!(combined.runs()[0].last, 2);
         assert_eq!(combined.runs()[1].first, 3);
     }
 
     #[test]
     fn axes_skip_zero_runs_and_apply_end_limits() {
-        let axis = WorksheetAxis::from_sizes(
-            &sizes(
-                DEFAULT_ROW_HEIGHT,
-                vec![row_run(2, 4, 0.0), row_run(5, 6, 10.0), row_run(7, 7, 0.0)],
-            ),
-            8,
+        let axis = sizes(
+            DEFAULT_ROW_HEIGHT,
+            vec![row_run(2, 4, 0.0), row_run(5, 6, 10.0), row_run(7, 7, 0.0)],
         )
+        .to_run_axis(8)
         .unwrap();
         let window = ScrollAxisWindow::new(1, 8);
         assert_eq!(

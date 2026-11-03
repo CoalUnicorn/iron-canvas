@@ -19,12 +19,13 @@ pub(crate) use text::font_css;
 pub use cf::{CfDataBarPaint, CfDecorationPaint, CfIconPaint, CfRatingPaint};
 pub use composition::row_header_width;
 
+use crate::axis_sizes::WorksheetAxes;
 pub use iron_canvas_core::scroll::ScrollPosition;
 use iron_canvas_core::{CanvasTheme, CellCoord, PixelRect};
 use iron_canvas_core::{
     painter::{PaintColor, TextMetrics},
     scene::{GridScene, SceneBuilder},
-    scene_geometry::GridGeometry,
+    scene_geometry::{AxisCell, GridGeometry},
     text_shaper::{TextLayoutCache, TextMetricsKey, TextShaper},
 };
 use ironcalc_base::{
@@ -122,8 +123,21 @@ pub struct WorksheetMetadata<'a> {
     merges: &'a Rc<[MergedCell]>,
 }
 
+/// Borrowed full-sheet axes and the identity they must match.
+///
+/// The scope sheet ID must equal the live worksheet ID. The index selects the
+/// worksheet; it is not part of the axes identity.
+#[derive(Debug, Clone, Copy)]
+pub struct WorksheetAxesInput<'a> {
+    pub axes: &'a WorksheetAxes,
+    /// Workbook identity from the render request.
+    pub workbook_id: u64,
+    /// Content revision from the render request.
+    pub revision: u64,
+}
+
 /// Optional inputs from an earlier compilation. The default reuses neither input.
-/// Geometry and metadata have separate validity rules.
+/// Geometry, metadata, and axes have separate validity rules.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct WorksheetReuse<'a> {
     /// Resample dimensions and reuse this geometry only when it is equal.
@@ -132,6 +146,10 @@ pub struct WorksheetReuse<'a> {
     /// Advance the revision after evaluation changes links or after merges change.
     /// Use `None` when the revision is unknown.
     pub metadata: Option<WorksheetMetadata<'a>>,
+    /// Use prepared axes for geometry and merge extents. Compilation rejects
+    /// axes with another workbook, sheet, or revision. Keep `None` for the
+    /// individual dimension getters.
+    pub axes: Option<WorksheetAxesInput<'a>>,
 }
 
 impl PreparedWorksheet {
@@ -371,13 +389,8 @@ struct CellView<'a> {
 /// One visible cell in pane order. Keep this value small: the pane stores one
 /// entry for every visible cell.
 enum VisibleCell {
-    /// Shared block storage. `slot` is the cell index inside the block.
-    Block {
-        block: usize,
-        slot: usize,
-        kind: CellType,
-        occupied: bool,
-    },
+    /// Shared block storage and the cell slot inside the block.
+    Block(cells::BlockRecord),
     /// One individual engine read, stored in `CellRecords::visible_records`.
     Individual(usize),
 }
@@ -385,8 +398,9 @@ enum VisibleCell {
 /// Row-major cells for one pane. `base` is the first slot.
 struct VisiblePane {
     base: usize,
-    rows: Vec<i32>,
-    columns: Vec<i32>,
+    /// Shared geometry samples. The pane searches them by cell index.
+    rows: Rc<[AxisCell]>,
+    columns: Rc<[AxisCell]>,
     /// True when one cell in the row has text. Spill planning needs the row
     /// scan only for these rows and for rows with an offscreen source.
     text_rows: Vec<bool>,
@@ -403,10 +417,16 @@ struct VisibleCells {
 impl VisibleCells {
     fn locate(&self, coordinate: CellCoord) -> Option<usize> {
         for pane in &self.panes {
-            let Ok(row) = pane.rows.binary_search(&coordinate.row) else {
+            let Ok(row) = pane
+                .rows
+                .binary_search_by_key(&coordinate.row, |cell| cell.index)
+            else {
                 continue;
             };
-            let Ok(column) = pane.columns.binary_search(&coordinate.col) else {
+            let Ok(column) = pane
+                .columns
+                .binary_search_by_key(&coordinate.col, |cell| cell.index)
+            else {
                 continue;
             };
             return Some(pane.base + row * pane.columns.len() + column);
@@ -420,7 +440,7 @@ impl VisibleCells {
         self.panes[pane].text_rows[row]
     }
     fn is_block(&self, index: usize) -> bool {
-        matches!(self.cells.get(index), Some(VisibleCell::Block { .. }))
+        matches!(self.cells.get(index), Some(VisibleCell::Block(_)))
     }
 }
 
@@ -454,12 +474,7 @@ impl CellRecords {
     }
     fn view_index(&self, index: usize) -> CellView<'_> {
         match &self.visible.cells[index] {
-            VisibleCell::Block {
-                block,
-                slot,
-                kind,
-                occupied,
-            } => self.blocks.view_slot(*block, *slot, kind, *occupied),
+            VisibleCell::Block(record) => self.blocks.view(record),
             VisibleCell::Individual(record) => {
                 let record = &self.visible_records[*record];
                 CellView {
@@ -672,6 +687,29 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         Ok(())
     }
 
+    /// Resolve the shared record for one block cell. Occupancy comes from the
+    /// stored cell; text kind overrides it when the block has formatted text.
+    fn block_record(
+        &self,
+        block: usize,
+        slot: usize,
+        cell: CellCoord,
+    ) -> Result<cells::BlockRecord, WorksheetCompileError> {
+        let stored = self.occupied_kind(cell)?;
+        let occupied = stored.is_some();
+        let kind = self
+            .cached
+            .blocks
+            .text_kind(block, slot)
+            .unwrap_or_else(|| stored.unwrap_or(CellType::Number));
+        Ok(cells::BlockRecord {
+            block,
+            slot,
+            kind,
+            occupied,
+        })
+    }
+
     fn load_visible(&mut self, geometry: &GridGeometry) -> Result<(), WorksheetCompileError> {
         let cell_count: usize = geometry
             .panes
@@ -691,20 +729,10 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                         col: column.index,
                     };
                     if let Some((block, slot)) = self.cached.blocks.locate(coordinate) {
-                        let stored = self.occupied_kind(coordinate)?;
-                        let occupied = stored.is_some();
                         row_has_text |= self.cached.blocks.has_text(block, slot);
-                        let kind = self
-                            .cached
-                            .blocks
-                            .text_kind(block, slot)
-                            .unwrap_or_else(|| stored.unwrap_or(CellType::Number));
-                        cells.push(VisibleCell::Block {
-                            block,
-                            slot,
-                            kind,
-                            occupied,
-                        });
+                        cells.push(VisibleCell::Block(
+                            self.block_record(block, slot, coordinate)?,
+                        ));
                     } else {
                         let record = self.read_individual(coordinate)?;
                         row_has_text |= !record.value.is_empty();
@@ -717,8 +745,8 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             }
             panes.push(VisiblePane {
                 base,
-                rows: pane.rows.iter().map(|row| row.index).collect(),
-                columns: pane.columns.iter().map(|column| column.index).collect(),
+                rows: Rc::clone(&pane.rows),
+                columns: Rc::clone(&pane.columns),
                 text_rows,
             });
         }
@@ -741,22 +769,8 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             return Ok(());
         }
         if let Some((block, slot)) = self.cached.blocks.locate(cell) {
-            let stored_kind = self.occupied_kind(cell)?;
-            let occupied = stored_kind.is_some();
-            let kind = self
-                .cached
-                .blocks
-                .text_kind(block, slot)
-                .unwrap_or_else(|| stored_kind.unwrap_or(CellType::Number));
-            self.cached.covered.insert(
-                cell,
-                cells::BlockRecord {
-                    block,
-                    slot,
-                    kind,
-                    occupied,
-                },
-            );
+            let record = self.block_record(block, slot, cell)?;
+            self.cached.covered.insert(cell, record);
             return Ok(());
         }
         let record = self.read_individual(cell)?;
@@ -774,19 +788,17 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             .workbook
             .get_extended_cell_style(self.context.sheet, cell.row, cell.col)
             .map_err(|e| self.error(cell, CellReadOperation::ExtendedStyle, format!("{e:?}")))?;
-        let kind = self
-            .context
-            .workbook
-            .get_cell_type(self.context.sheet, cell.row, cell.col)
-            .map_err(|e| self.error(cell, CellReadOperation::CellType, e))?;
         let text = self
             .context
             .workbook
             .get_formatted_cell_value(self.context.sheet, cell.row, cell.col)
             .map_err(|e| self.error(cell, CellReadOperation::FormattedValue, e))?;
         // Display text cannot identify empty cells: formulas and number formats
-        // can hide occupied values. Inspect the stored cell without changing it.
-        let occupied = self.occupied(cell)?;
+        // can hide occupied values. One stored-cell read gives kind and occupancy.
+        // The individual getter defaults an empty cell to `Number`.
+        let stored = self.occupied_kind(cell)?;
+        let occupied = stored.is_some();
+        let kind = stored.unwrap_or(CellType::Number);
         Ok(CellRecord {
             extended: style,
             kind,
