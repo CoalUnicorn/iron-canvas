@@ -359,6 +359,9 @@ struct VisiblePane {
     base: usize,
     rows: Vec<i32>,
     columns: Vec<i32>,
+    /// True when one cell in the row has text. Spill planning needs the row
+    /// scan only for these rows and for rows with an offscreen source.
+    text_rows: Vec<bool>,
 }
 
 /// Flat index of visible cells. A coordinate resolves through one pane and two
@@ -384,6 +387,9 @@ impl VisibleCells {
     }
     fn row_first(&self, pane: usize, row: usize) -> usize {
         self.panes[pane].base + row * self.panes[pane].columns.len()
+    }
+    fn row_has_text(&self, pane: usize, row: usize) -> bool {
+        self.panes[pane].text_rows[row]
     }
     fn is_block(&self, index: usize) -> bool {
         matches!(self.cells.get(index), Some(VisibleCell::Block { .. }))
@@ -572,7 +578,9 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         let mut panes = Vec::with_capacity(geometry.panes.len());
         for pane in &geometry.panes {
             let base = cells.len();
+            let mut text_rows = Vec::with_capacity(pane.rows.len());
             for row in pane.rows.iter() {
+                let mut row_has_text = false;
                 for column in pane.columns.iter() {
                     let coordinate = CellCoord {
                         row: row.index,
@@ -581,6 +589,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                     if let Some((block, slot)) = self.cached.blocks.locate(coordinate) {
                         let stored = self.occupied_kind(coordinate)?;
                         let occupied = stored.is_some();
+                        row_has_text |= self.cached.blocks.has_text(block, slot);
                         let kind = self
                             .cached
                             .blocks
@@ -594,16 +603,19 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                         });
                     } else {
                         let record = self.read_individual(coordinate)?;
+                        row_has_text |= !record.value.is_empty();
                         let index = self.cached.visible_records.len();
                         self.cached.visible_records.push(record);
                         cells.push(VisibleCell::Individual(index));
                     }
                 }
+                text_rows.push(row_has_text);
             }
             panes.push(VisiblePane {
                 base,
                 rows: pane.rows.iter().map(|row| row.index).collect(),
                 columns: pane.columns.iter().map(|column| column.index).collect(),
+                text_rows,
             });
         }
         self.cached.visible = VisibleCells { cells, panes };

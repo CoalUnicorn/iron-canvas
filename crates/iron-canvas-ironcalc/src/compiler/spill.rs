@@ -188,6 +188,7 @@ impl Attempt<'_, '_, '_> {
         row: &AxisCell,
         visible: &[AxisCell],
         visible_first: usize,
+        has_text: bool,
         pane_clip: PixelRect,
         limits: (i32, i32),
         merges: &[MergedCell],
@@ -200,7 +201,7 @@ impl Attempt<'_, '_, '_> {
         // Empty regions outside the pane need no style reads when there is no
         // text source within the fixed limit.
         let last_slot = visible_first + visible.len() - 1;
-        let mut columns = self.outside_source(
+        let left = self.outside_source(
             row,
             first,
             Some(visible_first),
@@ -209,11 +210,16 @@ impl Attempt<'_, '_, '_> {
             merges,
             &mut extent,
         )?;
-        let mut slots = vec![None; columns.len()];
-        columns.extend_from_slice(visible);
-        slots.extend((0..visible.len()).map(|offset| Some(visible_first + offset)));
         let right =
             self.outside_source(row, last, Some(last_slot), 1, limits, merges, &mut extent)?;
+        // An empty row with no offscreen source cannot produce a spill.
+        if left.is_empty() && right.is_empty() && !has_text {
+            return Ok(SpillPlan::default());
+        }
+        let mut slots = vec![None; left.len()];
+        let mut columns = left;
+        columns.extend_from_slice(visible);
+        slots.extend((0..visible.len()).map(|offset| Some(visible_first + offset)));
         slots.extend(std::iter::repeat_n(None, right.len()));
         columns.extend(right);
         // Offscreen sources and their intermediate cells still need keyed reads.

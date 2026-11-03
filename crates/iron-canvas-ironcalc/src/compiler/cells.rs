@@ -377,6 +377,9 @@ impl CellBlocks {
         }
     }
 
+    pub(super) fn has_text(&self, block: usize, slot: usize) -> bool {
+        self.blocks[block].text_slots[slot].is_some()
+    }
     pub(super) fn text_kind(&self, block: usize, slot: usize) -> Option<CellType> {
         let block = &self.blocks[block];
         block.text_slots[slot].and_then(|index| cell_type(block.data.texts[index].cell_type))

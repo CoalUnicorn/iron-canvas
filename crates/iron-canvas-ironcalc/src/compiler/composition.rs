@@ -380,6 +380,7 @@ fn paint_cells(
                 row,
                 &pane.columns,
                 first_slot,
+                attempt.cached.visible.row_has_text(pane_index, row_slot),
                 pane.clip,
                 limits,
                 merges,
