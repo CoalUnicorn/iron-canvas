@@ -9,8 +9,11 @@ use iron_canvas_core::{
     scene_geometry::{GridRange, GridResize},
 };
 use iron_canvas_export::SvgSceneBackend;
-use iron_canvas_ironcalc::WorksheetViewport;
+use iron_canvas_ironcalc::{
+    AxesScope, WorksheetAxes, WorksheetViewport, get_column_sizes, get_row_sizes,
+};
 use ironcalc_base::UserModel;
+use std::rc::Rc;
 
 struct FailingBackend {
     svg: SvgSceneBackend,
@@ -147,6 +150,53 @@ fn render_fresh_reads_blocks_again_after_a_warm_frame() {
     // frame depend on the warm one. Fresh must repeat the same engine reads.
     assert_eq!(fresh.extended_style_reads, warm.extended_style_reads);
     assert_eq!(session.committed_frame().unwrap().worksheet.scene, warmed);
+}
+
+#[test]
+fn prepared_axes_are_validated_and_used_by_the_session() {
+    let mut workbook = UserModel::new_empty("axes", "en", "UTC", "en").unwrap();
+    workbook.set_rows_height(0, 1, 40, 30.0).unwrap();
+    let sheet_id = workbook.get_model().workbook.worksheet(0).unwrap().sheet_id;
+    let axes = WorksheetAxes::from_sizes(
+        &get_row_sizes(&workbook, 0).unwrap(),
+        &get_column_sizes(&workbook, 0).unwrap(),
+    )
+    .unwrap();
+    let request = request();
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+
+    // Axes from another revision are rejected during preparation.
+    session.set_axes(Some(Rc::new(axes.clone().with_scope(AxesScope {
+        workbook_id: 1,
+        sheet_id,
+        revision: 2,
+    }))));
+    assert!(matches!(
+        session.render(&workbook, &request),
+        Err(RenderError::Preparation(_))
+    ));
+
+    // Current axes produce the same scene as the individual getter path.
+    let axes = Rc::new(axes.with_scope(AxesScope {
+        workbook_id: 1,
+        sheet_id,
+        revision: 1,
+    }));
+    session.set_axes(Some(Rc::clone(&axes)));
+    session.render(&workbook, &request).unwrap();
+    let with_axes = session.committed_frame().unwrap().worksheet.scene.clone();
+
+    let mut plain = CanvasSession::new(SvgSceneBackend::new());
+    plain.render(&workbook, &request).unwrap();
+    assert_eq!(with_axes, plain.committed_frame().unwrap().worksheet.scene);
+
+    // A reference frame reads dimensions from the model, not from the axes.
+    session.set_axes(Some(Rc::new(axes.as_ref().clone().with_scope(AxesScope {
+        workbook_id: 1,
+        sheet_id,
+        revision: 99,
+    }))));
+    assert!(session.render_fresh(&workbook, &request).is_ok());
 }
 
 #[test]

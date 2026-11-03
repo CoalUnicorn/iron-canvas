@@ -26,8 +26,8 @@ use iron_canvas_core::CanvasTheme;
 pub use iron_canvas_core::scene::RenderBackend;
 use iron_canvas_core::text_shaper::{TextLayoutCache, TextShaper};
 use iron_canvas_ironcalc::{
-    BlockCacheIdentity, PreparedWorksheet, WorksheetBlockCache, WorksheetCompileError,
-    WorksheetCompiler, WorksheetContext, WorksheetReuse, WorksheetViewport,
+    BlockCacheIdentity, PreparedWorksheet, WorksheetAxes, WorksheetAxesInput, WorksheetBlockCache,
+    WorksheetCompileError, WorksheetCompiler, WorksheetContext, WorksheetReuse, WorksheetViewport,
 };
 use ironcalc_base::UserModel;
 
@@ -139,6 +139,7 @@ pub struct CanvasSession<B> {
     text_layouts: TextLayoutCache,
     text_metrics_key: Option<TextMetricsKey>,
     block_cache: WorksheetBlockCache,
+    axes: Option<std::rc::Rc<WorksheetAxes>>,
 }
 
 impl<B: RenderBackend> CanvasSession<B> {
@@ -152,7 +153,18 @@ impl<B: RenderBackend> CanvasSession<B> {
             text_layouts: TextLayoutCache::default(),
             text_metrics_key: None,
             block_cache: WorksheetBlockCache::default(),
+            axes: None,
         }
+    }
+
+    /// Supply prepared axes for later frame attempts.
+    ///
+    /// Axes must carry an `AxesScope`. The compiler validates it against each
+    /// request's workbook, stable sheet ID, and content revision.
+    /// `render_fresh` ignores prepared axes and reads dimensions from the model
+    /// for an independent frame.
+    pub fn set_axes(&mut self, axes: Option<std::rc::Rc<WorksheetAxes>>) {
+        self.axes = axes;
     }
 
     /// Prepare and stage a full candidate before publishing either backend
@@ -291,10 +303,19 @@ impl<B: RenderBackend> CanvasSession<B> {
                     sheet: request.sheet,
                     theme: &request.theme,
                 };
+                let axes = if fresh {
+                    None
+                } else {
+                    self.axes.as_deref().map(|axes| WorksheetAxesInput {
+                        axes,
+                        workbook_id: request.revision.workbook_id,
+                        revision: request.revision.revision,
+                    })
+                };
                 let reuse = WorksheetReuse {
                     geometry: donor,
                     metadata,
-                    axes: None,
+                    axes,
                 };
                 // An independent reference frame must read engine blocks again.
                 // Block reuse would make it depend on an earlier frame.

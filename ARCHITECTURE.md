@@ -320,6 +320,11 @@ The session owns one `WorksheetBlockCache`. A normal render passes it to
 block data because font and metric changes do not change engine cells. The host
 advances the content revision after a cell or dimension change.
 
+The session also holds optional prepared axes. `set_axes` replaces them. The
+compiler checks their workbook, stable sheet ID, and revision on each attempt.
+`render_fresh` ignores them. A stale set fails preparation instead of using old
+extents.
+
 `RenderError` is `#[non_exhaustive]`. It reports preparation, backend, sequence,
 and `InvalidOverlay` failures. A failed attempt leaves the committed frame and
 cache truth unchanged.
@@ -389,6 +394,8 @@ Direct callers check workbook identity, sheet, and revision before reuse.
 A supplied `WorksheetAxes` keeps its scope. The compiler rejects axes for
 another workbook, sheet ID, or revision. The supplied axes replace the
 per-index dimension getters for geometry and merge extents.
+`CanvasSession::set_axes` supplies axes for `render` and `render_cached`.
+`render_fresh` ignores them and reads dimensions from the model.
 `prepare` and `prepare_reusing_geometry` collect fresh lists.
 
 `axis_sizes` reads stored worksheet records into run-compressed sizes:
@@ -532,7 +539,8 @@ through `attach`, `command`, `sync`, and `resize`. The accepted
 `ScrollPosition` becomes the `WorksheetViewport` scroll value of the next
 `RenderRequest`. Pointer, hover, resize, auto-fit, and link activation read the
 committed frame through the session's query surface. The host applies
-`HostIntent` values; the library never writes the workbook.
+`HostIntent` values; the library never writes the workbook. The host supplies
+one prepared `WorksheetAxes` per scope through `CanvasSession::set_axes`.
 
 The GTK and React host trees use the same controller surface. They live outside
 this branch. The workspace here carries the library crates only.
