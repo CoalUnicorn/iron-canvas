@@ -91,6 +91,19 @@ fn valid_axis(cells: &[AxisCell], last: i32) -> bool {
         && cells.windows(2).all(|pair| pair[0].index < pair[1].index)
 }
 
+/// Append one tile index per run of cells inside the same tile. Pane cells are
+/// sorted, so equal tile indices are adjacent. Cross pane repeats remain.
+fn push_tiles(out: &mut Vec<i32>, cells: &[AxisCell], tile_extent: i32) {
+    let mut previous = None;
+    for cell in cells {
+        let tile = (cell.index - 1) / tile_extent;
+        if previous != Some(tile) {
+            out.push(tile);
+            previous = Some(tile);
+        }
+    }
+}
+
 /// Upper bound on absolute-tile cells per visible cell. A cold frame reads
 /// every cell of a tile, so a small pane must not trade a 9x read for cache
 /// reuse. Four keeps absolute tiles for a 900x620 viewport of many narrow
@@ -153,17 +166,10 @@ fn plan_absolute(
     let mut row_tiles = Vec::new();
     let mut column_tiles = Vec::new();
     for pane in panes {
-        row_tiles.extend(
-            pane.rows
-                .iter()
-                .map(|row| (row.index - 1) / tile_height as i32),
-        );
-        column_tiles.extend(
-            pane.columns
-                .iter()
-                .map(|column| (column.index - 1) / tile_width as i32),
-        );
+        push_tiles(&mut row_tiles, &pane.rows, tile_height as i32);
+        push_tiles(&mut column_tiles, &pane.columns, tile_width as i32);
     }
+    // Panes repeat the frozen axes, so remove cross-pane duplicates.
     row_tiles.sort_unstable();
     row_tiles.dedup();
     column_tiles.sort_unstable();
