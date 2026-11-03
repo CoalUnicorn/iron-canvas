@@ -255,8 +255,9 @@ overlays, so retained planning can compare model paint only.
   Stored cells determine occupancy even when display text is empty.
   Blocks do not enter the shared worksheet cache. `WorksheetBlockCache` can
   keep validated blocks across frames for one `BlockCacheIdentity`
-  (workbook, sheet, revision). It holds at most 131,072 cells and 512 blocks.
-  A new identity clears it, and each frame retains only the blocks it used.
+  (workbook, revision) and the live stable sheet ID. It holds at most 131,072
+  cells and 512 blocks. A new key clears it, and each frame retains only the
+  blocks it used.
   The session owns one cache. `render_fresh` bypasses it.
   `extended_style_reads` counts block style entries plus individual style reads.
   At the pinned engine revision, each block style entry requires one internal

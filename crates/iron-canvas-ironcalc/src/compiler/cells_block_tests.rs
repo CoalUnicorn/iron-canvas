@@ -342,7 +342,6 @@ fn block_cache_reuses_absolute_tiles_across_scroll_frames() {
     let mut cache = WorksheetBlockCache::default();
     let identity = BlockCacheIdentity {
         workbook_id: 1,
-        sheet: 0,
         revision: 1,
     };
     let mut layouts = TextLayoutCache::default();
@@ -374,6 +373,69 @@ fn block_cache_reuses_absolute_tiles_across_scroll_frames() {
         assert_eq!(frame.1, 0, "{frames:?}");
         assert!(frame.2 > 0, "{frames:?}");
     }
+}
+
+#[test]
+fn block_cache_clears_when_the_stable_sheet_id_changes_at_one_index() {
+    let mut model = UserModel::new_empty("sheet-id", "en", "UTC", "en").unwrap();
+    for row in 1..=20 {
+        for column in 1..=20 {
+            model.set_user_input(0, row, column, "a").unwrap();
+        }
+    }
+    let compiler = WorksheetCompiler::new();
+    let theme = CanvasTheme::light();
+    let mut cache = WorksheetBlockCache::default();
+    let identity = BlockCacheIdentity {
+        workbook_id: 1,
+        revision: 1,
+    };
+    let mut layouts = TextLayoutCache::default();
+    let mut shaper = TextShaper::new(&Metrics, TextMetricsKey::new(0, 0), &mut layouts);
+    let viewport = WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 400, 300);
+
+    let warm = compiler
+        .prepare_with_cache(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &theme,
+            },
+            viewport,
+            &mut shaper,
+            WorksheetReuse::default(),
+            identity,
+            &mut cache,
+        )
+        .unwrap();
+    assert!(warm.read_stats.block_calls > 0);
+
+    // Add a second sheet, then delete the first. The new sheet takes index 0
+    // but keeps its own stable sheet ID.
+    model.new_sheet().unwrap();
+    for row in 1..=20 {
+        for column in 1..=20 {
+            model.set_user_input(1, row, column, "b").unwrap();
+        }
+    }
+    model.delete_sheet(0).unwrap();
+
+    let next = compiler
+        .prepare_with_cache(
+            WorksheetContext {
+                workbook: &model,
+                sheet: 0,
+                theme: &theme,
+            },
+            viewport,
+            &mut shaper,
+            WorksheetReuse::default(),
+            identity,
+            &mut cache,
+        )
+        .unwrap();
+    assert_eq!(next.read_stats.block_reuses, 0);
+    assert!(next.read_stats.block_calls > 0);
 }
 
 #[test]

@@ -294,7 +294,8 @@ impl WorksheetCompiler {
     }
 
     /// Prepare with a reusable block cache. The identity must describe the
-    /// workbook, sheet, and content revision. A new identity clears the cache.
+    /// workbook and content revision. The cache also keys the live stable sheet
+    /// ID. A new key clears the cache.
     pub fn prepare_with_cache(
         &self,
         context: WorksheetContext<'_, '_>,
@@ -492,10 +493,12 @@ const MAX_BLOCK_CACHE_CELLS: usize = 131_072;
 const MAX_BLOCK_CACHE_BLOCKS: usize = 512;
 
 /// Content identity for reusable block data.
+///
+/// The cache keys the live stable sheet ID in addition to this identity, so a
+/// sheet reorder or replacement cannot reuse blocks from the old sheet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockCacheIdentity {
     pub workbook_id: u64,
-    pub sheet: u32,
     pub revision: u64,
 }
 
@@ -503,22 +506,35 @@ pub struct BlockCacheIdentity {
 /// identity. A host owns one value per rendering session.
 #[derive(Default)]
 pub struct WorksheetBlockCache {
-    identity: Option<BlockCacheIdentity>,
+    key: Option<BlockCacheKey>,
     blocks: HashMap<cells::BlockRect, Rc<cells::ValidatedBlock>>,
     cells: usize,
+}
+
+/// Full cache key. The stable sheet ID is read from the live worksheet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct BlockCacheKey {
+    workbook_id: u64,
+    sheet_id: u32,
+    revision: u64,
 }
 
 impl WorksheetBlockCache {
     /// Drop every cached block.
     pub fn clear(&mut self) {
-        self.identity = None;
+        self.key = None;
         self.blocks.clear();
         self.cells = 0;
     }
-    fn begin(&mut self, identity: BlockCacheIdentity) {
-        if self.identity != Some(identity) {
+    fn begin(&mut self, identity: BlockCacheIdentity, sheet_id: u32) {
+        let key = BlockCacheKey {
+            workbook_id: identity.workbook_id,
+            sheet_id,
+            revision: identity.revision,
+        };
+        if self.key != Some(key) {
             self.clear();
-            self.identity = Some(identity);
+            self.key = Some(key);
         }
     }
     fn get(&self, rect: cells::BlockRect) -> Option<Rc<cells::ValidatedBlock>> {
@@ -643,7 +659,8 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         })?;
         let mut reuse = reuse;
         if let Some((cache, identity)) = reuse.as_mut() {
-            cache.begin(*identity);
+            let sheet_id = self.worksheet(CellCoord { row: 1, col: 1 })?.sheet_id;
+            cache.begin(*identity, sheet_id);
         }
         let mut used = HashSet::with_capacity(rectangles.len());
         for rect in rectangles {

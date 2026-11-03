@@ -331,7 +331,6 @@ impl<B: RenderBackend> CanvasSession<B> {
                         reuse,
                         BlockCacheIdentity {
                             workbook_id: request.revision.workbook_id,
-                            sheet: request.sheet,
                             revision: request.revision.revision,
                         },
                         &mut self.block_cache,
