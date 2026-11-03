@@ -627,6 +627,30 @@ mod tests {
     }
 
     #[test]
+    fn absolute_plan_is_ordered_and_unique_across_repeated_panes() {
+        let rows: Vec<_> = (1..=200).collect();
+        let columns: Vec<_> = (1..=200).collect();
+        // Repeated panes produce the same tile indices on both axes.
+        let panes = [pane(&rows, &columns), pane(&rows, &columns)];
+        let blocks = plan_blocks(&panes, BlockLimits::default()).unwrap();
+        assert_eq!(blocks.len(), 16);
+        assert!(
+            blocks
+                .windows(2)
+                .all(|pair| { (pair[0].row, pair[0].column) <= (pair[1].row, pair[1].column) })
+        );
+        let mut seen = std::collections::HashSet::new();
+        for block in blocks {
+            assert!(
+                seen.insert((block.row, block.column)),
+                "duplicate block at ({}, {})",
+                block.row,
+                block.column
+            );
+        }
+    }
+
+    #[test]
     fn small_dense_panes_use_the_exact_plan() {
         let rows: Vec<_> = (1..=20).collect();
         let columns: Vec<_> = (1..=20).collect();
