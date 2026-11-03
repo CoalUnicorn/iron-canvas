@@ -22,12 +22,13 @@ pub use overlays::{FormulaOverlay, OverlayError, OverlayState};
 
 use std::fmt;
 
-use iron_canvas_core::CanvasTheme;
 pub use iron_canvas_core::scene::RenderBackend;
 use iron_canvas_core::text_shaper::{TextLayoutCache, TextShaper};
+use iron_canvas_core::{CanvasTheme, CellCoord};
 use iron_canvas_ironcalc::{
-    BlockCacheIdentity, PreparedWorksheet, WorksheetAxes, WorksheetAxesInput, WorksheetBlockCache,
-    WorksheetCompileError, WorksheetCompiler, WorksheetContext, WorksheetReuse, WorksheetViewport,
+    BlockCacheIdentity, CellReadOperation, PreparedWorksheet, WorksheetAxes, WorksheetAxesInput,
+    WorksheetBlockCache, WorksheetCompileError, WorksheetCompiler, WorksheetContext,
+    WorksheetReuse, WorksheetViewport,
 };
 use ironcalc_base::UserModel;
 
@@ -129,6 +130,21 @@ enum ContentSource<'a> {
     Fresh,
 }
 
+/// Resolve the stable engine sheet ID for a worksheet index.
+fn stable_sheet_id(workbook: &UserModel<'_>, sheet: u32) -> Result<u32, WorksheetCompileError> {
+    workbook
+        .get_model()
+        .workbook
+        .worksheet(sheet)
+        .map(|worksheet| worksheet.sheet_id)
+        .map_err(|message| WorksheetCompileError {
+            sheet,
+            cell: CellCoord { row: 1, col: 1 },
+            operation: CellReadOperation::Sheet,
+            message,
+        })
+}
+
 /// Owns the current backend and the last successfully committed frame.
 pub struct CanvasSession<B> {
     compiler: WorksheetCompiler,
@@ -216,6 +232,8 @@ impl<B: RenderBackend> CanvasSession<B> {
             .overlays
             .validate(request)
             .map_err(RenderError::InvalidOverlay)?;
+        let sheet_id =
+            stable_sheet_id(workbook, request.sheet).map_err(RenderError::Preparation)?;
         let sequence = self.next_sequence;
         let next_sequence = sequence
             .checked_add(1)
@@ -263,7 +281,7 @@ impl<B: RenderBackend> CanvasSession<B> {
         // Shared content never carries another session's overlays or retained
         // fingerprint. Keep the previous frame only for composition and paint.
         let lookup = match &source {
-            ContentSource::Cache(cache, key) if !force => cache.lookup(request, *key),
+            ContentSource::Cache(cache, key) if !force => cache.lookup(request, sheet_id, *key),
             ContentSource::Previous => match (reuse, compatible) {
                 (Some((_, reuse)), _) => CacheLookup::Content(&reuse.base),
                 (None, Some((_, reuse))) => CacheLookup::Geometry(&reuse.base),
@@ -288,7 +306,7 @@ impl<B: RenderBackend> CanvasSession<B> {
                             && committed.request.revision == request.revision
                     })
                     .map(|(_, reuse)| &reuse.base),
-                ContentSource::Cache(cache, _) => cache.metadata(request),
+                ContentSource::Cache(cache, _) => cache.metadata(request, sheet_id),
                 ContentSource::Fresh => None,
             }
         }
@@ -431,7 +449,7 @@ impl<B: RenderBackend> CanvasSession<B> {
         if let ContentSource::Cache(cache, key) = source
             && cache.capacity() > 0
         {
-            cache.publish(request, key, base.clone());
+            cache.publish(request, sheet_id, key, base.clone());
         }
         self.committed = Some(Committed {
             frame: PreparedWorksheetFrame {

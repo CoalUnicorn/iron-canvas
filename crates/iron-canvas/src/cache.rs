@@ -10,14 +10,14 @@ use crate::RenderRequest;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct CacheKey {
     workbook_id: u64,
-    sheet: u32,
+    sheet_id: u32,
 }
 
 impl CacheKey {
-    fn for_request(request: &RenderRequest) -> Self {
+    fn for_request(request: &RenderRequest, sheet_id: u32) -> Self {
         Self {
             workbook_id: request.revision.workbook_id,
-            sheet: request.sheet,
+            sheet_id,
         }
     }
 }
@@ -38,7 +38,7 @@ pub(crate) enum CacheLookup<'a> {
     Miss,
 }
 
-/// Bounded cache with one prepared viewport per workbook and sheet.
+/// Bounded cache with one prepared viewport per workbook and stable sheet ID.
 ///
 /// The least recently used entry leaves first. A lookup does not change the
 /// use order. Only a successful frame commit inserts or refreshes an entry.
@@ -84,9 +84,10 @@ impl WorksheetCache {
     pub(crate) fn lookup(
         &self,
         request: &RenderRequest,
+        sheet_id: u32,
         metrics_key: TextMetricsKey,
     ) -> CacheLookup<'_> {
-        let key = CacheKey::for_request(request);
+        let key = CacheKey::for_request(request, sheet_id);
         let Some(entry) = self.entries.iter().find(|entry| entry.key == key) else {
             return CacheLookup::Miss;
         };
@@ -104,8 +105,12 @@ impl WorksheetCache {
 
     /// Metadata does not depend on viewport, theme, or text measurements.
     /// Reuse the existing entry without changing its capacity or use order.
-    pub(crate) fn metadata(&self, request: &RenderRequest) -> Option<&PreparedWorksheet> {
-        let key = CacheKey::for_request(request);
+    pub(crate) fn metadata(
+        &self,
+        request: &RenderRequest,
+        sheet_id: u32,
+    ) -> Option<&PreparedWorksheet> {
+        let key = CacheKey::for_request(request, sheet_id);
         self.entries
             .iter()
             .find(|entry| entry.key == key && entry.revision == request.revision.revision)
@@ -115,13 +120,14 @@ impl WorksheetCache {
     pub(crate) fn publish(
         &mut self,
         request: &RenderRequest,
+        sheet_id: u32,
         metrics_key: TextMetricsKey,
         base: PreparedWorksheet,
     ) {
         if self.capacity == 0 {
             return;
         }
-        let key = CacheKey::for_request(request);
+        let key = CacheKey::for_request(request, sheet_id);
         if let Some(index) = self.entries.iter().position(|entry| entry.key == key) {
             self.entries.remove(index);
         }
@@ -186,21 +192,21 @@ mod tests {
     fn validity_keeps_one_entry_per_sheet_and_separates_workbooks() {
         let mut cache = WorksheetCache::new(3);
         let original = request(0);
-        cache.publish(&original, METRICS, base());
+        cache.publish(&original, original.sheet, METRICS, base());
         assert!(matches!(
-            cache.lookup(&original, METRICS),
+            cache.lookup(&original, original.sheet, METRICS),
             CacheLookup::Content(_)
         ));
         let mut changed = original.clone();
         changed.revision.revision += 1;
         assert!(matches!(
-            cache.lookup(&changed, METRICS),
+            cache.lookup(&changed, changed.sheet, METRICS),
             CacheLookup::Geometry(_)
         ));
         changed = original.clone();
         changed.viewport.scroll.first_cell.row += 1;
         assert!(matches!(
-            cache.lookup(&changed, METRICS),
+            cache.lookup(&changed, changed.sheet, METRICS),
             CacheLookup::Geometry(_)
         ));
         // Offset-only movement is still a different viewport.
@@ -208,29 +214,63 @@ mod tests {
         changed.viewport.scroll.offset_x = 1;
         changed.viewport.scroll.offset_y = 1;
         assert!(matches!(
-            cache.lookup(&changed, METRICS),
+            cache.lookup(&changed, changed.sheet, METRICS),
             CacheLookup::Geometry(_)
         ));
-        cache.publish(&changed, METRICS, base());
+        cache.publish(&changed, changed.sheet, METRICS, base());
         assert_eq!(cache.len(), 1);
         assert!(matches!(
-            cache.lookup(&original, METRICS),
+            cache.lookup(&original, original.sheet, METRICS),
             CacheLookup::Geometry(_)
         ));
         changed = original.clone();
         changed.theme = CanvasTheme::dark();
-        assert!(matches!(cache.lookup(&changed, METRICS), CacheLookup::Miss));
+        assert!(matches!(
+            cache.lookup(&changed, changed.sheet, METRICS),
+            CacheLookup::Miss
+        ));
         for key in [TextMetricsKey::new(2, 0), TextMetricsKey::new(1, 1)] {
-            assert!(matches!(cache.lookup(&original, key), CacheLookup::Miss));
+            assert!(matches!(
+                cache.lookup(&original, original.sheet, key),
+                CacheLookup::Miss
+            ));
         }
         changed = original.clone();
         changed.revision.workbook_id += 1;
-        assert!(matches!(cache.lookup(&changed, METRICS), CacheLookup::Miss));
-        cache.publish(&changed, METRICS, base());
+        assert!(matches!(
+            cache.lookup(&changed, changed.sheet, METRICS),
+            CacheLookup::Miss
+        ));
+        cache.publish(&changed, changed.sheet, METRICS, base());
         assert_eq!(cache.len(), 2);
         assert!(matches!(
-            cache.lookup(&request(1), METRICS),
+            cache.lookup(&request(1), 1, METRICS),
             CacheLookup::Miss
+        ));
+    }
+
+    #[test]
+    fn stable_sheet_id_separates_entries_at_one_index() {
+        let mut cache = WorksheetCache::new(2);
+        let request = request(0);
+        cache.publish(&request, 10, METRICS, base());
+        assert!(matches!(
+            cache.lookup(&request, 10, METRICS),
+            CacheLookup::Content(_)
+        ));
+        assert!(matches!(
+            cache.lookup(&request, 11, METRICS),
+            CacheLookup::Miss
+        ));
+        cache.publish(&request, 11, METRICS, base());
+        assert_eq!(cache.len(), 2);
+        assert!(matches!(
+            cache.lookup(&request, 10, METRICS),
+            CacheLookup::Content(_)
+        ));
+        assert!(matches!(
+            cache.lookup(&request, 11, METRICS),
+            CacheLookup::Content(_)
         ));
     }
 
@@ -239,32 +279,32 @@ mod tests {
         let mut cache = WorksheetCache::new(2);
         let base = base();
         for sheet in [0, 1] {
-            cache.publish(&request(sheet), METRICS, base.clone());
+            cache.publish(&request(sheet), sheet, METRICS, base.clone());
         }
         let before = cache.entries.clone();
-        cache.lookup(&request(0), METRICS);
+        cache.lookup(&request(0), 0, METRICS);
         assert_eq!(cache.entries, before);
-        cache.publish(&request(0), METRICS, base.clone());
-        cache.publish(&request(2), METRICS, base.clone());
+        cache.publish(&request(0), 0, METRICS, base.clone());
+        cache.publish(&request(2), 2, METRICS, base.clone());
         assert!(matches!(
-            cache.lookup(&request(1), METRICS),
+            cache.lookup(&request(1), 1, METRICS),
             CacheLookup::Miss
         ));
         cache.set_capacity(1);
         assert_eq!(cache.capacity(), 1);
         assert!(matches!(
-            cache.lookup(&request(0), METRICS),
+            cache.lookup(&request(0), 0, METRICS),
             CacheLookup::Miss
         ));
         assert!(matches!(
-            cache.lookup(&request(2), METRICS),
+            cache.lookup(&request(2), 2, METRICS),
             CacheLookup::Content(_)
         ));
         cache.set_capacity(0);
-        cache.publish(&request(3), METRICS, base.clone());
+        cache.publish(&request(3), 3, METRICS, base.clone());
         assert!(cache.is_empty());
         cache.set_capacity(2);
-        cache.publish(&request(0), METRICS, base);
+        cache.publish(&request(0), 0, METRICS, base);
         cache.clear();
         assert!(cache.is_empty());
     }
@@ -363,7 +403,10 @@ mod tests {
             .unwrap();
         assert_eq!(retry.sequence, 3);
         assert!(!retry.content_cached);
-        assert_eq!(cache.entries.back().unwrap().key.sheet, 0);
+        assert_eq!(
+            cache.entries.back().unwrap().key.sheet_id,
+            model.get_model().workbook.worksheet(0).unwrap().sheet_id
+        );
         assert!(
             session
                 .render_cached(&mut cache, &model, &request(0), METRICS)

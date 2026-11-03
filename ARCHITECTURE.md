@@ -341,12 +341,12 @@ Headers and auto-fit do not share this cache yet.
 ### Shared worksheet cache
 
 `WorksheetCache::new(capacity)` holds one prepared viewport per workbook and
-sheet. `render_cached(&mut cache, workbook, request, metrics_key)` uses this
-content. Several sessions can borrow one cache in sequence. Each session keeps
-its own surface and committed frame.
+stable sheet ID. `render_cached(&mut cache, workbook, request, metrics_key)`
+uses this content. Several sessions can borrow one cache in sequence. Each
+session keeps its own surface and committed frame.
 
-The key contains `workbook_id` and the engine sheet index. Revision, viewport,
-canvas theme, and `TextMetricsKey` determine content validity. A revision or
+The key contains `workbook_id` and the live stable engine sheet ID. Revision,
+viewport, canvas theme, and `TextMetricsKey` determine content validity. A revision or
 viewport change can supply geometry to the compiler. The compiler resamples
 and compares the axes before it accepts that geometry. A theme or metric key
 change starts preparation without a geometry donor.
