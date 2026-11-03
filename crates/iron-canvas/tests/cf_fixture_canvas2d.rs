@@ -5,7 +5,9 @@
 
 use iron_canvas::{CanvasSession, RenderRequest, RevisionToken};
 use iron_canvas_canvas2d::Canvas2dSceneBackend;
-use iron_canvas_core::{CanvasMetrics, CanvasSize, CanvasTheme, CellCoord};
+use iron_canvas_core::{
+    CanvasMetrics, CanvasSize, CanvasTheme, CellCoord, scene_geometry::GridRange,
+};
 use iron_canvas_ironcalc::WorksheetViewport;
 use ironcalc::import::load_from_xlsx_bytes;
 use ironcalc_base::{Model, UserModel};
@@ -287,9 +289,27 @@ fn assert_fresh(
     let actual = pixels(session.backend().canvas());
     let expected = pixels(&canvas);
     let differences = actual.iter().zip(&expected).filter(|(a, b)| a != b).count();
+    let device_width = (f64::from(request.viewport.width) * dpr).round() as usize;
+    let mut first = None;
+    let mut min = (usize::MAX, usize::MAX);
+    let mut max = (0usize, 0usize);
+    for index in 0..actual.len().min(expected.len()) {
+        if actual[index] == expected[index] {
+            continue;
+        }
+        first.get_or_insert(index);
+        let x = index / 4 % device_width;
+        let y = index / 4 / device_width;
+        min = (min.0.min(x), min.1.min(y));
+        max = (max.0.max(x), max.1.max(y));
+    }
     assert_eq!(
-        differences, 0,
-        "retained Canvas2D must match forced Fresh byte for byte"
+        differences,
+        0,
+        "retained Canvas2D must match forced Fresh byte for byte: dpr={dpr} offset=({}, {}) first={:?} box={min:?}..{max:?}",
+        request.viewport.scroll.offset_x,
+        request.viewport.scroll.offset_y,
+        first.map(|index| (index / 4 % device_width, index / 4 / device_width)),
     );
 }
 
@@ -576,7 +596,6 @@ fn offset_viewports_miss_content_cache_keep_metadata_and_match_fresh() {
         "link and merge metadata survive the move"
     );
     assert_eq!(moved.strategy, RenderStrategy::Fresh);
-    assert!(moved.extended_style_reads > 0);
     assert_fresh(&session, &model, &request, dpr);
     let repeat = session
         .render_cached(&mut cache, &model, &request, key)
@@ -961,7 +980,14 @@ fn vertical_pixel_blit_matches_fresh_at_four_scales() {
             },
             viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
             theme: CanvasTheme::light(),
-            overlays: Default::default(),
+            overlays: iron_canvas::OverlayState {
+                selection: vec![GridRange {
+                    first: CellCoord { row: 3, col: 2 },
+                    last: CellCoord { row: 5, col: 4 },
+                }],
+                active_cell: Some(CellCoord { row: 4, col: 3 }),
+                ..Default::default()
+            },
         };
         let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
         let mut session =

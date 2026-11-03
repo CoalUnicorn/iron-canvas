@@ -129,6 +129,7 @@ pub(super) fn prepare_with_fill_paint(
 
     // Keep query data in engine types. All reads stop before staging starts.
     Ok(PreparedWorksheet {
+        model_passes: scene.passes.len(),
         scene,
         explicit_cells: None,
         geometry: Some(geometry),

@@ -3,7 +3,7 @@ use iron_canvas_core::{
     PixelRect, Point,
     scene::{
         GridScene,
-        retained::{SceneUpdate, translated_overlap_matches},
+        retained::{SceneUpdate, pass_bounds, translated_overlap_matches},
     },
 };
 use iron_canvas_ironcalc::PreparedWorksheet;
@@ -20,8 +20,7 @@ pub(crate) fn scroll_plan(
     if previous.revision != request.revision
         || previous.sheet != request.sheet
         || previous.theme != request.theme
-        || previous.overlays != request.overlays
-        || request.overlays != Default::default()
+        || old.worksheet.model_passes != new.model_passes
         || previous.viewport.scroll.first_cell.col != request.viewport.scroll.first_cell.col
         // Only vertical movement is eligible. Horizontal pixel copies remain a
         // separate optimization, so the column offset must not change.
@@ -76,27 +75,92 @@ pub(crate) fn scroll_plan(
     // always an integral device pixel. Move each edge inward to the nearest
     // copyable coordinate before asking for a blit.
     let region = integral_region(region, scale)?;
-    if !translated_overlap_matches(
-        &old.worksheet.scene,
-        &new.scene,
-        region,
-        Point { x: 0, y: dy },
-    ) {
+    // Overlay paint is not part of the model copy. The old bitmap also holds
+    // overlay pixels, so reserve both scenes' overlay bounds for repaint.
+    let mut holes = pass_bounds(&old.worksheet.scene, old.worksheet.model_passes);
+    holes.extend(pass_bounds(&new.scene, new.model_passes));
+    let mut pieces = vec![region];
+    for hole in holes {
+        let mut next = Vec::with_capacity(pieces.len() + 3);
+        for piece in pieces {
+            next.extend(subtract(piece, hole));
+            if next.len() > MAX_OVERLAY_PIECES {
+                return None;
+            }
+        }
+        pieces = next;
+        if pieces.is_empty() {
+            return None;
+        }
+    }
+    // Blit one largest overlay-free piece. Everything outside it repaints.
+    let copy = *pieces
+        .iter()
+        .max_by_key(|piece| i64::from(piece.width) * i64::from(piece.height))?;
+    let copy = integral_region(copy, scale)?;
+    let old_model = model_passes(&old.worksheet.scene, old.worksheet.model_passes);
+    let new_model = model_passes(&new.scene, new.model_passes);
+    if !translated_overlap_matches(&old_model, &new_model, copy, Point { x: 0, y: dy }) {
         return None;
     }
     let source = PixelRect {
         top_left: Point {
-            x: region.left(),
-            y: region.top() - dy,
+            x: copy.left(),
+            y: copy.top() - dy,
         },
-        ..region
+        ..copy
     };
+    let repaint = outside(&new.scene, copy);
     Some(SceneUpdate::Blit {
         source,
-        destination: region.top_left,
-        repaint: outside(&new.scene, region),
+        destination: copy.top_left,
+        repaint,
     })
 }
+
+/// Upper bound on disjoint pieces after overlay subtraction.
+const MAX_OVERLAY_PIECES: usize = 16;
+
+/// Return the scene passes that contain worksheet content.
+fn model_passes(scene: &GridScene, count: usize) -> GridScene {
+    GridScene {
+        clip: scene.clip,
+        passes: scene.passes[..count].to_vec(),
+    }
+}
+
+/// Remove one rectangle from another and return disjoint pieces.
+fn subtract(rect: PixelRect, hole: PixelRect) -> Vec<PixelRect> {
+    let Some(hit) = rect.intersection(hole) else {
+        return vec![rect];
+    };
+    let mut out = Vec::with_capacity(4);
+    let mut push = |x: i32, y: i32, width: i32, height: i32| {
+        if width > 0 && height > 0 {
+            out.push(PixelRect {
+                top_left: Point { x, y },
+                width,
+                height,
+            });
+        }
+    };
+    push(rect.left(), rect.top(), rect.width, hit.top() - rect.top());
+    push(
+        rect.left(),
+        hit.bottom(),
+        rect.width,
+        rect.bottom() - hit.bottom(),
+    );
+    push(rect.left(), hit.top(), hit.left() - rect.left(), hit.height);
+    push(
+        hit.right(),
+        hit.top(),
+        rect.right() - hit.right(),
+        hit.height,
+    );
+    out
+}
+
 /// Nearest coordinate inward from `edge` that lands on an integral device pixel.
 fn integral_edge(edge: i32, step: i32, scale: f64) -> Option<i32> {
     (0..=64).find_map(|offset| {

@@ -123,6 +123,7 @@ impl RenderBackend for Canvas2dSceneBackend {
             context.draw_image_with_html_canvas_element(&self.canvas, 0.0, 0.0)?;
         }
         let scale = self.metrics.dpr();
+        let per_region = matches!(update, SceneUpdate::Blit { .. });
         let repaint = match update {
             SceneUpdate::Damage(rects) => rects,
             SceneUpdate::Blit {
@@ -158,37 +159,71 @@ impl RenderBackend for Canvas2dSceneBackend {
             _ => unreachable!(),
         };
         context.set_global_composite_operation("source-over")?;
-        context.save();
-        context.begin_path();
-        let mut regions = Vec::with_capacity(repaint.len());
-        for rect in repaint {
-            // One device-aligned union clip avoids seams and repeated paint.
-            let x = (f64::from(rect.left()) * scale).floor();
-            let y = (f64::from(rect.top()) * scale).floor();
-            let right = (f64::from(rect.right()) * scale).ceil();
-            let bottom = (f64::from(rect.bottom()) * scale).ceil();
-            context.rect(x, y, right - x, bottom - y);
-            regions.push(PixelRect {
-                top_left: Point {
-                    x: (x / scale).floor() as i32,
-                    y: (y / scale).floor() as i32,
-                },
-                width: (right / scale).ceil() as i32 - (x / scale).floor() as i32,
-                height: (bottom / scale).ceil() as i32 - (y / scale).floor() as i32,
-            });
+        if per_region {
+            // A blit repairs bands and overlay holes. A union path of several
+            // rectangles rasterizes clipped strokes with a one-unit difference
+            // from a single rectangle at fractional device scales.
+            for rect in repaint {
+                let x = (f64::from(rect.left()) * scale).floor();
+                let y = (f64::from(rect.top()) * scale).floor();
+                let right = (f64::from(rect.right()) * scale).ceil();
+                let bottom = (f64::from(rect.bottom()) * scale).ceil();
+                let region = PixelRect {
+                    top_left: Point {
+                        x: (x / scale).floor() as i32,
+                        y: (y / scale).floor() as i32,
+                    },
+                    width: (right / scale).ceil() as i32 - (x / scale).floor() as i32,
+                    height: (bottom / scale).ceil() as i32 - (y / scale).floor() as i32,
+                };
+                context.save();
+                context.begin_path();
+                context.rect(x, y, right - x, bottom - y);
+                context.clip();
+                context.clear_rect(
+                    0.0,
+                    0.0,
+                    f64::from(canvas.width()),
+                    f64::from(canvas.height()),
+                );
+                painter.invalidate_cache();
+                painter.apply_dpr_transform(scale);
+                painter.reset_text_defaults();
+                scene.paint_regions(&painter, &[region]);
+                context.restore();
+            }
+        } else {
+            context.save();
+            context.begin_path();
+            let mut regions = Vec::with_capacity(repaint.len());
+            for rect in repaint {
+                let x = (f64::from(rect.left()) * scale).floor();
+                let y = (f64::from(rect.top()) * scale).floor();
+                let right = (f64::from(rect.right()) * scale).ceil();
+                let bottom = (f64::from(rect.bottom()) * scale).ceil();
+                context.rect(x, y, right - x, bottom - y);
+                regions.push(PixelRect {
+                    top_left: Point {
+                        x: (x / scale).floor() as i32,
+                        y: (y / scale).floor() as i32,
+                    },
+                    width: (right / scale).ceil() as i32 - (x / scale).floor() as i32,
+                    height: (bottom / scale).ceil() as i32 - (y / scale).floor() as i32,
+                });
+            }
+            context.clip();
+            context.clear_rect(
+                0.0,
+                0.0,
+                f64::from(canvas.width()),
+                f64::from(canvas.height()),
+            );
+            painter.invalidate_cache();
+            painter.apply_dpr_transform(scale);
+            painter.reset_text_defaults();
+            scene.paint_regions(&painter, &regions);
+            context.restore();
         }
-        context.clip();
-        context.clear_rect(
-            0.0,
-            0.0,
-            f64::from(canvas.width()),
-            f64::from(canvas.height()),
-        );
-        painter.invalidate_cache();
-        painter.apply_dpr_transform(scale);
-        painter.reset_text_defaults();
-        scene.paint_regions(&painter, &regions);
-        context.restore();
         Ok(canvas)
     }
     fn commit_frame(&mut self, staged: HtmlCanvasElement) -> Result<(), JsValue> {

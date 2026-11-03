@@ -1,9 +1,15 @@
 #![cfg(not(target_arch = "wasm32"))]
-use iron_canvas::{CanvasSession, RenderRequest, RenderStrategy, RevisionToken};
-use iron_canvas_core::{CanvasTheme, CellCoord, scene_geometry::GridRange};
+use iron_canvas::{CanvasSession, RenderBackend, RenderRequest, RenderStrategy, RevisionToken};
+use iron_canvas_core::{
+    CanvasTheme, CellCoord, PixelRect,
+    painter::TextMetrics,
+    scene::{GridScene, retained::SceneUpdate},
+    scene_geometry::GridRange,
+};
 use iron_canvas_ironcalc::WorksheetViewport;
 use iron_canvas_native::NativeSceneBackend;
 use ironcalc_base::{UserModel, expressions::types::Area};
+use std::{cell::RefCell, rc::Rc};
 fn fixture() -> (UserModel<'static>, RenderRequest) {
     let mut m = UserModel::new_empty("retained", "en", "UTC", "en").unwrap();
     m.set_rows_height(0, 1, 100, 24.0).unwrap();
@@ -223,5 +229,85 @@ fn native_unicode_wrap_and_autofit_match_fresh_after_font_changes() {
         session.invalidate();
         session.render(&model, &request).unwrap();
         compare(&session, &model, &request, scale);
+    }
+}
+
+struct ProbeBackend {
+    metrics: NativeSceneBackend,
+    updates: Rc<RefCell<Vec<SceneUpdate>>>,
+}
+impl RenderBackend for ProbeBackend {
+    type StagedFrame = ();
+    type Error = &'static str;
+    fn metrics(&self) -> &dyn TextMetrics {
+        self.metrics.metrics()
+    }
+    fn stage_frame(&mut self, _scene: &GridScene) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn commit_frame(&mut self, _staged: ()) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    fn supports_partial_updates(&self) -> bool {
+        true
+    }
+    fn retained_scale(&self) -> Option<f64> {
+        Some(1.0)
+    }
+    fn stage_update(
+        &mut self,
+        _scene: &GridScene,
+        update: &SceneUpdate,
+    ) -> Result<(), Self::Error> {
+        self.updates.borrow_mut().push(update.clone());
+        Ok(())
+    }
+}
+
+#[test]
+fn selection_overlay_scroll_blits_the_model_and_repaints_overlay_ink() {
+    let (model, mut request) = fixture();
+    request.overlays.selection = vec![GridRange {
+        first: CellCoord { row: 3, col: 2 },
+        last: CellCoord { row: 5, col: 4 },
+    }];
+    request.overlays.active_cell = Some(CellCoord { row: 4, col: 3 });
+    let updates = Rc::new(RefCell::new(Vec::new()));
+    let mut session = CanvasSession::new(ProbeBackend {
+        metrics: NativeSceneBackend::new(1.0).unwrap(),
+        updates: Rc::clone(&updates),
+    });
+    session.render(&model, &request).unwrap();
+    request.viewport.scroll.offset_y = 6;
+    session.render(&model, &request).unwrap();
+    let update = updates.borrow().last().cloned().unwrap();
+    let SceneUpdate::Blit {
+        source,
+        destination,
+        repaint,
+    } = update
+    else {
+        panic!("expected Blit, got {update:?}");
+    };
+    let copy = PixelRect {
+        top_left: destination,
+        ..source
+    };
+    for cell in [
+        CellCoord { row: 3, col: 2 },
+        CellCoord { row: 5, col: 4 },
+        CellCoord { row: 4, col: 3 },
+    ] {
+        let rect = session.cell_rect(cell.row, cell.col).unwrap();
+        assert!(
+            copy.intersection(rect).is_none(),
+            "copy covers overlay ink at {cell:?}: {copy:?} {rect:?}"
+        );
+        assert!(
+            repaint
+                .iter()
+                .any(|region| region.intersection(rect).is_some()),
+            "repaint misses overlay ink at {cell:?}: {repaint:?} {rect:?}"
+        );
     }
 }

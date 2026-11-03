@@ -96,6 +96,9 @@ pub struct FrozenAxes {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PreparedWorksheet {
     pub scene: GridScene,
+    /// Number of leading scene passes that contain worksheet content. Later
+    /// passes are host overlays.
+    pub model_passes: usize,
     // Arbitrary rectangles cannot be recovered from grid axes. Regular
     // viewports use geometry alone and do not allocate this slice.
     explicit_cells: Option<Rc<[CellPlacement]>>,
@@ -321,11 +324,11 @@ impl WorksheetCompiler {
             attempt.paint(placement, None, &mut passes, false, None, false)?;
             placements.push(placement);
         }
+        let passes: Vec<_> = passes.into_iter().map(SceneBuilder::finish).collect();
+        let scene = GridScene { clip, passes };
         Ok(PreparedWorksheet {
-            scene: GridScene {
-                clip,
-                passes: passes.into_iter().map(SceneBuilder::finish).collect(),
-            },
+            model_passes: scene.passes.len(),
+            scene,
             explicit_cells: Some(placements.into()),
             geometry: None,
             frozen: FrozenAxes::default(),

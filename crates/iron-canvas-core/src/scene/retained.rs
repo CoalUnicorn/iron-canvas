@@ -404,6 +404,95 @@ pub(super) fn coverage(op: &Primitive, clip: PixelRect, delta: Point) -> Option<
     })
 }
 
+/// Conservative paint bounds for every primitive emitted by passes `start..`.
+/// The result stays inside the scene clip. Overlay passes use these rectangles
+/// as repair regions that a retained pixel copy must not carry.
+pub fn pass_bounds(scene: &GridScene, start: usize) -> Vec<PixelRect> {
+    let mut bounds = Vec::new();
+    let mut stack = vec![scene.clip];
+    for (index, pass) in scene.passes.iter().enumerate() {
+        for op in pass.iter() {
+            let clip = *stack.last().expect("root clip remains on stack");
+            match op {
+                Primitive::Clip { rect } => {
+                    stack.push(clip.intersection(*rect).unwrap_or_default());
+                    continue;
+                }
+                Primitive::EndClip => {
+                    if stack.len() > 1 {
+                        stack.pop();
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            if index < start || clip.width == 0 || clip.height == 0 {
+                continue;
+            }
+            if let Some(rect) = overlay_bounds(op, clip) {
+                bounds.push(rect);
+            }
+        }
+    }
+    bounds
+}
+
+/// Bounds for overlay repair. Paths use their control points instead of the
+/// full clip so a stroke cannot reserve the whole viewport.
+fn overlay_bounds(op: &Primitive, clip: PixelRect) -> Option<PixelRect> {
+    match op {
+        Primitive::FillPath { path, .. } => path_bounds(path, 1.0, clip),
+        Primitive::StrokePath { path, style, .. } => {
+            path_bounds(path, style.width / 2.0 + 2.0, clip)
+        }
+        _ => coverage(op, clip, Point::default()),
+    }
+}
+
+fn path_bounds(path: &[PathCmd], pad: f64, clip: PixelRect) -> Option<PixelRect> {
+    let mut min_x = f64::INFINITY;
+    let mut min_y = f64::INFINITY;
+    let mut max_x = f64::NEG_INFINITY;
+    let mut max_y = f64::NEG_INFINITY;
+    let mut include = |x: f64, y: f64| {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    };
+    for cmd in path {
+        match cmd {
+            PathCmd::Move(point) | PathCmd::Line(point) => include(point.x, point.y),
+            PathCmd::Quad(a, b) => {
+                include(a.x, a.y);
+                include(b.x, b.y);
+            }
+            PathCmd::Cubic(a, b, c) => {
+                include(a.x, a.y);
+                include(b.x, b.y);
+                include(c.x, c.y);
+            }
+            PathCmd::Arc(arc) => {
+                include(arc.center.x - arc.radius, arc.center.y - arc.radius);
+                include(arc.center.x + arc.radius, arc.center.y + arc.radius);
+            }
+            PathCmd::Close => {}
+        }
+    }
+    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
+        return None;
+    }
+    let left = (min_x - pad).floor().max(f64::from(clip.left())) as i32;
+    let top = (min_y - pad).floor().max(f64::from(clip.top())) as i32;
+    let right = (max_x + pad).ceil().min(f64::from(clip.right())) as i32;
+    let bottom = (max_y + pad).ceil().min(f64::from(clip.bottom())) as i32;
+    (left < right && top < bottom).then(|| PixelRect {
+        top_left: Point { x: left, y: top },
+        width: right - left,
+        height: bottom - top,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
