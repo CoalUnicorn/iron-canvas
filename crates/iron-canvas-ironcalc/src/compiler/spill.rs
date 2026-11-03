@@ -2,7 +2,18 @@
 
 use super::*;
 use iron_canvas_core::scene_geometry::AxisCell;
-use ironcalc_base::types::{Cell, HorizontalAlignment};
+use ironcalc_base::types::{Cell, HorizontalAlignment, Worksheet};
+
+/// Stored cell kind and occupancy from an already resolved worksheet.
+pub(super) fn occupied_kind_in(sheet: &Worksheet, cell: CellCoord) -> Option<CellType> {
+    sheet.cell(cell.row, cell.col).and_then(|value| {
+        if matches!(value.as_ref(), Cell::EmptyCell { .. }) {
+            None
+        } else {
+            Some(value.get_type())
+        }
+    })
+}
 
 /// Maximum logical column distance for a source or a neighbor search.
 const COLUMN_LIMIT: usize = 64;
@@ -71,26 +82,6 @@ fn eligible(record: CellView<'_>) -> bool {
 }
 
 impl Attempt<'_, '_, '_> {
-    pub(super) fn occupied_kind(
-        &self,
-        cell: CellCoord,
-    ) -> Result<Option<CellType>, WorksheetCompileError> {
-        let sheet = self
-            .context
-            .workbook
-            .get_model()
-            .workbook
-            .worksheet(self.context.sheet)
-            .map_err(|e| self.error(cell, CellReadOperation::Sheet, e))?;
-        Ok(sheet.cell(cell.row, cell.col).and_then(|value| {
-            if matches!(value.as_ref(), Cell::EmptyCell { .. }) {
-                None
-            } else {
-                Some(value.get_type())
-            }
-        }))
-    }
-
     fn blocker(&self, cell: CellCoord, slot: Option<usize>, merges: &[MergedCell]) -> bool {
         let record = match slot {
             Some(index) => self.cached.view_index(index),
@@ -127,6 +118,10 @@ impl Attempt<'_, '_, '_> {
         }
         let mut cells = Vec::new();
         let mut previous = *edge;
+        let sheet = self.worksheet(CellCoord {
+            row: row.index,
+            col: edge.index,
+        })?;
         for _ in 0..COLUMN_LIMIT {
             let index = previous.index + direction;
             if !(limits.0..=limits.1).contains(&index) {
@@ -158,7 +153,7 @@ impl Attempt<'_, '_, '_> {
                 extent: width,
             };
             cells.push(column);
-            match self.occupied_kind(coordinate)? {
+            match occupied_kind_in(sheet, coordinate) {
                 None => previous = column,
                 Some(CellType::Text) => {
                     self.read(coordinate)?;

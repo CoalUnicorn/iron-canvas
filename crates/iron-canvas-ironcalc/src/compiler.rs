@@ -32,7 +32,7 @@ use ironcalc_base::{
     UserModel,
     cf_types::ExtendedStyle,
     links::CellLinkView,
-    types::{CellType, MergedCell},
+    types::{CellType, MergedCell, Worksheet},
 };
 use std::rc::Rc;
 use std::{
@@ -617,6 +617,17 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             message,
         }
     }
+
+    /// Resolve the live worksheet once. The result borrows the workbook, not
+    /// this attempt, so a caller can hold it across cache mutations.
+    fn worksheet(&self, cell: CellCoord) -> Result<&'w Worksheet, WorksheetCompileError> {
+        self.context
+            .workbook
+            .get_model()
+            .workbook
+            .worksheet(self.context.sheet)
+            .map_err(|e| self.error(cell, CellReadOperation::Sheet, e))
+    }
     fn load_blocks(
         &mut self,
         geometry: &GridGeometry,
@@ -691,26 +702,28 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
     /// stored cell; text kind overrides it when the block has formatted text.
     fn block_record(
         &self,
+        sheet: &Worksheet,
         block: usize,
         slot: usize,
         cell: CellCoord,
-    ) -> Result<cells::BlockRecord, WorksheetCompileError> {
-        let stored = self.occupied_kind(cell)?;
+    ) -> cells::BlockRecord {
+        let stored = spill::occupied_kind_in(sheet, cell);
         let occupied = stored.is_some();
         let kind = self
             .cached
             .blocks
             .text_kind(block, slot)
             .unwrap_or_else(|| stored.unwrap_or(CellType::Number));
-        Ok(cells::BlockRecord {
+        cells::BlockRecord {
             block,
             slot,
             kind,
             occupied,
-        })
+        }
     }
 
     fn load_visible(&mut self, geometry: &GridGeometry) -> Result<(), WorksheetCompileError> {
+        let sheet = self.worksheet(CellCoord { row: 1, col: 1 })?;
         let cell_count: usize = geometry
             .panes
             .iter()
@@ -731,7 +744,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                     if let Some((block, slot)) = self.cached.blocks.locate(coordinate) {
                         row_has_text |= self.cached.blocks.has_text(block, slot);
                         cells.push(VisibleCell::Block(
-                            self.block_record(block, slot, coordinate)?,
+                            self.block_record(sheet, block, slot, coordinate),
                         ));
                     } else {
                         let record = self.read_individual(coordinate)?;
@@ -769,7 +782,8 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
             return Ok(());
         }
         if let Some((block, slot)) = self.cached.blocks.locate(cell) {
-            let record = self.block_record(block, slot, cell)?;
+            let sheet = self.worksheet(cell)?;
+            let record = self.block_record(sheet, block, slot, cell);
             self.cached.covered.insert(cell, record);
             return Ok(());
         }
@@ -796,7 +810,8 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         // Display text cannot identify empty cells: formulas and number formats
         // can hide occupied values. One stored-cell read gives kind and occupancy.
         // The individual getter defaults an empty cell to `Number`.
-        let stored = self.occupied_kind(cell)?;
+        let sheet = self.worksheet(cell)?;
+        let stored = spill::occupied_kind_in(sheet, cell);
         let occupied = stored.is_some();
         let kind = stored.unwrap_or(CellType::Number);
         Ok(CellRecord {
