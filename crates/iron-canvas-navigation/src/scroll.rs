@@ -152,6 +152,26 @@ impl NavigationController {
         })
     }
 
+    /// Validate the view and the selected sheet before an engine read or write.
+    ///
+    /// The engine holds one selected sheet. A command for another view must not
+    /// change the visible selection, so validate first and return the state.
+    fn validated_state(
+        &self,
+        model: &UserModel<'_>,
+        identity: ViewIdentity,
+        axes: &WorksheetAxes,
+    ) -> Result<ViewState, GridError> {
+        validate_axes(axes, identity)?;
+        let Some(state) = self.views.get(&identity).copied() else {
+            return Err(GridError::UnknownView(identity));
+        };
+        if selected_sheet_id(model)? != identity.sheet_id {
+            return Err(GridError::IdentityMismatch);
+        }
+        Ok(state)
+    }
+
     fn scroll_pixels(
         &mut self,
         model: &mut UserModel<'_>,
@@ -254,6 +274,9 @@ impl NavigationController {
                 self.scroll_pixels(model, identity, dx, dy, axes, pane)
             }
             GridCommand::Navigate(intent) => {
+                // Validate before the engine write. The engine can move a
+                // selection even when the caller supplied a stale view.
+                self.validated_state(model, identity, axes)?;
                 let result = match apply_navigation(model, intent, pane.height) {
                     Ok(result) => result,
                     Err(error) => {
@@ -269,13 +292,7 @@ impl NavigationController {
                 self.commit(model, identity, state, position, reveal)
             }
             GridCommand::Reveal(target) => {
-                validate_axes(axes, identity)?;
-                let Some(state) = self.views.get(&identity).copied() else {
-                    return Err(GridError::UnknownView(identity));
-                };
-                if selected_sheet_id(model)? != identity.sheet_id {
-                    return Err(GridError::IdentityMismatch);
-                }
+                let state = self.validated_state(model, identity, axes)?;
                 let mut position = state.position;
                 let reveal =
                     self.reveal_target(model, identity, &mut position, &target, axes, pane)?;
@@ -341,13 +358,7 @@ impl NavigationController {
         axes: &WorksheetAxes,
         pane: Pane,
     ) -> Result<(ViewState, ScrollPosition), GridError> {
-        validate_axes(axes, identity)?;
-        let Some(state) = self.views.get(&identity).copied() else {
-            return Err(GridError::UnknownView(identity));
-        };
-        if selected_sheet_id(model)? != identity.sheet_id {
-            return Err(GridError::IdentityMismatch);
-        }
+        let state = self.validated_state(model, identity, axes)?;
         let view = model.get_selected_view();
         let mut position = state.position;
         if view.top_row != position.first_cell.row {
@@ -750,7 +761,7 @@ fn reveal_axis(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iron_canvas_core::navigation::NavigationIntent;
+    use iron_canvas_core::navigation::{Direction, NavigationIntent};
     use iron_canvas_ironcalc::{AxesScope, AxisSizes, SizeRun, get_column_sizes, get_row_sizes};
 
     fn model() -> UserModel<'static> {
@@ -956,6 +967,59 @@ mod tests {
             ),
             (1, 1)
         );
+    }
+
+    #[test]
+    fn navigate_validates_the_view_and_sheet_before_the_engine_write() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+        controller
+            .attach(&mut model, scope, &axes, viewport, None)
+            .unwrap();
+        model.set_selected_cell(5, 5).unwrap();
+        let before = model.get_selected_cell();
+
+        // An unknown view must not move the selected sheet.
+        let unknown = ViewIdentity {
+            view_id: 99,
+            ..scope
+        };
+        assert_eq!(
+            controller.command(
+                &mut model,
+                unknown,
+                GridCommand::Navigate(NavigationIntent::Step(Direction::Down)),
+                &axes,
+                viewport,
+            ),
+            Err(GridError::UnknownView(unknown))
+        );
+        assert_eq!(model.get_selected_cell(), before);
+
+        // A view for another sheet must not move this sheet either.
+        let other_sheet = ViewIdentity {
+            sheet_id: scope.sheet_id + 1,
+            view_id: 3,
+            ..scope
+        };
+        controller.views.insert(
+            other_sheet,
+            ViewState::new(ScrollPosition::aligned(CellCoord { row: 1, col: 1 })),
+        );
+        assert_eq!(
+            controller.command(
+                &mut model,
+                other_sheet,
+                GridCommand::Navigate(NavigationIntent::Step(Direction::Down)),
+                &axes,
+                viewport,
+            ),
+            Err(GridError::IdentityMismatch)
+        );
+        assert_eq!(model.get_selected_cell(), before);
     }
 
     #[test]
