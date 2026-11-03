@@ -3,7 +3,7 @@ use super::{CellView, LAST_COLUMN, LAST_ROW};
 use iron_canvas_core::CellCoord;
 use iron_canvas_core::scene_geometry::{AxisCell, GridPane};
 use ironcalc_base::{CellsBlock, types::CellType};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(super) struct BlockRect {
@@ -150,16 +150,24 @@ fn plan_absolute(
     tile_height: usize,
     limits: BlockLimits,
 ) -> Result<(Vec<BlockRect>, usize), BlockPlanError> {
-    let mut row_tiles = BTreeSet::new();
-    let mut column_tiles = BTreeSet::new();
+    let mut row_tiles = Vec::new();
+    let mut column_tiles = Vec::new();
     for pane in panes {
-        for row in pane.rows.iter() {
-            row_tiles.insert((row.index - 1) / tile_height as i32);
-        }
-        for column in pane.columns.iter() {
-            column_tiles.insert((column.index - 1) / tile_width as i32);
-        }
+        row_tiles.extend(
+            pane.rows
+                .iter()
+                .map(|row| (row.index - 1) / tile_height as i32),
+        );
+        column_tiles.extend(
+            pane.columns
+                .iter()
+                .map(|column| (column.index - 1) / tile_width as i32),
+        );
     }
+    row_tiles.sort_unstable();
+    row_tiles.dedup();
+    column_tiles.sort_unstable();
+    column_tiles.dedup();
     if row_tiles.is_empty() || column_tiles.is_empty() {
         return Ok((Vec::new(), 0));
     }
