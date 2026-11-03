@@ -10,6 +10,8 @@ const COLUMN_LIMIT: usize = 64;
 pub(super) struct SpillSource {
     pub placement: CellPlacement,
     pub clip: PixelRect,
+    /// Visible pane slot when the source lies inside the pane.
+    pub slot: Option<usize>,
     ink_left: f64,
     ink_right: f64,
 }
@@ -93,8 +95,11 @@ impl Attempt<'_, '_, '_> {
         Ok(self.occupied_kind(cell)?.is_some())
     }
 
-    fn blocker(&self, cell: CellCoord, merges: &[MergedCell]) -> bool {
-        let record = self.cached.view(cell);
+    fn blocker(&self, cell: CellCoord, slot: Option<usize>, merges: &[MergedCell]) -> bool {
+        let record = match slot {
+            Some(index) => self.cached.view_index(index),
+            None => self.cached.view(cell),
+        };
         // Fills and borders paint before text. They do not occupy an empty
         // cell. Resolved borders can also come from the row above or below;
         // those shared edges cannot determine horizontal text spill.
@@ -108,6 +113,7 @@ impl Attempt<'_, '_, '_> {
         &mut self,
         row: &AxisCell,
         edge: &AxisCell,
+        edge_slot: Option<usize>,
         direction: i32,
         limits: (i32, i32),
         merges: &[MergedCell],
@@ -118,6 +124,7 @@ impl Attempt<'_, '_, '_> {
                 row: row.index,
                 col: edge.index,
             },
+            edge_slot,
             merges,
         ) {
             return Ok(Vec::new());
@@ -180,6 +187,7 @@ impl Attempt<'_, '_, '_> {
         &mut self,
         row: &AxisCell,
         visible: &[AxisCell],
+        visible_first: usize,
         pane_clip: PixelRect,
         limits: (i32, i32),
         merges: &[MergedCell],
@@ -188,31 +196,46 @@ impl Attempt<'_, '_, '_> {
         let (Some(first), Some(last)) = (visible.first(), visible.last()) else {
             return Ok(SpillPlan::default());
         };
-        for column in visible {
-            self.read(CellCoord {
-                row: row.index,
-                col: column.index,
-            })?;
-        }
-        // Search only the two pane edges. Empty regions outside the pane need
-        // no style reads when there is no text source within the fixed limit.
-        let mut columns = self.outside_source(row, first, -1, limits, merges, &mut extent)?;
+        // Visible cells are already loaded. Search only the two pane edges.
+        // Empty regions outside the pane need no style reads when there is no
+        // text source within the fixed limit.
+        let last_slot = visible_first + visible.len() - 1;
+        let mut columns = self.outside_source(
+            row,
+            first,
+            Some(visible_first),
+            -1,
+            limits,
+            merges,
+            &mut extent,
+        )?;
+        let mut slots = vec![None; columns.len()];
         columns.extend_from_slice(visible);
-        columns.extend(self.outside_source(row, last, 1, limits, merges, &mut extent)?);
-        for column in &columns {
-            self.read(CellCoord {
-                row: row.index,
-                col: column.index,
-            })?;
+        slots.extend((0..visible.len()).map(|offset| Some(visible_first + offset)));
+        let right =
+            self.outside_source(row, last, Some(last_slot), 1, limits, merges, &mut extent)?;
+        slots.extend(std::iter::repeat_n(None, right.len()));
+        columns.extend(right);
+        // Offscreen sources and their intermediate cells still need keyed reads.
+        for (column, slot) in columns.iter().zip(&slots) {
+            if slot.is_none() {
+                self.read(CellCoord {
+                    row: row.index,
+                    col: column.index,
+                })?;
+            }
         }
 
         let mut plan = SpillPlan::default();
-        for (index, column) in columns.iter().enumerate() {
+        for (index, (column, slot)) in columns.iter().zip(&slots).enumerate() {
             let coordinate = CellCoord {
                 row: row.index,
                 col: column.index,
             };
-            let record = self.cached.view(coordinate);
+            let record = match *slot {
+                Some(slot) => self.cached.view_index(slot),
+                None => self.cached.view(coordinate),
+            };
             if !eligible(record) || merged(coordinate, merges) || row.extent < 10 {
                 continue;
             }
@@ -261,6 +284,7 @@ impl Attempt<'_, '_, '_> {
                             row: row.index,
                             col: next.index,
                         },
+                        slots[left - 1],
                         merges,
                     )
                 {
@@ -279,6 +303,7 @@ impl Attempt<'_, '_, '_> {
                             row: row.index,
                             col: next.index,
                         },
+                        slots[right + 1],
                         merges,
                     )
                 {
@@ -299,6 +324,7 @@ impl Attempt<'_, '_, '_> {
                     coordinate,
                     bounds: rect,
                 },
+                slot: *slot,
                 clip: PixelRect {
                     top_left: iron_canvas_core::Point {
                         x: x1,

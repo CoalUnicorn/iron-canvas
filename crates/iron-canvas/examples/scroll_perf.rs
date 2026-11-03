@@ -19,10 +19,10 @@ use iron_canvas::{
 };
 #[cfg(target_os = "linux")]
 use iron_canvas_core::{
-    painter::TextMetrics,
-    scene::{retained::SceneUpdate, GridScene},
-    scene_geometry::GridRange,
     CanvasTheme, CellCoord,
+    painter::TextMetrics,
+    scene::{GridScene, retained::SceneUpdate},
+    scene_geometry::GridRange,
 };
 #[cfg(target_os = "linux")]
 use iron_canvas_ironcalc::WorksheetViewport;

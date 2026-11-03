@@ -108,6 +108,8 @@ pub(super) fn prepare_with_fill_paint(
     if let Some(limits) = blocks {
         attempt.load_blocks(&geometry, limits)?;
     }
+    // Read every visible cell once. Paint and spill use pane slots after this.
+    attempt.load_visible(&geometry)?;
 
     // Draw ordinary cells first. Merges cover their contents and reuse their records.
     let mut scene = paint_cells(&mut attempt, &geometry, frozen, &merges, &mut dimensions)?;
@@ -353,11 +355,11 @@ fn paint_cells(
         geometry.bounds,
         PaintColor::Borrowed(&attempt.context.theme.cell_bg),
     );
-    for pane in &geometry.panes {
+    for (pane_index, pane) in geometry.panes.iter().enumerate() {
         for pass in &mut passes {
             pass.push_clip(pane.clip);
         }
-        for row in pane.rows.iter() {
+        for (row_slot, row) in pane.rows.iter().enumerate() {
             if attempt.fill_paint == cells::FillPaint::Runs {
                 attempt
                     .cached
@@ -373,13 +375,21 @@ fn paint_cells(
             } else {
                 (frozen.cols + 1, LAST_COLUMN)
             };
-            let spill =
-                attempt.plan_spill(row, &pane.columns, pane.clip, limits, merges, |index| {
+            let first_slot = attempt.cached.visible.row_first(pane_index, row_slot);
+            let spill = attempt.plan_spill(
+                row,
+                &pane.columns,
+                first_slot,
+                pane.clip,
+                limits,
+                merges,
+                |index| {
                     dimensions
                         .extent(Axis::Column, index)
                         .map(|value| value as i32)
-                })?;
-            for col in pane.columns.iter() {
+                },
+            )?;
+            for (column_slot, col) in pane.columns.iter().enumerate() {
                 let cell = CellPlacement {
                     coordinate: CellCoord {
                         row: row.index,
@@ -389,6 +399,7 @@ fn paint_cells(
                 };
                 attempt.paint(
                     cell,
+                    Some(first_slot + column_slot),
                     &mut passes,
                     false,
                     spill.clip(cell.coordinate),
@@ -401,11 +412,23 @@ fn paint_cells(
                     .binary_search_by_key(&source.placement.coordinate.col, |column| column.index)
                     .is_err()
                 {
-                    let cf = cf::CfDecorationPaint::resolve(
-                        attempt.cached.view(source.placement.coordinate).extended,
-                        attempt.context.workbook,
+                    let cf = match source.slot {
+                        Some(index) => cf::CfDecorationPaint::resolve(
+                            attempt.cached.view_index(index).extended,
+                            attempt.context.workbook,
+                        ),
+                        None => cf::CfDecorationPaint::resolve(
+                            attempt.cached.view(source.placement.coordinate).extended,
+                            attempt.context.workbook,
+                        ),
+                    };
+                    attempt.paint_text(
+                        source.placement,
+                        source.slot,
+                        &mut passes[4],
+                        Some(source.clip),
+                        &cf,
                     );
-                    attempt.paint_text(source.placement, &mut passes[4], Some(source.clip), &cf);
                 }
             }
         }
@@ -454,6 +477,7 @@ fn paint_merges(
                     coordinate: range.first,
                     bounds: logical,
                 },
+                None,
                 &mut merged_passes,
                 true,
                 None,

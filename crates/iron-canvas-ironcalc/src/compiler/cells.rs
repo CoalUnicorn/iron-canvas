@@ -382,13 +382,22 @@ impl CellBlocks {
         block.text_slots[slot].and_then(|index| cell_type(block.data.texts[index].cell_type))
     }
     pub(super) fn view<'a>(&'a self, record: &'a BlockRecord) -> CellView<'a> {
-        let block = &self.blocks[record.block];
+        self.view_slot(record.block, record.slot, &record.kind, record.occupied)
+    }
+    /// Borrow one block cell without a coordinate lookup or a `BlockRecord`.
+    pub(super) fn view_slot<'a>(
+        &'a self,
+        block: usize,
+        slot: usize,
+        kind: &'a CellType,
+        occupied: bool,
+    ) -> CellView<'a> {
+        let block = &self.blocks[block];
         CellView {
-            extended: &block.data.styles[block.data.style_indices[record.slot] as usize],
-            kind: &record.kind,
-            occupied: record.occupied,
-            value: block.text_slots[record.slot]
-                .map_or("", |index| block.data.texts[index].text.as_str()),
+            extended: &block.data.styles[block.data.style_indices[slot] as usize],
+            kind,
+            occupied,
+            value: block.text_slots[slot].map_or("", |index| block.data.texts[index].text.as_str()),
         }
     }
 }

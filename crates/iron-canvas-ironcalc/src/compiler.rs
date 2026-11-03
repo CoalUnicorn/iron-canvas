@@ -293,7 +293,7 @@ impl WorksheetCompiler {
         passes[0].rect_fill(clip, PaintColor::Borrowed(&context.theme.cell_bg));
         let mut placements = Vec::new();
         for placement in cells {
-            attempt.paint(placement, &mut passes, false, None, false)?;
+            attempt.paint(placement, None, &mut passes, false, None, false)?;
             placements.push(placement);
         }
         Ok(PreparedWorksheet {
@@ -340,17 +340,73 @@ struct CellView<'a> {
     occupied: bool,
 }
 
+/// One visible cell in pane order. Keep this value small: the pane stores one
+/// entry for every visible cell.
+enum VisibleCell {
+    /// Shared block storage. `slot` is the cell index inside the block.
+    Block {
+        block: usize,
+        slot: usize,
+        kind: CellType,
+        occupied: bool,
+    },
+    /// One individual engine read, stored in `CellRecords::visible_records`.
+    Individual(usize),
+}
+
+/// Row-major cells for one pane. `base` is the first slot.
+struct VisiblePane {
+    base: usize,
+    rows: Vec<i32>,
+    columns: Vec<i32>,
+}
+
+/// Flat index of visible cells. A coordinate resolves through one pane and two
+/// binary searches; paint uses slot arithmetic instead.
+#[derive(Default)]
+struct VisibleCells {
+    cells: Vec<VisibleCell>,
+    panes: Vec<VisiblePane>,
+}
+
+impl VisibleCells {
+    fn locate(&self, coordinate: CellCoord) -> Option<usize> {
+        for pane in &self.panes {
+            let Ok(row) = pane.rows.binary_search(&coordinate.row) else {
+                continue;
+            };
+            let Ok(column) = pane.columns.binary_search(&coordinate.col) else {
+                continue;
+            };
+            return Some(pane.base + row * pane.columns.len() + column);
+        }
+        None
+    }
+    fn row_first(&self, pane: usize, row: usize) -> usize {
+        self.panes[pane].base + row * self.panes[pane].columns.len()
+    }
+    fn is_block(&self, index: usize) -> bool {
+        matches!(self.cells.get(index), Some(VisibleCell::Block { .. }))
+    }
+}
+
 #[derive(Default)]
 struct CellRecords {
     individual: HashMap<CellCoord, CellRecord>,
+    /// Individual reads for visible cells outside the accepted blocks.
+    visible_records: Vec<CellRecord>,
     blocks: cells::CellBlocks,
     covered: HashMap<CellCoord, cells::BlockRecord>,
+    visible: VisibleCells,
 }
 impl CellRecords {
     // Keep lookup on cell storage so mutable shaper and paint caches remain
     // available while a consumer borrows the cell view.
-    // Call Attempt::read before requesting the view, including offscreen cells.
+    // Call Attempt::read before requesting an offscreen view.
     fn view(&self, coordinate: CellCoord) -> CellView<'_> {
+        if let Some(index) = self.visible.locate(coordinate) {
+            return self.view_index(index);
+        }
         if let Some(record) = self.covered.get(&coordinate) {
             return self.blocks.view(record);
         }
@@ -360,6 +416,25 @@ impl CellRecords {
             kind: &record.kind,
             value: &record.value,
             occupied: record.occupied,
+        }
+    }
+    fn view_index(&self, index: usize) -> CellView<'_> {
+        match &self.visible.cells[index] {
+            VisibleCell::Block {
+                block,
+                slot,
+                kind,
+                occupied,
+            } => self.blocks.view_slot(*block, *slot, kind, *occupied),
+            VisibleCell::Individual(record) => {
+                let record = &self.visible_records[*record];
+                CellView {
+                    extended: &record.extended,
+                    kind: &record.kind,
+                    value: &record.value,
+                    occupied: record.occupied,
+                }
+            }
         }
     }
 }
@@ -484,6 +559,57 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
         Ok(())
     }
 
+    /// Read every visible cell once, in pane order. Paint then indexes this
+    /// flat storage by slot. Offscreen spill and merge cells keep the keyed
+    /// path.
+    fn load_visible(&mut self, geometry: &GridGeometry) -> Result<(), WorksheetCompileError> {
+        let cell_count: usize = geometry
+            .panes
+            .iter()
+            .map(|pane| pane.rows.len() * pane.columns.len())
+            .sum();
+        let mut cells = Vec::with_capacity(cell_count);
+        let mut panes = Vec::with_capacity(geometry.panes.len());
+        for pane in &geometry.panes {
+            let base = cells.len();
+            for row in pane.rows.iter() {
+                for column in pane.columns.iter() {
+                    let coordinate = CellCoord {
+                        row: row.index,
+                        col: column.index,
+                    };
+                    if let Some((block, slot)) = self.cached.blocks.locate(coordinate) {
+                        let stored = self.occupied_kind(coordinate)?;
+                        let occupied = stored.is_some();
+                        let kind = self
+                            .cached
+                            .blocks
+                            .text_kind(block, slot)
+                            .unwrap_or_else(|| stored.unwrap_or(CellType::Number));
+                        cells.push(VisibleCell::Block {
+                            block,
+                            slot,
+                            kind,
+                            occupied,
+                        });
+                    } else {
+                        let record = self.read_individual(coordinate)?;
+                        let index = self.cached.visible_records.len();
+                        self.cached.visible_records.push(record);
+                        cells.push(VisibleCell::Individual(index));
+                    }
+                }
+            }
+            panes.push(VisiblePane {
+                base,
+                rows: pane.rows.iter().map(|row| row.index).collect(),
+                columns: pane.columns.iter().map(|column| column.index).collect(),
+            });
+        }
+        self.cached.visible = VisibleCells { cells, panes };
+        Ok(())
+    }
+
     fn read(&mut self, cell: CellCoord) -> Result<(), WorksheetCompileError> {
         if !(1..=LAST_ROW).contains(&cell.row) || !(1..=LAST_COLUMN).contains(&cell.col) {
             return Err(self.error(
@@ -492,7 +618,10 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 "invalid cell coordinate".into(),
             ));
         }
-        if self.cached.individual.contains_key(&cell) || self.cached.covered.contains_key(&cell) {
+        if self.cached.visible.locate(cell).is_some()
+            || self.cached.individual.contains_key(&cell)
+            || self.cached.covered.contains_key(&cell)
+        {
             return Ok(());
         }
         if let Some((block, slot)) = self.cached.blocks.locate(cell) {
@@ -552,6 +681,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
     fn paint(
         &mut self,
         placement: CellPlacement,
+        slot: Option<usize>,
         passes: &mut [SceneBuilder; 5],
         merged: bool,
         spill_clip: Option<PixelRect>,
@@ -564,15 +694,23 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 "invalid cell placement".into(),
             ));
         }
-        self.read(placement.coordinate)?;
-        let record = self.cached.view(placement.coordinate);
+        let record = match slot {
+            Some(index) => self.cached.view_index(index),
+            None => {
+                self.read(placement.coordinate)?;
+                self.cached.view(placement.coordinate)
+            }
+        };
         let rect = placement.bounds;
         let style = &record.extended.style;
         let fill = self.context.workbook.resolve_color(&style.fill.color);
         // Covered ordinary cells already have one background from their run.
         // Merges still cover ordinary content in their later composition pass.
-        let run_fill = self.fill_paint == cells::FillPaint::Runs
-            && self.cached.covered.contains_key(&placement.coordinate);
+        let block_cell = match slot {
+            Some(index) => self.cached.visible.is_block(index),
+            None => self.cached.covered.contains_key(&placement.coordinate),
+        };
+        let run_fill = self.fill_paint == cells::FillPaint::Runs && block_cell;
         if merged || (!run_fill && !fill.is_empty()) {
             passes[0].rect_fill(
                 rect,
@@ -604,7 +742,7 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
                 },
             );
         }
-        self.paint_text(placement, &mut passes[4], spill_clip, &cf);
+        self.paint_text(placement, slot, &mut passes[4], spill_clip, &cf);
         Ok(())
     }
 
@@ -613,11 +751,15 @@ impl<'w, 'm, 's> Attempt<'w, 'm, 's> {
     fn paint_text(
         &mut self,
         placement: CellPlacement,
+        slot: Option<usize>,
         out: &mut SceneBuilder,
         spill_clip: Option<PixelRect>,
         cf: &cf::CfDecorationPaint,
     ) {
-        let record = self.cached.view(placement.coordinate);
+        let record = match slot {
+            Some(index) => self.cached.view_index(index),
+            None => self.cached.view(placement.coordinate),
+        };
         let rect = placement.bounds;
         if !cf.hides_value() {
             let link = self
