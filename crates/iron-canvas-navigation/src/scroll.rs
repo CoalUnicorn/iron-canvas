@@ -161,16 +161,23 @@ impl NavigationController {
             &axes.cols,
             column_window(axes, pane.frozen_columns),
         );
-        let state = ViewState {
+        let mut state = ViewState {
             axes_revision,
             ..ViewState::new(position)
         };
-        let mirrored = self.mirror(model, identity, position)?;
         let changed = position != aligned;
+        if changed {
+            state.generation = state
+                .generation
+                .checked_add(1)
+                .ok_or(GridError::GenerationExhausted)?;
+        }
+        let generation = state.generation;
+        let mirrored = self.mirror(model, identity, position)?;
         self.views.insert(identity, state);
         Ok(Outcome {
             position,
-            generation: 0,
+            generation,
             mirrored,
             changed,
             reveal: RevealOutcome::NotRequested,
@@ -1213,7 +1220,29 @@ mod tests {
         assert_eq!(update.position.first_cell.row, 3);
         assert!(update.mirrored);
         assert!(update.changed);
+        assert_eq!(update.generation, 1);
         assert_eq!(model.get_selected_view().top_row, 3);
+    }
+
+    #[test]
+    fn aligned_attach_reports_generation_zero() {
+        let mut model = model();
+        let axes = axes(&model);
+        let scope = scope(&model, 0);
+        let viewport = pane(100, 100);
+        let mut controller = NavigationController::default();
+        let update = controller
+            .attach(
+                &mut model,
+                scope,
+                &axes,
+                viewport,
+                Some(CellCoord { row: 2, col: 2 }),
+            )
+            .unwrap();
+        assert!(!update.changed);
+        assert_eq!(update.generation, 0);
+        assert_eq!(update.position.first_cell, CellCoord { row: 2, col: 2 });
     }
 
     #[test]

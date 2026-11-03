@@ -132,6 +132,8 @@ the primary view origin through a short mutable model borrow. It never draws.
 `Reveal` rejects a target outside the sheet, a reversed range, or a focus
 outside the range. Scoped axes for another workbook or sheet, or an older
 revision, are rejected. Unscoped axes stay available for tests and exports.
+A view generation starts at 0. A first `attach` that normalizes the origin
+reports generation 1. An aligned attach stays at 0.
 
 ### Paint contract
 
