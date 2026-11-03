@@ -5,10 +5,9 @@
 //! Rules checked against IronCalc revision `b063c523`.
 //!
 //! The resumable builder counts record reads, overlap checks, cover merges, and
-//! interval pops per step. A step does not count the one sort of resolved
-//! intervals, the adjacent duplicate scan, or the entries that one cover
-//! insertion or removal moves. Interactive hosts can advance it between frames;
-//! synchronous callers run it to completion.
+//! interval pops per step. Each counted operation does logarithmic ordered-map
+//! work; no step sorts or shifts a linear buffer. Interactive hosts can advance
+//! it between frames; synchronous callers run it to completion.
 
 pub use iron_canvas_core::Axis;
 pub use iron_canvas_core::scroll::AxisRun;
@@ -17,6 +16,7 @@ use iron_canvas_core::{
     scroll::{ExtentRun, RunAxis, RunAxisError, scrolling_extent},
 };
 use ironcalc_base::{UserModel, types::Worksheet};
+use std::collections::BTreeMap;
 
 // The pinned engine keeps its dimension limits and constants private.
 // Record these values here and compare them with the public getters after
@@ -184,12 +184,10 @@ struct Cover {
     end: i32,
 }
 
-#[derive(Debug, Clone, Copy)]
 struct ResolvedInterval {
     first: i32,
     last: i32,
     size: f64,
-    record: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -215,9 +213,8 @@ pub struct AxisSizeBuilder {
     total_records: usize,
     records: Vec<PendingRecord>,
     phase: Phase,
-    covered: Vec<Cover>,
-    resolved: Vec<ResolvedInterval>,
-    resolved_sorted: bool,
+    covered: BTreeMap<i32, i32>,
+    resolved: BTreeMap<i32, ResolvedInterval>,
     runs: Vec<SizeRun>,
 }
 
@@ -257,9 +254,8 @@ impl AxisSizeBuilder {
             total_records,
             records: Vec::new(),
             phase: Phase::Read { next: 0 },
-            covered: Vec::new(),
-            resolved: Vec::new(),
-            resolved_sorted: false,
+            covered: BTreeMap::new(),
+            resolved: BTreeMap::new(),
             runs: Vec::new(),
         })
     }
@@ -271,10 +267,9 @@ impl AxisSizeBuilder {
 
     /// Advance the build by at most the configured number of operations.
     /// The count covers record reads, overlap checks, cover merges, and
-    /// interval pops. The first emission step also sorts all resolved
-    /// intervals and scans them for duplicate starts; a cover insertion or
-    /// removal can move many vector entries. The model borrow ends before
-    /// this method returns.
+    /// interval pops. A cover merge visits only adjacent intervals, and an
+    /// interval insert or pop does logarithmic map work. The model borrow
+    /// ends before this method returns.
     pub fn step(
         &mut self,
         workbook: &UserModel<'_>,
@@ -493,35 +488,23 @@ impl AxisSizeBuilder {
         if self.resolved.len() >= CONSTRUCTION_LIMIT {
             return Err(AxisSizeError::Limit);
         }
-        self.resolved.push(ResolvedInterval {
-            first,
-            last,
-            size,
-            record,
-        });
+        if self.resolved.contains_key(&first) {
+            return Err(AxisSizeError::InvalidRecord {
+                record,
+                first,
+                last,
+            });
+        }
+        self.resolved
+            .insert(first, ResolvedInterval { first, last, size });
         Ok(())
     }
 
-    /// Drain resolved intervals in sorted order. Returns true when complete.
+    /// Drain resolved intervals in ascending index order. Returns true when
+    /// complete. Duplicate starts are rejected at insertion, so no scan runs.
     fn emit_step(&mut self, budget: &mut usize) -> Result<bool, AxisSizeError> {
-        // Sort once after resolution. Highest first entry pops first, so runs
-        // emit in ascending index order.
-        if !self.resolved_sorted {
-            self.resolved
-                .sort_unstable_by_key(|entry| std::cmp::Reverse(entry.first));
-            for pair in self.resolved.windows(2) {
-                if pair[0].first == pair[1].first {
-                    return Err(AxisSizeError::InvalidRecord {
-                        record: pair[1].record,
-                        first: pair[1].first,
-                        last: pair[1].last,
-                    });
-                }
-            }
-            self.resolved_sorted = true;
-        }
         while *budget > 0 {
-            let Some(entry) = self.resolved.pop() else {
+            let Some((_, entry)) = self.resolved.pop_first() else {
                 return Ok(true);
             };
             *budget -= 1;
@@ -570,9 +553,8 @@ impl AxisSizeBuilder {
                 cursor: 1,
                 cover: None,
             },
-            covered: Vec::new(),
-            resolved: Vec::new(),
-            resolved_sorted: false,
+            covered: BTreeMap::new(),
+            resolved: BTreeMap::new(),
             runs: Vec::new(),
         }
     }
@@ -611,22 +593,24 @@ fn rounded_extent(size: f64, record: usize) -> Result<i32, AxisSizeError> {
 }
 
 /// Return the covered interval that contains `at` or starts after it.
-fn next_overlap(covered: &[Cover], at: i32, last: i32) -> Option<(i32, i32)> {
-    let index = covered.partition_point(|cover| cover.start <= at);
-    if let Some(cover) = index.checked_sub(1).and_then(|index| covered.get(index))
-        && cover.end >= at
+fn next_overlap(covered: &BTreeMap<i32, i32>, at: i32, last: i32) -> Option<(i32, i32)> {
+    if let Some((&start, &end)) = covered.range(..=at).next_back()
+        && end >= at
     {
-        return Some((cover.start, cover.end));
+        return Some((start, end));
     }
     covered
-        .get(index)
-        .filter(|cover| cover.start <= last)
-        .map(|cover| (cover.start, cover.end))
+        .range(at..)
+        .next()
+        .filter(|(start, _)| **start <= last)
+        .map(|(&start, &end)| (start, end))
 }
 
 /// Merge a cover interval into the covered set. Returns true when inserted.
+/// Each iteration removes one adjacent interval, so one budget unit bounds the
+/// work to one ordered-map lookup and removal.
 fn merge_cover(
-    covered: &mut Vec<Cover>,
+    covered: &mut BTreeMap<i32, i32>,
     cover: &mut Cover,
     budget: &mut usize,
 ) -> Result<bool, AxisSizeError> {
@@ -635,29 +619,25 @@ fn merge_cover(
             return Ok(false);
         }
         *budget -= 1;
-        let index = covered.partition_point(|item| item.start < cover.start);
-        if let Some(previous) = index
-            .checked_sub(1)
-            .and_then(|index| covered.get(index).copied())
-            && previous.end >= cover.start.saturating_sub(1)
+        if let Some((&start, &end)) = covered.range(..cover.start).next_back()
+            && end >= cover.start.saturating_sub(1)
         {
-            covered.remove(index - 1);
-            cover.start = previous.start;
-            cover.end = cover.end.max(previous.end);
+            covered.remove(&start);
+            cover.start = start;
+            cover.end = cover.end.max(end);
             continue;
         }
-        let limit = cover.end.saturating_add(1);
-        if let Some(next) = covered.get(index).copied()
-            && next.start <= limit
+        if let Some((&start, &end)) = covered.range(cover.start..).next()
+            && start <= cover.end.saturating_add(1)
         {
-            covered.remove(index);
-            cover.end = cover.end.max(next.end);
+            covered.remove(&start);
+            cover.end = cover.end.max(end);
             continue;
         }
         if covered.len() >= CONSTRUCTION_LIMIT {
             return Err(AxisSizeError::Limit);
         }
-        covered.insert(index, *cover);
+        covered.insert(cover.start, cover.end);
         return Ok(true);
     }
 }
@@ -911,6 +891,56 @@ mod tests {
                 row_run(1_000, 1_000, 60.0)
             ]
         );
+    }
+
+    #[test]
+    fn merged_covers_match_brute_force_precedence() {
+        const LIMIT: i32 = 80;
+        let sizes = [0.0, 10.0, DEFAULT_ROW_HEIGHT, 40.0, 60.0];
+        for seed in 1..=20_u64 {
+            let mut state = seed;
+            let mut records = Vec::with_capacity(200);
+            for _ in 0..200 {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let first = 1 + (state % LIMIT as u64) as i32;
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let last = (first + (state % 12) as i32).min(LIMIT);
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                records.push((first, last, sizes[(state % 5) as usize]));
+            }
+            // First matching record wins for each index; default runs vanish.
+            let mut expected: Vec<SizeRun> = Vec::new();
+            for index in 1..=LIMIT {
+                let size = records
+                    .iter()
+                    .find(|(first, last, _)| *first <= index && index <= *last)
+                    .map_or(DEFAULT_ROW_HEIGHT, |record| record.2);
+                if size == DEFAULT_ROW_HEIGHT {
+                    continue;
+                }
+                if let Some(run) = expected.last_mut()
+                    && run.last + 1 == index
+                    && run.size == size
+                {
+                    run.last = index;
+                } else {
+                    expected.push(SizeRun {
+                        first: index,
+                        last: index,
+                        size,
+                    });
+                }
+            }
+            let actual = AxisSizeBuilder::synthetic(Axis::Row, DEFAULT_ROW_HEIGHT, &records)
+                .finish_synthetic();
+            assert_eq!(actual, expected, "seed {seed}");
+        }
     }
 
     #[test]
