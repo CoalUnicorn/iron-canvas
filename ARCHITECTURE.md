@@ -289,7 +289,9 @@ overlays, so retained planning can compare model paint only.
 
 1. **Request** carries sheet, `RevisionToken { workbook_id, revision }`,
    viewport, `CanvasTheme`, and `OverlayState`. `workbook_id` changes on
-   workbook replacement even if the revision restarts at zero.
+   workbook replacement even if the revision restarts at zero. Advance
+   `revision` after cell, style, merge, link, dimension, or sheet-order changes.
+   A missing advance can reuse stale content.
 2. **Reuse** — content is reused without engine reads when the sheet,
    `workbook_id`, theme, revision, and viewport match. Overlay-only changes
    reuse prepared content and recompose overlays; a revision change recompiles
@@ -314,7 +316,11 @@ reference comparisons. It repeats engine block reads.
 and the session's text cache. It forces the next successful render to prepare.
 This also bypasses shared
 cache hits. A failed attempt keeps the invalidation pending. Call it after
-fonts change. Target size and scale are fixed per backend instance.
+fonts change. It keeps block data and prepared axes.
+`invalidate_content` clears block data, prepared axes, and committed reuse after
+a workbook write without a revision advance. Prefer advancing the request
+revision: that also invalidates shared cache entries. A session cannot clear a
+shared `WorksheetCache`. Target size and scale are fixed per backend instance.
 
 The session owns one `WorksheetBlockCache`. A normal render passes it to
 `prepare_with_cache`. A new `BlockCacheIdentity` clears it. Invalidation keeps

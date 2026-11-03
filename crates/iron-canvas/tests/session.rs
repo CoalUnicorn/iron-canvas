@@ -153,6 +153,31 @@ fn render_fresh_reads_blocks_again_after_a_warm_frame() {
 }
 
 #[test]
+fn content_invalidation_clears_block_and_committed_reuse() {
+    let mut workbook = UserModel::new_empty("invalidate", "en", "UTC", "en").unwrap();
+    workbook.set_user_input(0, 1, 1, "old").unwrap();
+    let request = request();
+    let mut session = CanvasSession::new(SvgSceneBackend::new());
+    let warm = session.render(&workbook, &request).unwrap();
+    assert!(warm.extended_style_reads > 0);
+    assert!(session.backend().document().unwrap().contains("old"));
+
+    // An identical request reuses the committed frame. A workbook write
+    // without a revision advance is invisible until the host invalidates
+    // content.
+    workbook.set_user_input(0, 1, 1, "new").unwrap();
+    let stale = session.render(&workbook, &request).unwrap();
+    assert_eq!(stale.extended_style_reads, 0);
+    assert!(session.backend().document().unwrap().contains("old"));
+
+    session.invalidate_content();
+    let refreshed = session.render(&workbook, &request).unwrap();
+    // A cleared block cache forces engine block reads again.
+    assert!(refreshed.extended_style_reads > 0);
+    assert!(session.backend().document().unwrap().contains("new"));
+}
+
+#[test]
 fn prepared_axes_are_validated_and_used_by_the_session() {
     let mut workbook = UserModel::new_empty("axes", "en", "UTC", "en").unwrap();
     workbook.set_rows_height(0, 1, 40, 30.0).unwrap();

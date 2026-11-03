@@ -46,6 +46,11 @@ pub struct RevisionToken {
 
 /// The worksheet content requested for one complete frame.
 ///
+/// Advance `revision` after any change that can alter prepared content: cell
+/// values or styles, merges, links, row or column dimensions, and sheet order.
+/// Session and shared caches key on this token. A missing advance can reuse
+/// stale content. Use [`CanvasSession::invalidate_content`] for a local fallback.
+///
 /// Headers are always visible. Empty overlays give a content-only export.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderRequest {
@@ -472,9 +477,30 @@ impl<B: RenderBackend> CanvasSession<B> {
 
     /// Invalidate prepared content after backend fonts or metrics change.
     /// The frame stays published; the next render rebuilds it.
+    ///
+    /// Block data and prepared axes survive because metrics do not change
+    /// engine cells or dimensions. After a workbook write, advance the request
+    /// revision or call [`Self::invalidate_content`].
     pub fn invalidate(&mut self) {
         self.backend.invalidate_metrics();
         self.text_layouts.clear();
+        self.invalidated = true;
+        if let Some(committed) = &mut self.committed {
+            committed.reuse = None;
+        }
+    }
+
+    /// Invalidate prepared content after a workbook write without a revision
+    /// advance.
+    ///
+    /// Clears the block cache, prepared axes, and committed reuse. The next
+    /// render prepares again and bypasses shared cache hits. Prefer advancing
+    /// the request revision: that invalidates every session and every shared
+    /// cache entry for the workbook. A session cannot clear a shared
+    /// `WorksheetCache`.
+    pub fn invalidate_content(&mut self) {
+        self.block_cache.clear();
+        self.axes = None;
         self.invalidated = true;
         if let Some(committed) = &mut self.committed {
             committed.reuse = None;
