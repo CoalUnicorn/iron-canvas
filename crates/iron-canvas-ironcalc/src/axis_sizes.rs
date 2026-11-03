@@ -14,7 +14,6 @@ use iron_canvas_core::{
     scroll::{ExtentRun, RunAxis, RunAxisError, scrolling_extent},
 };
 use ironcalc_base::{UserModel, types::Worksheet};
-use std::collections::BTreeMap;
 
 // The pinned engine keeps its dimension limits and constants private.
 // Record these values here and compare them with the public getters after
@@ -157,6 +156,14 @@ struct Cover {
 }
 
 #[derive(Debug, Clone, Copy)]
+struct ResolvedInterval {
+    first: i32,
+    last: i32,
+    size: f64,
+    record: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
 enum Phase {
     Read {
         next: usize,
@@ -179,8 +186,9 @@ pub struct AxisSizeBuilder {
     total_records: usize,
     records: Vec<PendingRecord>,
     phase: Phase,
-    covered: BTreeMap<i32, i32>,
-    resolved: BTreeMap<i32, (i32, f64)>,
+    covered: Vec<Cover>,
+    resolved: Vec<ResolvedInterval>,
+    resolved_sorted: bool,
     runs: Vec<SizeRun>,
     done: bool,
 }
@@ -221,8 +229,9 @@ impl AxisSizeBuilder {
             total_records,
             records: Vec::new(),
             phase: Phase::Read { next: 0 },
-            covered: BTreeMap::new(),
-            resolved: BTreeMap::new(),
+            covered: Vec::new(),
+            resolved: Vec::new(),
+            resolved_sorted: false,
             runs: Vec::new(),
             done: false,
         })
@@ -452,37 +461,56 @@ impl AxisSizeBuilder {
         if self.resolved.len() >= CONSTRUCTION_LIMIT {
             return Err(AxisSizeError::Limit);
         }
-        if self.resolved.insert(first, (last, size)).is_some() {
-            return Err(AxisSizeError::InvalidRecord {
-                record,
-                first,
-                last,
-            });
-        }
+        self.resolved.push(ResolvedInterval {
+            first,
+            last,
+            size,
+            record,
+        });
         Ok(())
     }
 
     /// Drain resolved intervals in sorted order. Returns true when complete.
     fn emit_step(&mut self, budget: &mut usize) -> Result<bool, AxisSizeError> {
+        // Sort once after resolution. Highest first entry pops first, so runs
+        // emit in ascending index order.
+        if !self.resolved_sorted {
+            self.resolved
+                .sort_unstable_by_key(|entry| std::cmp::Reverse(entry.first));
+            for pair in self.resolved.windows(2) {
+                if pair[0].first == pair[1].first {
+                    return Err(AxisSizeError::InvalidRecord {
+                        record: pair[1].record,
+                        first: pair[1].first,
+                        last: pair[1].last,
+                    });
+                }
+            }
+            self.resolved_sorted = true;
+        }
         while *budget > 0 {
-            let Some((first, (last, size))) = self.resolved.pop_first() else {
+            let Some(entry) = self.resolved.pop() else {
                 return Ok(true);
             };
             *budget -= 1;
             // Default-size runs carry no information after precedence resolution.
-            if size == self.default_size {
+            if entry.size == self.default_size {
                 continue;
             }
             if let Some(previous) = self.runs.last_mut()
-                && previous.last.checked_add(1) == Some(first)
-                && previous.size == size
+                && previous.last.checked_add(1) == Some(entry.first)
+                && previous.size == entry.size
             {
-                previous.last = last;
+                previous.last = entry.last;
             } else {
                 if self.runs.len() >= CONSTRUCTION_LIMIT {
                     return Err(AxisSizeError::Limit);
                 }
-                self.runs.push(SizeRun { first, last, size });
+                self.runs.push(SizeRun {
+                    first: entry.first,
+                    last: entry.last,
+                    size: entry.size,
+                });
             }
         }
         Ok(false)
@@ -510,8 +538,9 @@ impl AxisSizeBuilder {
                 cursor: 1,
                 cover: None,
             },
-            covered: BTreeMap::new(),
-            resolved: BTreeMap::new(),
+            covered: Vec::new(),
+            resolved: Vec::new(),
+            resolved_sorted: false,
             runs: Vec::new(),
             done: false,
         }
@@ -551,21 +580,22 @@ fn rounded_extent(size: f64, record: usize) -> Result<i32, AxisSizeError> {
 }
 
 /// Return the covered interval that contains `at` or starts after it.
-fn next_overlap(covered: &BTreeMap<i32, i32>, at: i32, last: i32) -> Option<(i32, i32)> {
-    if let Some((&start, &end)) = covered.range(..=at).next_back()
-        && end >= at
+fn next_overlap(covered: &[Cover], at: i32, last: i32) -> Option<(i32, i32)> {
+    let index = covered.partition_point(|cover| cover.start <= at);
+    if let Some(cover) = index.checked_sub(1).and_then(|index| covered.get(index))
+        && cover.end >= at
     {
-        return Some((start, end));
+        return Some((cover.start, cover.end));
     }
     covered
-        .range(at..=last)
-        .next()
-        .map(|(&start, &end)| (start, end))
+        .get(index)
+        .filter(|cover| cover.start <= last)
+        .map(|cover| (cover.start, cover.end))
 }
 
 /// Merge a cover interval into the covered set. Returns true when inserted.
 fn merge_cover(
-    covered: &mut BTreeMap<i32, i32>,
+    covered: &mut Vec<Cover>,
     cover: &mut Cover,
     budget: &mut usize,
 ) -> Result<bool, AxisSizeError> {
@@ -574,24 +604,29 @@ fn merge_cover(
             return Ok(false);
         }
         *budget -= 1;
-        if let Some((&start, &end)) = covered.range(..=cover.start).next_back()
-            && end >= cover.start.saturating_sub(1)
+        let index = covered.partition_point(|item| item.start < cover.start);
+        if let Some(previous) = index
+            .checked_sub(1)
+            .and_then(|index| covered.get(index).copied())
+            && previous.end >= cover.start.saturating_sub(1)
         {
-            covered.remove(&start);
-            cover.start = start;
-            cover.end = cover.end.max(end);
+            covered.remove(index - 1);
+            cover.start = previous.start;
+            cover.end = cover.end.max(previous.end);
             continue;
         }
         let limit = cover.end.saturating_add(1);
-        if let Some((&start, &end)) = covered.range(cover.start..=limit).next() {
-            covered.remove(&start);
-            cover.end = cover.end.max(end);
+        if let Some(next) = covered.get(index).copied()
+            && next.start <= limit
+        {
+            covered.remove(index);
+            cover.end = cover.end.max(next.end);
             continue;
         }
         if covered.len() >= CONSTRUCTION_LIMIT {
             return Err(AxisSizeError::Limit);
         }
-        covered.insert(cover.start, cover.end);
+        covered.insert(index, *cover);
         return Ok(true);
     }
 }
@@ -718,7 +753,8 @@ impl AxisExtents for WorksheetAxis {
 /// Identity of the worksheet and content that produced axis sizes.
 ///
 /// A host stores one value with each cached [`WorksheetAxes`]. Navigation
-/// rejects axes for another workbook or sheet.
+/// rejects axes for another workbook or sheet. Advance `revision` only when
+/// cell content or dimensions change. Scroll and selection do not change it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct AxesScope {
     pub workbook_id: u64,
