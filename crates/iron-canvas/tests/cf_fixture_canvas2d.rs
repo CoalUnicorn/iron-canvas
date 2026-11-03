@@ -306,10 +306,12 @@ fn assert_fresh(
     assert_eq!(
         differences,
         0,
-        "retained Canvas2D must match forced Fresh byte for byte: dpr={dpr} offset=({}, {}) first={:?} box={min:?}..{max:?}",
+        "retained Canvas2D must match forced Fresh byte for byte: dpr={dpr} offset=({}, {}) first={:?} box={min:?}..{max:?} actual={:?} expected={:?}",
         request.viewport.scroll.offset_x,
         request.viewport.scroll.offset_y,
         first.map(|index| (index / 4 % device_width, index / 4 / device_width)),
+        first.map(|index| &actual[index..index + 4]),
+        first.map(|index| &expected[index..index + 4]),
     );
 }
 
@@ -1029,6 +1031,171 @@ fn vertical_pixel_blit_matches_fresh_at_four_scales() {
             session.render(&model, &request).unwrap().strategy,
             RenderStrategy::Fresh
         );
+    }
+}
+
+#[wasm_bindgen_test]
+fn active_cell_overlay_survives_row_boundary_blits() {
+    use iron_canvas::RenderStrategy;
+
+    for dpr in [1.0, 1.25, 1.5, 2.0] {
+        let mut model = UserModel::new_empty("active blit", "en", "UTC", "en").unwrap();
+        model.set_rows_height(0, 1, 80, 24.0).unwrap();
+        model.set_columns_width(0, 1, 20, 80.0).unwrap();
+        for row in 1..40 {
+            for col in 1..8 {
+                model
+                    .set_user_input(0, row, col, &format!("{row}-{col}"))
+                    .unwrap();
+            }
+        }
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
+            theme: CanvasTheme::light(),
+            overlays: iron_canvas::OverlayState {
+                selection: vec![GridRange {
+                    first: CellCoord { row: 4, col: 3 },
+                    last: CellCoord { row: 4, col: 3 },
+                }],
+                active_cell: Some(CellCoord { row: 4, col: 3 }),
+                ..Default::default()
+            },
+        };
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        session.render(&model, &request).unwrap();
+        for (row, offset) in [
+            (1, 4),
+            (2, 0),
+            (2, 8),
+            (3, 0),
+            (8, 0),
+            (8, 8),
+            (2, 0),
+            (1, 0),
+        ] {
+            request.viewport.scroll.first_cell.row = row;
+            request.viewport.scroll.offset_y = offset;
+            let outcome = session.render(&model, &request).unwrap();
+            assert_eq!(
+                outcome.strategy,
+                RenderStrategy::Blit,
+                "row {row} offset {offset} at {dpr}"
+            );
+            assert_fresh(&session, &model, &request, dpr);
+        }
+    }
+}
+
+#[wasm_bindgen_test]
+fn active_cell_entering_and_leaving_the_viewport_repaints_its_overlay() {
+    use iron_canvas::RenderStrategy;
+
+    for dpr in [1.0, 1.25] {
+        let mut model = UserModel::new_empty("active offscreen", "en", "UTC", "en").unwrap();
+        model.set_rows_height(0, 1, 80, 24.0).unwrap();
+        model.set_columns_width(0, 1, 20, 80.0).unwrap();
+        for row in 1..40 {
+            for col in 1..8 {
+                model
+                    .set_user_input(0, row, col, &format!("{row}-{col}"))
+                    .unwrap();
+            }
+        }
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
+            theme: CanvasTheme::light(),
+            overlays: iron_canvas::OverlayState {
+                active_cell: Some(CellCoord { row: 18, col: 5 }),
+                ..Default::default()
+            },
+        };
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        session.render(&model, &request).unwrap();
+        for (row, offset) in [(2, 0), (6, 4), (10, 0), (16, 0), (16, 8), (10, 0), (2, 0)] {
+            request.viewport.scroll.first_cell.row = row;
+            request.viewport.scroll.offset_y = offset;
+            let outcome = session.render(&model, &request).unwrap();
+            assert_eq!(
+                outcome.strategy,
+                RenderStrategy::Blit,
+                "row {row} offset {offset} at {dpr}"
+            );
+            assert_fresh(&session, &model, &request, dpr);
+        }
+    }
+}
+
+#[wasm_bindgen_test]
+fn moving_active_cell_during_scroll_does_not_copy_old_overlay_ink() {
+    use iron_canvas::RenderStrategy;
+
+    for dpr in [1.0, 1.25, 1.5] {
+        let mut model = UserModel::new_empty("moving active", "en", "UTC", "en").unwrap();
+        model.set_rows_height(0, 1, 80, 24.0).unwrap();
+        model.set_columns_width(0, 1, 20, 80.0).unwrap();
+        for row in 1..40 {
+            for col in 1..8 {
+                model
+                    .set_user_input(0, row, col, &format!("{row}-{col}"))
+                    .unwrap();
+            }
+        }
+        let mut request = RenderRequest {
+            sheet: 0,
+            revision: RevisionToken {
+                workbook_id: 1,
+                revision: 0,
+            },
+            viewport: WorksheetViewport::aligned(CellCoord { row: 1, col: 1 }, 640, 400),
+            theme: CanvasTheme::light(),
+            overlays: iron_canvas::OverlayState {
+                selection: vec![GridRange {
+                    first: CellCoord { row: 1, col: 2 },
+                    last: CellCoord { row: 1, col: 3 },
+                }],
+                active_cell: Some(CellCoord { row: 1, col: 2 }),
+                ..Default::default()
+            },
+        };
+        let metrics = CanvasMetrics::new(CanvasSize { w: 640.0, h: 400.0 }, dpr).unwrap();
+        let mut session =
+            CanvasSession::new(Canvas2dSceneBackend::new(make_canvas(), metrics).unwrap());
+        session.render(&model, &request).unwrap();
+        for (row, offset) in [(2, 0), (2, 8), (3, 0), (3, 4), (2, 4), (1, 0)] {
+            request.viewport.scroll.first_cell.row = row;
+            request.viewport.scroll.offset_y = offset;
+            request.overlays.selection = vec![GridRange {
+                first: CellCoord { row, col: 2 },
+                last: CellCoord { row, col: 3 },
+            }];
+            request.overlays.active_cell = Some(CellCoord { row, col: 2 });
+            let outcome = session.render(&model, &request).unwrap();
+            let integral = (f64::from(offset) * dpr).fract() == 0.0;
+            assert_eq!(
+                outcome.strategy,
+                if integral {
+                    RenderStrategy::Blit
+                } else {
+                    RenderStrategy::Fresh
+                },
+                "row {row} offset {offset} at {dpr}"
+            );
+            assert_fresh(&session, &model, &request, dpr);
+        }
     }
 }
 

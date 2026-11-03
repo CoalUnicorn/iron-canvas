@@ -1,9 +1,12 @@
 #![cfg(not(target_arch = "wasm32"))]
 use iron_canvas::{CanvasSession, RenderBackend, RenderRequest, RenderStrategy, RevisionToken};
 use iron_canvas_core::{
-    CanvasTheme, CellCoord, PixelRect,
+    CanvasTheme, CellCoord, PixelRect, Point,
     painter::TextMetrics,
-    scene::{GridScene, retained::SceneUpdate},
+    scene::{
+        GridScene,
+        retained::{SceneUpdate, pass_bounds},
+    },
     scene_geometry::GridRange,
 };
 use iron_canvas_ironcalc::WorksheetViewport;
@@ -235,6 +238,7 @@ fn native_unicode_wrap_and_autofit_match_fresh_after_font_changes() {
 struct ProbeBackend {
     metrics: NativeSceneBackend,
     updates: Rc<RefCell<Vec<SceneUpdate>>>,
+    scale: f64,
 }
 impl RenderBackend for ProbeBackend {
     type StagedFrame = ();
@@ -252,7 +256,7 @@ impl RenderBackend for ProbeBackend {
         true
     }
     fn retained_scale(&self) -> Option<f64> {
-        Some(1.0)
+        Some(self.scale)
     }
     fn stage_update(
         &mut self,
@@ -276,8 +280,17 @@ fn selection_overlay_scroll_blits_the_model_and_repaints_overlay_ink() {
     let mut session = CanvasSession::new(ProbeBackend {
         metrics: NativeSceneBackend::new(1.0).unwrap(),
         updates: Rc::clone(&updates),
+        scale: 1.0,
     });
     session.render(&model, &request).unwrap();
+    let frame = session.committed_frame().unwrap();
+    assert!(
+        frame.worksheet.model_passes < frame.worksheet.scene.passes.len(),
+        "model passes={} total={}",
+        frame.worksheet.model_passes,
+        frame.worksheet.scene.passes.len()
+    );
+    assert!(!pass_bounds(&frame.worksheet.scene, frame.worksheet.model_passes).is_empty());
     request.viewport.scroll.offset_y = 6;
     session.render(&model, &request).unwrap();
     let update = updates.borrow().last().cloned().unwrap();
@@ -308,6 +321,64 @@ fn selection_overlay_scroll_blits_the_model_and_repaints_overlay_ink() {
                 .iter()
                 .any(|region| region.intersection(rect).is_some()),
             "repaint misses overlay ink at {cell:?}: {repaint:?} {rect:?}"
+        );
+    }
+}
+
+#[test]
+fn moving_active_cell_keeps_its_old_rect_out_of_the_blit_copy() {
+    let (model, mut request) = fixture();
+    request.overlays.selection = vec![GridRange {
+        first: CellCoord { row: 1, col: 2 },
+        last: CellCoord { row: 1, col: 3 },
+    }];
+    request.overlays.active_cell = Some(CellCoord { row: 1, col: 2 });
+    let updates = Rc::new(RefCell::new(Vec::new()));
+    let mut session = CanvasSession::new(ProbeBackend {
+        metrics: NativeSceneBackend::new(1.0).unwrap(),
+        updates: Rc::clone(&updates),
+        scale: 1.0,
+    });
+    session.render(&model, &request).unwrap();
+    for (row, offset) in [(2, 0), (2, 6), (3, 0), (3, 8), (2, 4), (1, 0)] {
+        let old_rect = session.cell_rect(4, 3).unwrap();
+        let _ = old_rect;
+        let old_active = request.overlays.active_cell.unwrap();
+        let old_rect = session.cell_rect(old_active.row, old_active.col).unwrap();
+        request.viewport.scroll.first_cell.row = row;
+        request.viewport.scroll.offset_y = offset;
+        request.overlays.selection = vec![GridRange {
+            first: CellCoord { row, col: 2 },
+            last: CellCoord { row, col: 3 },
+        }];
+        request.overlays.active_cell = Some(CellCoord { row, col: 2 });
+        session.render(&model, &request).unwrap();
+        let update = updates.borrow().last().cloned().unwrap();
+        let SceneUpdate::Blit {
+            source,
+            destination,
+            ..
+        } = update
+        else {
+            panic!("expected Blit, got {update:?}");
+        };
+        let copy = PixelRect {
+            top_left: destination,
+            ..source
+        };
+        // Old overlay pixels enter the copy from the source frame, so their
+        // destination-space position is shifted by the copy translation.
+        let dy = destination.y - source.top();
+        let old_in_destination = PixelRect {
+            top_left: Point {
+                x: old_rect.left(),
+                y: old_rect.top() + dy,
+            },
+            ..old_rect
+        };
+        assert!(
+            copy.intersection(old_in_destination).is_none(),
+            "copy takes old active pixels {old_in_destination:?}: {copy:?} row={row} offset={offset}"
         );
     }
 }

@@ -75,25 +75,40 @@ pub(crate) fn scroll_plan(
     // always an integral device pixel. Move each edge inward to the nearest
     // copyable coordinate before asking for a blit.
     let region = integral_region(region, scale)?;
-    // Overlay paint is not part of the model copy. The old bitmap also holds
-    // overlay pixels, so reserve both scenes' overlay bounds for repaint.
-    let mut holes = pass_bounds(&old.worksheet.scene, old.worksheet.model_passes);
-    holes.extend(pass_bounds(&new.scene, new.model_passes));
-    let mut pieces = vec![region];
-    for hole in holes {
-        let mut next = Vec::with_capacity(pieces.len() + 3);
-        for piece in pieces {
-            next.extend(subtract(piece, hole));
-            if next.len() > MAX_OVERLAY_PIECES {
-                return None;
-            }
+    // Overlay paint is not part of the model copy. Old overlay bounds are in
+    // the source frame, so shift them into destination space. The new overlay
+    // bounds are already there.
+    let old_bounds = pass_bounds(&old.worksheet.scene, old.worksheet.model_passes)
+        .into_iter()
+        .map(|rect| PixelRect {
+            top_left: Point {
+                x: rect.left(),
+                y: rect.top() + dy,
+            },
+            ..rect
+        });
+    let new_bounds = pass_bounds(&new.scene, new.model_passes);
+    // One bounding rectangle keeps the copy a single rectangle and bounds the
+    // repair plan. Header strips stay outside the body and do not expand it.
+    let mut overlay: Option<PixelRect> = None;
+    for rect in old_bounds.chain(new_bounds) {
+        if rect.intersection(region).is_none() {
+            continue;
         }
-        pieces = next;
-        if pieces.is_empty() {
-            return None;
-        }
+        overlay = Some(overlay.map_or(rect, |current| PixelRect {
+            top_left: Point {
+                x: current.left().min(rect.left()),
+                y: current.top().min(rect.top()),
+            },
+            width: current.right().max(rect.right()) - current.left().min(rect.left()),
+            height: current.bottom().max(rect.bottom()) - current.top().min(rect.top()),
+        }));
     }
-    // Blit one largest overlay-free piece. Everything outside it repaints.
+    let pieces = match overlay {
+        Some(hole) => subtract(region, hole),
+        None => vec![region],
+    };
+    // Blit the largest overlay-free piece. Everything outside it repaints.
     let copy = *pieces
         .iter()
         .max_by_key(|piece| i64::from(piece.width) * i64::from(piece.height))?;
@@ -117,9 +132,6 @@ pub(crate) fn scroll_plan(
         repaint,
     })
 }
-
-/// Upper bound on disjoint pieces after overlay subtraction.
-const MAX_OVERLAY_PIECES: usize = 16;
 
 /// Return the scene passes that contain worksheet content.
 fn model_passes(scene: &GridScene, count: usize) -> GridScene {
