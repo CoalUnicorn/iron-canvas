@@ -91,6 +91,12 @@ fn valid_axis(cells: &[AxisCell], last: i32) -> bool {
         && cells.windows(2).all(|pair| pair[0].index < pair[1].index)
 }
 
+/// Upper bound on absolute-tile cells per visible cell. A cold frame reads
+/// every cell of a tile, so a small pane must not trade a 9x read for cache
+/// reuse. Four keeps absolute tiles for a 900x620 viewport of many narrow
+/// columns while rejecting the wider over-read of a small dense pane.
+const ABSOLUTE_CELL_BUDGET_FACTOR: usize = 4;
+
 /// Return reusable tiles for the visible cells. Dense panes use absolute
 /// 64-cell tiles so the same rectangles return across scroll frames. Sparse or
 /// fragmented panes keep the exact visible tiling to avoid wide reads.
@@ -116,14 +122,17 @@ pub(super) fn plan_blocks(
     let visible_rows: usize = panes.iter().map(|pane| pane.rows.len()).sum();
     let visible_columns: usize = panes.iter().map(|pane| pane.columns.len()).sum();
     // Wide absolute tiles are a cache trade. Bound the two alignment strips
-    // outside the visible cells. Small and sparse panes keep the exact plan.
-    let budget = visible_cells.saturating_add(
+    // outside the visible cells, then cap the total over-read so a cold frame
+    // cannot read many more cells than it paints. Small and sparse panes keep
+    // the exact plan.
+    let strip_budget = visible_cells.saturating_add(
         2usize.saturating_mul(
             tile_width
                 .saturating_mul(visible_rows)
                 .saturating_add(tile_height.saturating_mul(visible_columns)),
         ),
     );
+    let budget = strip_budget.min(visible_cells.saturating_mul(ABSOLUTE_CELL_BUDGET_FACTOR));
     if absolute_cells > budget {
         return plan_exact(panes, limits, tile_width, tile_height);
     }
@@ -601,6 +610,15 @@ mod tests {
                 (900_002, 3, 2, 1)
             ]
         );
+    }
+
+    #[test]
+    fn small_dense_panes_use_the_exact_plan() {
+        let rows: Vec<_> = (1..=20).collect();
+        let columns: Vec<_> = (1..=20).collect();
+        let blocks = plan_blocks(&[pane(&rows, &columns)], BlockLimits::default()).unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!((blocks[0].width, blocks[0].height), (20, 20));
     }
 
     #[test]
