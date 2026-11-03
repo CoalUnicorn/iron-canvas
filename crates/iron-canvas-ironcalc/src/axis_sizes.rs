@@ -92,34 +92,17 @@ impl AxisSizes {
     /// Round and join sizes into contiguous runs with checked prefix sums.
     /// Keep the engine error context for invalid records and sizes.
     pub fn to_run_axis(&self, last_index: i32) -> Result<RunAxis, AxisSizeError> {
-        if last_index < 1 {
-            return Err(AxisSizeError::Limit);
-        }
         let default_extent = rounded_extent(self.default_size, 0)?;
         let mut runs = Vec::with_capacity(self.runs.len());
-        let mut cursor = 1_i32;
         for (record, run) in self.runs.iter().enumerate() {
-            if run.first < 1 || run.last < run.first || run.last > last_index {
-                return Err(AxisSizeError::InvalidRecord {
-                    record,
-                    first: run.first,
-                    last: run.last,
-                });
-            }
-            if run.first < cursor {
-                return Err(AxisSizeError::InvalidRecord {
-                    record,
-                    first: run.first,
-                    last: run.last,
-                });
-            }
             runs.push(ExtentRun {
                 first: run.first,
                 last: run.last,
                 extent: rounded_extent(run.size, record)?,
             });
-            cursor = run.last.checked_add(1).ok_or(AxisSizeError::Limit)?;
         }
+        // Core owns run order, bounds, and prefix-sum validation. Map its
+        // record index back to the engine record that produced the run.
         RunAxis::from_runs(default_extent, last_index, &runs).map_err(|error| match error {
             RunAxisError::InvalidRun { run } => {
                 let record = &self.runs[run];
@@ -1017,6 +1000,15 @@ mod tests {
             sizes(DEFAULT_ROW_HEIGHT, vec![row_run(1, 1, f64::NAN)]).to_run_axis(10),
             Err(AxisSizeError::InvalidSize { .. })
         ));
+        // Core rejects a run beyond the limit; the adapter restores the record.
+        assert_eq!(
+            sizes(DEFAULT_ROW_HEIGHT, vec![row_run(1, 11, 10.0)]).to_run_axis(10),
+            Err(AxisSizeError::InvalidRecord {
+                record: 0,
+                first: 1,
+                last: 11
+            })
+        );
     }
 
     #[test]

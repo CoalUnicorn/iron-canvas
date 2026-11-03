@@ -212,7 +212,8 @@ impl<B: RenderBackend> CanvasSession<B> {
             ContentSource::Cache(_, key) => Some(*key),
             ContentSource::Previous | ContentSource::Fresh => None,
         };
-        let force = matches!(source, ContentSource::Fresh) || self.invalidated;
+        let fresh = matches!(source, ContentSource::Fresh);
+        let force = fresh || self.invalidated;
         // Local metrics and explicit keys have separate identities. Track this
         // per attempt: a failed frame can still populate measured text storage.
         if force || self.text_metrics_key != metrics_key {
@@ -222,7 +223,7 @@ impl<B: RenderBackend> CanvasSession<B> {
         // Fresh is the independent reference path. Disable layout retention,
         // including repeated values within this preparation.
         let mut fresh_layouts = TextLayoutCache::new(0, 0);
-        let layouts = if matches!(source, ContentSource::Fresh) {
+        let layouts = if fresh {
             &mut fresh_layouts
         } else {
             &mut self.text_layouts
@@ -298,7 +299,7 @@ impl<B: RenderBackend> CanvasSession<B> {
                 // An independent reference frame must read engine blocks again.
                 // Block reuse would make it depend on an earlier frame.
                 // Invalidation only changes metrics, so it keeps block reuse.
-                let prepared = if matches!(source, ContentSource::Fresh) {
+                let prepared = if fresh {
                     self.compiler
                         .prepare_with_shaper(context, request.viewport, &mut shaper, reuse)
                 } else {
