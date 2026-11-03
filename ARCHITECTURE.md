@@ -3,6 +3,7 @@
 <!-- working-tree-verified: P6 stage 0 text cache, 2026-10-17 -->
 <!-- working-tree-verified: P6 stage 1 text spill, 2026-10-17 -->
 <!-- working-tree-verified: P6 stage 2 Unicode wrap and font metrics, 2026-10-17 -->
+<!-- working-tree-verified: continuous scrolling, prepared axes, block cache, selection, 2026-11-03 -->
 <!-- covers: iron-canvas/crates/ iron-canvas/Cargo.toml -->
 
 # iron-canvas architecture
@@ -16,11 +17,15 @@ second renderer: M4 deleted them.
 The crate keeps a strict split:
 
 - **core** owns generic geometry, text layout, paint primitives, the scene
-  contract, and grid/pane geometry. It has no IronCalc or browser types.
+  contract, grid/pane geometry, and engine-independent scroll arithmetic. It has
+  no IronCalc or browser types.
 - **iron-canvas-ironcalc** owns worksheet compilation and spreadsheet semantics
-  (styles, conditional formatting, borders, links, merges, auto-fit).
+  (styles, conditional formatting, borders, links, merges, auto-fit), plus bulk
+  axis sizes over stored worksheet records.
+- **iron-canvas-navigation** owns per-view scroll state, fractional input,
+  reveal, and engine mirroring. It does not depend on the render session.
 - **iron-canvas** owns the render session: request, reuse, frame publication,
-  host queries, overlays, and the shared worksheet cache.
+  host queries, overlays, selection algebra, and the shared worksheet cache.
 - **iron-canvas-export** owns SVG/PDF backends plus workbook loading, range
   selection, and export orchestration; it delegates worksheet compilation to
   `iron-canvas-ironcalc`.
@@ -32,9 +37,13 @@ The crate keeps a strict split:
 ```mermaid
 flowchart TD
     Host["Host: RustyCalc playground / native app"] --> API["iron-canvas: CanvasSession"]
+    Host --> Nav["iron-canvas-navigation: view state"]
     API --> IC["iron-canvas-ironcalc: worksheet compiler"]
     API --> Core["iron-canvas-core: geometry + scene"]
-    IC --> Engine["ironcalc_base"]
+    Nav --> IC
+    Nav --> Core
+    Nav --> Engine["ironcalc_base"]
+    IC --> Engine
     IC --> Core
     Export["iron-canvas-export: workbook / SVG / PDF"] --> IC
     Export --> Import["ironcalc: XLSX import"]
@@ -50,15 +59,16 @@ flowchart TD
 | Crate | Owns | Must not own |
 | --- | --- | --- |
 | `iron-canvas-core` | Coordinates, bounds, canvas metrics, axis sampling, pane geometry and fragments, hit/resize geometry, text layout, resolved paint primitives and scene execution, retained-pixel fingerprints and damage bands, grid theme defaults | `UserModel`, CF enums, workbook themes, formula references, browser or Cairo calls |
-| `iron-canvas-ironcalc` | Direct immutable IronCalc reads, worksheet preparation, style/CF/border/text lowering, merge and link semantics, the CF glyph catalogue, auto-fit measurement | Workbook writes, backends, host event loop |
-| `iron-canvas` | Shared `WorksheetCache`, `CanvasSession` state and invalidation, request/frame planning, prepare/stage/commit coordination, committed-frame queries and host intents, spreadsheet overlay composition | Formula evaluation, duplicate engine getters, backend drawing |
+| `iron-canvas-ironcalc` | Direct immutable IronCalc reads, worksheet preparation, style/CF/border/text lowering, merge and link semantics, the CF glyph catalogue, auto-fit measurement, bulk row and column sizes | Workbook writes, backends, host event loop |
+| `iron-canvas-navigation` | Accepted scroll position per view, fractional pixel input, pane end clamps, inline reveal, merge expansion, engine origin mirroring | Rendering, DOM or window input, backend drawing |
+| `iron-canvas` | Shared `WorksheetCache`, `CanvasSession` state and invalidation, request/frame planning, prepare/stage/commit coordination, committed-frame queries and host intents, spreadsheet overlay composition, selection algebra | Formula evaluation, duplicate engine getters, backend drawing |
 | `iron-canvas-canvas2d` | Browser `<canvas>` surfaces, the Canvas2D painter, text metrics and memo, the CSS-var theme bridge, the scene backend | IronCalc, workbook scheduling |
 | `iron-canvas-native` | Cairo/Pango metrics and raster primitives, staged image surfaces | Window ownership, workbook access |
 | `iron-canvas-export` | SVG and PDF painters and their scene backends, font resources, document assembly, XLSX loading, sheet/range selection, export orchestration | A separate worksheet renderer or CF resolver |
 
-Arrows mean compile-time dependencies. `iron-canvas` is generic over the
-backend contract and does not depend on any concrete backend crate. No crate
-depends on `iron-canvas` except the host.
+Arrows mean compile-time dependencies. Dev-only edges from tests and examples are
+not drawn. `iron-canvas` is generic over the backend contract and does not depend
+on any concrete backend crate. No crate depends on `iron-canvas` except the host.
 
 ## Core: generic grid and drawing
 
@@ -80,7 +90,10 @@ depends on `iron-canvas` except the host.
 - `CellCoord`, `GridRange` — 1-based cell coordinates and ranges.
 - `sample_axis` / `sample_bands` / `AxisBand` — bounded axis sampling. Frozen
   bands are sampled first, then the scrolling band, both clamped to the
-  viewport; `AxisBand::frozen` marks which is which.
+  viewport; `AxisBand::frozen` marks which is which. The `offset` argument
+  shifts only the scrolling band. Frozen bands ignore it. A slot can start
+  before zero when the offset is positive. A resize boundary must lie in the
+  same visible band clip as the pointer.
 - `GridGeometry` — the committed grid: `bounds`, `origin` (header offset),
   row/column bands, and the frozen×scroll `panes`. It answers:
   - `hit_test(point) -> GridHit` (`Cell`/`RowHeader`/`ColumnHeader`/`Corner`),
@@ -88,6 +101,34 @@ depends on `iron-canvas` except the host.
     true-edge flags),
   - `cell_rect(row, col)`, `scroll_pane_rect()`, `autofill_handle(range)`,
     `resize_target(point, tolerance) -> GridResize`.
+
+### Scroll arithmetic and navigation input
+
+`scroll` is model-independent. The compiler and the navigation crate share it:
+
+- `ScrollPosition { first_cell, offset_x, offset_y }` — a cell origin and the
+  pixels removed from the start of that cell. A positive offset removes pixels.
+  Positive input moves content left and up.
+- `ScrollAxisWindow::after_frozen(frozen, last)` — the legal scrolling indices.
+  An empty window means a frozen band covers the axis.
+- `AxisExtents` — `extent`, `extent_before`, `total_extent`, and `locate`.
+  Prefix sums use `i64`.
+- `RunAxis::from_runs(default_extent, last_index, runs)` — contiguous rounded
+  extents. It validates order, bounds, signs, and overflow, fills gaps with the
+  default extent, and joins adjacent equal runs. Hidden cells have zero extent.
+- `normalize_axis`, `move_axis`, `clamp_axis_end`, `normalize_position`,
+  `move_position`, `scrolling_extent` — clamping, movement, and pane end limits.
+  A zero pane keeps the position. A pane end clamp limits the escape distance to
+  `max(0, content - pane)`.
+- `navigation` — `NavigationIntent`, `NavigationKey`, `NavigationModifiers`,
+  `BindingProfile`, and `classify_navigation`. `Extended` returns no intent
+  until its engine gate passes.
+
+The navigation state owner is `NavigationController` in
+`iron-canvas-navigation`. It stores one accepted position and a signed
+fractional remainder per view. It applies `Scroll`, `Navigate`, and `Reveal`
+commands in input order, reveals inline, and mirrors the primary view origin
+through a short mutable model borrow. It never draws.
 
 ### Paint contract
 
@@ -156,15 +197,25 @@ The prepared result retains no workbook or theme borrow:
 ```rust,ignore
 pub struct PreparedWorksheet {
     pub scene: GridScene,
-    pub cells: Rc<[CellPlacement]>,
+    /// Leading scene passes that contain worksheet content.
+    pub model_passes: usize,
     pub geometry: Option<Rc<GridGeometry>>,
+    pub frozen: FrozenAxes,
     pub merges: Rc<[MergedCell]>,
     pub links: Rc<[CellLinkView]>,
     pub extended_style_reads: usize,
 }
 ```
 
-- `WorksheetViewport { first_cell, width, height }` selects the visible window.
+`PreparedWorksheet::cells()` iterates placements without allocating a slice.
+Regular viewports derive placements from geometry. `prepare_cells` keeps an
+explicit placement list. Later scene passes after `model_passes` are host
+overlays, so retained planning can compare model paint only.
+
+- `WorksheetViewport { scroll: ScrollPosition, width, height }` selects the
+  visible window. `WorksheetViewport::aligned(first_cell, width, height)` sets
+  zero offsets. The compiler validates the origin and offset against live
+  dimensions and rejects a stale position.
 - `prepare_reusing_geometry` resamples dimensions but reuses a previous
   `GridGeometry` when `bounds`, `origin`, and bands are equal, so a revision
   change need not rebuild equal geometry.
@@ -184,16 +235,27 @@ pub struct PreparedWorksheet {
 - Preparation caches cell records per attempt. After geometry, the compiler
   fetches bounded `CellsBlock` rectangles from consecutive pane samples.
   Hidden coordinate gaps and pane boundaries separate requests.
-  Tiles contain at most 64 by 64 cells. An attempt accepts at most 65,536
+  The planner builds absolute 64-cell tiles when the alignment strips stay
+  inside the attempt budget. It deduplicates and orders the tiles. A large or
+  sparse pane keeps the exact visible plan.
+  Tiles contain at most 64 by 64 cells. An attempt accepts at most 131,072
   block cells and 256 blocks. Remaining cells use individual reads.
   `CellRecords` owns validated blocks, compact covered-cell records, and
   individual records for offscreen cells and cells outside the block budget.
+  `Attempt::load_visible` reads every visible cell once in pane order into a
+  flat index. A cell uses a block slot or an index into the individual records.
+  Paint, fill runs, and text spill use that slot. Offscreen spill sources and
+  merge anchors keep the keyed path.
   Sorted row intervals find blocks. Dense text-slot indices find sparse text.
   Paint and spill code use a
   short-lived `CellView` that borrows style, cell type, and display text.
   The view keeps cell storage separate from mutable layout and paint caches.
   Stored cells determine occupancy even when display text is empty.
-  Blocks do not survive preparation or enter the shared worksheet cache.
+  Blocks do not enter the shared worksheet cache. `WorksheetBlockCache` can
+  keep validated blocks across frames for one `BlockCacheIdentity`
+  (workbook, sheet, revision). It holds at most 131,072 cells and 512 blocks.
+  A new identity clears it, and each frame retains only the blocks it used.
+  The session owns one cache. `render_fresh` bypasses it.
   `extended_style_reads` counts block style entries plus individual style reads.
   At the pinned engine revision, each block style entry requires one internal
   `get_extended_cell_style` call. Ordinary covered cells use validated fill runs.
@@ -231,22 +293,34 @@ pub struct PreparedWorksheet {
    all visible content (CF can depend on offscreen cells).
 3. **Prepare** — `WorksheetCompiler` produces the candidate worksheet.
 4. **Compose overlays** onto the candidate (`OverlayState`).
-5. **Plan the update** — with a partial-update backend, an unchanged frame is
-   `Reuse`, changed 32-pixel bands are `Damage`, and a verified vertical scroll
-   with integral device-pixel movement and identical translated paint is
-   `Blit`; otherwise `Fresh`. Merges force `Fresh`.
+5. **Plan the update** — an unchanged frame behind a retained scale is `Reuse`.
+   With a partial-update backend, changed 32-pixel bands are `Damage`, and a
+   verified vertical scroll with integral device-pixel movement and identical
+   translated paint is `Blit`. All other combinations use `Fresh`. Merges force
+   `Fresh`.
 6. **Stage** on the backend (`stage_update`), then **commit**. Only then are
    pixels, query geometry, base content, and fingerprints published together.
    Any preparation/stage/commit error keeps the previous frame and cache truth.
 7. `RenderOutcome { sequence, sheet, revision, cell_count,
-   extended_style_reads, content_cached, reused_geometry, strategy }` reports the frame.
+   extended_style_reads, content_cached, metadata_reused, reused_geometry,
+   strategy }` reports the frame.
 
-`render_fresh` bypasses content, text layout, and pixel reuse for reference comparisons.
+`render_fresh` bypasses content, text layout, block reuse, and pixel reuse for
+reference comparisons. It repeats engine block reads.
 `CanvasSession::invalidate` (and `backend_mut`) clears backend metric caches
 and the session's text cache. It forces the next successful render to prepare.
 This also bypasses shared
 cache hits. A failed attempt keeps the invalidation pending. Call it after
 fonts change. Target size and scale are fixed per backend instance.
+
+The session owns one `WorksheetBlockCache`. A normal render passes it to
+`prepare_with_cache`. A new `BlockCacheIdentity` clears it. Invalidation keeps
+block data because font and metric changes do not change engine cells. The host
+advances the content revision after a cell or dimension change.
+
+`RenderError` is `#[non_exhaustive]`. It reports preparation, backend, sequence,
+and `InvalidOverlay` failures. A failed attempt leaves the committed frame and
+cache truth unchanged.
 
 Each session retains measured lines across preparations with equal metrics.
 An explicit metric key change clears those lines. A switch between local
@@ -315,6 +389,24 @@ another workbook, sheet ID, or revision. The supplied axes replace the
 per-index dimension getters for geometry and merge extents.
 `prepare` and `prepare_reusing_geometry` collect fresh lists.
 
+`axis_sizes` reads stored worksheet records into run-compressed sizes:
+
+- `get_row_sizes` and `get_column_sizes` return `AxisSizes { default_size,
+  runs: Vec<SizeRun> }` in unrounded logical pixels. A hidden dimension returns
+  zero. The first matching record wins.
+- The engine rules are kept here and checked against the pinned revision:
+  default row 25, default column 90, row factor 1.5625, column factor 9.0.
+  A visible stored column uses its width only with `custom_width`.
+- `AxisSizeBuilder::step` advances a bounded slice and reports
+  `AxisSizeProgress`. The synchronous getters run the same builder to
+  completion. The step budget covers record reads, overlap checks, cover merges,
+  and interval pops. It does not cover the final sort, the duplicate scan, or
+  the vector entries that a cover move shifts. The module documents this limit.
+- `WorksheetAxes { rows: RunAxis, cols: RunAxis, scope }` holds rounded axes.
+  `from_sizes` converts and validates. `with_scope` attaches workbook, stable
+  sheet ID, and revision.
+- One core `Axis` enum serves both crates. `AxisRun` is a core re-export.
+
 GTK uses one cache with a fixed Pango metric profile. It prints cache hits and
 style reads for each draw. React sizes its cache from visible sheets. Sheet
 selection and scrolling keep the content revision. Sheet insertion advances
@@ -325,11 +417,18 @@ and invalidate the session.
 ### Retained rendering
 
 Core hashes every resolved primitive and its effective clip into 32-pixel
-bands in one traversal. A backend that opts into partial updates
-(`supports_partial_updates`) receives `SceneUpdate` and rounds repair clips
-outward to device pixels, clearing their union before repainting intersecting
-commands. A `Blit` copies a verified interior overlap and repaints exposed
-strips. Backends without partial updates receive `Fresh` only.
+bands in one traversal. A backend that reports a retained scale can receive
+`Reuse` or `Fresh`. `Damage` and `Blit` require `supports_partial_updates`.
+The backend rounds repair clips outward to device pixels, clears their union,
+and repaints intersecting commands.
+
+A `Blit` copies a verified interior overlap and repaints exposed strips. It is
+eligible for a vertical scroll with integral device-pixel movement, one row
+band, one column band, and no merges. Overlay paint is excluded from the copy:
+old overlay bounds shift by the scroll delta, old and new bounds form one hole,
+and the planner copies the largest remaining piece. Everything else repaints,
+so translucent overlay ink cannot double paint. Canvas2D paints one
+rectangular clip per blit repair region. Damage updates keep the union clip.
 
 ### Queries and host intents
 
@@ -357,6 +456,7 @@ scene and therefore shares the frame's commit:
 
 ```rust,ignore
 pub struct OverlayState {
+    pub selection_snapshot: Option<SelectionSnapshot>,
     pub selection: Vec<GridRange>,
     pub active_cell: Option<CellCoord>,
     pub clipboard: Option<GridRange>,
@@ -364,10 +464,19 @@ pub struct OverlayState {
 }
 ```
 
+A selection snapshot replaces legacy selection and active-cell paint input.
+The session rejects a snapshot for another workbook or sheet. Legacy ranges keep
+the same limits before paint.
+`SelectionSnapshot` carries workbook, sheet, revision, areas, the active area,
+the active cell, and the mode. `propose_selection` applies replace, add, extend,
+subtract, activate, and mode operations. The algebra enforces area, piece, ID,
+and revision limits. The session re-exports it.
+
 Selection fill and outline are edge-aware per fragment. Active-cell
 restoration replays prepared content under fragment clips (no engine reads), so
-CF and merged content reappear under the selection. Header highlights stay in
-their strips. An empty `OverlayState` gives a content-only export.
+CF and merged content reappear under the selection. Header highlights follow the
+selection kind and stay in their strips. An empty `OverlayState` gives a
+content-only export.
 
 ## Backends
 
@@ -416,11 +525,15 @@ This API exports evaluated formulas. It does not preserve cached XLSX results.
 ## Host integration
 
 The RustyCalc playground (`../RustyCalc-canvas-next`) is the reference host.
-It owns a session behind `SceneHandle` and builds each frame with
-`request_for(sheet, first_cell, size, theme, overlays, revision)` from the
-model's selected view, the canvas size, the CSS theme, and the derived overlay
-state. Input, hover, resize, auto-fit, and link activation all read the
-committed frame through the session's query surface.
+It owns the model and one `NavigationController` per view. Grid input goes
+through `attach`, `command`, `sync`, and `resize`. The accepted
+`ScrollPosition` becomes the `WorksheetViewport` scroll value of the next
+`RenderRequest`. Pointer, hover, resize, auto-fit, and link activation read the
+committed frame through the session's query surface. The host applies
+`HostIntent` values; the library never writes the workbook.
+
+The GTK and React host trees use the same controller surface. They live outside
+this branch. The workspace here carries the library crates only.
 
 ## History
 
@@ -444,16 +557,22 @@ validation and limits.
 | --- | --- |
 | `iron-canvas-core/src/geometry/` | `extent` (size/metrics), `pixel_rect`, `prim`, `path`, `constants` |
 | `iron-canvas-core/src/scene_geometry.rs`, `scene_geometry/` | axis sampling, `GridGeometry`, hits, fragments, pane math |
+| `iron-canvas-core/src/scroll.rs` | `ScrollPosition`, `AxisExtents`, `RunAxis`, movement and clamping |
+| `iron-canvas-core/src/navigation.rs` | key classification and `NavigationIntent` |
 | `iron-canvas-core/src/scene.rs`, `scene/` | `GridScene`, `SceneBuilder`, `Primitive`, `RenderBackend`, retained fingerprints |
 | `iron-canvas-core/src/painter/`, `text_layout.rs`, `theme.rs`, `shape/` | paint contract, wrapping, palette, shape placement |
-| `iron-canvas-ironcalc/src/compiler.rs`, `compiler/` | worksheet preparation, style/CF/border/text/merge lowering, glyph catalogue |
+| `iron-canvas-ironcalc/src/compiler.rs`, `compiler/` | worksheet preparation, style/CF/border/text/merge lowering, glyph catalogue, block cache |
+| `iron-canvas-ironcalc/src/axis_sizes.rs` | bulk row and column sizes, engine dimension rules, prepared axes |
 | `iron-canvas-ironcalc/src/autofit.rs` | auto-fit measurement |
-| `iron-canvas/src/lib.rs` | `CanvasSession`, request/outcome/error, frame publication |
+| `iron-canvas-navigation/src/lib.rs` | view identity, commands, outcomes, errors, engine adapter |
+| `iron-canvas-navigation/src/scroll.rs` | per-view state, fractional input, reveal, engine mirroring |
+| `iron-canvas/src/lib.rs` | `CanvasSession`, request/outcome/error, frame publication, selection re-export |
 | `iron-canvas/src/cache.rs` | `WorksheetCache`, `TextMetricsKey`, content validity and use order |
 | `iron-canvas/src/interaction.rs` | committed queries and `HostIntent` |
 | `iron-canvas/src/overlays.rs` | `OverlayState` composition |
-| `iron-canvas/src/retained.rs` | scroll-blit planning |
-| `iron-canvas/examples/` | host tools: `linux_xlsx_viewer_gtk4` (GTK4) and the `export_workbook` Clap CLI |
+| `iron-canvas/src/selection.rs` | selection snapshot algebra and limits |
+| `iron-canvas/src/retained.rs` | overlay-aware scroll-blit planning |
+| `iron-canvas/examples/` | host tools: `linux_xlsx_viewer_gtk4` (GTK4), `scroll_perf` benchmark, and the `export_workbook` Clap CLI |
 | `bindings/wasm/` | `wasm-bindgen` adapter used by browser hosts |
 | `examples/react/` | minimal React + WebAssembly browser host |
 | `iron-canvas-canvas2d/src/` | `CanvasPainter`, `Canvas2dSceneBackend`, metric memo, theme bridge |
