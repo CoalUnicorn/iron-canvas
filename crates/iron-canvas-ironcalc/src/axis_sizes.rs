@@ -4,11 +4,11 @@
 //! into ordered runs and keeps the same rules as the individual getters.
 //! Rules checked against IronCalc revision `b063c523`.
 //!
-//! The resumable builder counts record reads, overlap checks, cover merges, and
-//! interval pops per step. A step does not count the one sort of resolved
-//! intervals, the adjacent duplicate scan, or the entries that one cover
-//! insertion or removal moves. Interactive hosts can advance it between frames;
-//! synchronous callers run it to completion.
+//! The resumable builder counts record reads, interval lookups, moved cover
+//! entries, sort copies, and emitted intervals. Sorting and vector moves stop
+//! at the step budget. The constructor reserves buffers from the record count
+//! so a step does not copy a growing allocation. Interactive hosts can advance
+//! the builder between frames; synchronous callers run it to completion.
 
 pub use iron_canvas_core::Axis;
 pub use iron_canvas_core::scroll::AxisRun;
@@ -192,6 +192,87 @@ struct ResolvedInterval {
     record: usize,
 }
 
+/// Keep a partial vector move private until the covered set is ordered again.
+#[derive(Debug, Clone, Copy)]
+enum CoverMerge {
+    Locate(Cover),
+    Insert {
+        cover: Cover,
+        index: usize,
+        next: usize,
+    },
+    Compact {
+        next: usize,
+        removed: usize,
+    },
+}
+
+/// Merge adjacent sorted spans. One output copy consumes one operation.
+#[derive(Debug, Clone, Copy)]
+struct IntervalSort {
+    width: usize,
+    start: usize,
+    left: usize,
+    right: usize,
+}
+
+impl IntervalSort {
+    fn new() -> Self {
+        Self {
+            width: 1,
+            start: 0,
+            left: 0,
+            right: 1,
+        }
+    }
+
+    fn step(
+        &mut self,
+        source: &mut Vec<ResolvedInterval>,
+        output: &mut Vec<ResolvedInterval>,
+        budget: &mut usize,
+    ) -> bool {
+        let len = source.len();
+        while *budget > 0 {
+            if self.start >= len {
+                // Every entry is now in the other buffer. Swap ownership
+                // without copying entries, then reuse the empty buffer.
+                std::mem::swap(source, output);
+                output.clear();
+                self.width *= 2;
+                if self.width >= len {
+                    return true;
+                }
+                self.start = 0;
+                self.left = 0;
+                self.right = self.width;
+            }
+            let middle = (self.start + self.width).min(len);
+            let end = (middle + self.width).min(len);
+            if self.left == middle && self.right == end {
+                self.start = end;
+                self.left = end;
+                self.right = (end + self.width).min(len);
+                continue;
+            }
+            let next = if self.left < middle
+                && (self.right == end || source[self.left].first <= source[self.right].first)
+            {
+                let next = source[self.left];
+                self.left += 1;
+                next
+            } else {
+                let next = source[self.right];
+                self.right += 1;
+                next
+            };
+            output.push(next);
+            *budget -= 1;
+        }
+        false
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum Phase {
     Read {
@@ -200,9 +281,12 @@ enum Phase {
     Resolve {
         record: usize,
         cursor: i32,
-        cover: Option<Cover>,
+        cover: Option<CoverMerge>,
     },
-    Emit,
+    Sort(IntervalSort),
+    Emit {
+        next: usize,
+    },
     Done,
 }
 
@@ -217,7 +301,8 @@ pub struct AxisSizeBuilder {
     phase: Phase,
     covered: Vec<Cover>,
     resolved: Vec<ResolvedInterval>,
-    resolved_sorted: bool,
+    resolved_ordered: bool,
+    sort_buffer: Vec<ResolvedInterval>,
     runs: Vec<SizeRun>,
 }
 
@@ -249,18 +334,23 @@ impl AxisSizeBuilder {
         if total_records > CONSTRUCTION_LIMIT {
             return Err(AxisSizeError::Limit);
         }
+        // Each record adds two interval boundaries. Resolution can produce
+        // at most twice as many pieces as input records. Reserve this bound
+        // before stepping so a push never moves a whole buffer in one step.
+        let intervals = total_records.saturating_mul(2).min(CONSTRUCTION_LIMIT);
         Ok(Self {
             axis,
             source,
             slice_operations: slice_operations.max(1),
             default_size,
             total_records,
-            records: Vec::new(),
+            records: Vec::with_capacity(total_records),
             phase: Phase::Read { next: 0 },
-            covered: Vec::new(),
-            resolved: Vec::new(),
-            resolved_sorted: false,
-            runs: Vec::new(),
+            covered: Vec::with_capacity(total_records),
+            resolved: Vec::with_capacity(intervals),
+            resolved_ordered: true,
+            sort_buffer: Vec::with_capacity(intervals),
+            runs: Vec::with_capacity(intervals),
         })
     }
 
@@ -270,11 +360,13 @@ impl AxisSizeBuilder {
     }
 
     /// Advance the build by at most the configured number of operations.
-    /// The count covers record reads, overlap checks, cover merges, and
-    /// interval pops. The first emission step also sorts all resolved
-    /// intervals and scans them for duplicate starts; a cover insertion or
-    /// removal can move many vector entries. The model borrow ends before
-    /// this method returns.
+    /// One operation reads a record, looks up an interval, moves one cover
+    /// entry, copies one sort entry, or emits one interval. A cover lookup
+    /// uses at most two binary searches over at most 1,048,576 entries.
+    /// Emission includes the duplicate check and adjacent-run combination.
+    /// Fixed phase changes and source validation are outside the count.
+    /// This bounds algorithm work, not elapsed time or constructor allocation.
+    /// The model borrow ends before this method returns.
     pub fn step(
         &mut self,
         workbook: &UserModel<'_>,
@@ -348,8 +440,10 @@ impl AxisSizeBuilder {
                     }
                     let (record, cursor, cover, finished) =
                         self.resolve_step(record, cursor, cover, budget)?;
-                    self.phase = if finished {
-                        Phase::Emit
+                    self.phase = if finished && self.resolved_ordered {
+                        Phase::Emit { next: 0 }
+                    } else if finished {
+                        Phase::Sort(IntervalSort::new())
                     } else {
                         Phase::Resolve {
                             record,
@@ -358,11 +452,23 @@ impl AxisSizeBuilder {
                         }
                     };
                 }
-                Phase::Emit => {
-                    if !self.emit_step(budget)? {
+                Phase::Sort(mut sort) => {
+                    self.phase = if sort.step(&mut self.resolved, &mut self.sort_buffer, budget) {
+                        Phase::Emit { next: 0 }
+                    } else {
+                        Phase::Sort(sort)
+                    };
+                    if *budget == 0 {
                         return Ok(());
                     }
-                    self.phase = Phase::Done;
+                }
+                Phase::Emit { mut next } => {
+                    let complete = self.emit_step(&mut next, budget)?;
+                    self.phase = if complete {
+                        Phase::Done
+                    } else {
+                        Phase::Emit { next }
+                    };
                     return Ok(());
                 }
                 Phase::Done => return Ok(()),
@@ -423,9 +529,9 @@ impl AxisSizeBuilder {
         &mut self,
         mut record: usize,
         mut cursor: i32,
-        mut cover: Option<Cover>,
+        mut cover: Option<CoverMerge>,
         budget: &mut usize,
-    ) -> Result<(usize, i32, Option<Cover>, bool), AxisSizeError> {
+    ) -> Result<(usize, i32, Option<CoverMerge>, bool), AxisSizeError> {
         loop {
             if *budget == 0 {
                 return Ok((record, cursor, cover, false));
@@ -442,10 +548,10 @@ impl AxisSizeBuilder {
                 return Ok((record, cursor, None, true));
             };
             if cursor > pending.last {
-                cover = Some(Cover {
+                cover = Some(CoverMerge::Locate(Cover {
                     start: pending.first,
                     end: pending.last,
-                });
+                }));
                 record += 1;
                 cursor = 1;
                 continue;
@@ -493,6 +599,11 @@ impl AxisSizeBuilder {
         if self.resolved.len() >= CONSTRUCTION_LIMIT {
             return Err(AxisSizeError::Limit);
         }
+        // Stored rows and columns often arrive in ascending order. Record
+        // that fact during resolution so they need no sort pass.
+        if let Some(previous) = self.resolved.last() {
+            self.resolved_ordered &= previous.first <= first;
+        }
         self.resolved.push(ResolvedInterval {
             first,
             last,
@@ -502,29 +613,23 @@ impl AxisSizeBuilder {
         Ok(())
     }
 
-    /// Drain resolved intervals in sorted order. Returns true when complete.
-    fn emit_step(&mut self, budget: &mut usize) -> Result<bool, AxisSizeError> {
-        // Sort once after resolution. Highest first entry pops first, so runs
-        // emit in ascending index order.
-        if !self.resolved_sorted {
-            self.resolved
-                .sort_unstable_by_key(|entry| std::cmp::Reverse(entry.first));
-            for pair in self.resolved.windows(2) {
-                if pair[0].first == pair[1].first {
-                    return Err(AxisSizeError::InvalidRecord {
-                        record: pair[1].record,
-                        first: pair[1].first,
-                        last: pair[1].last,
-                    });
-                }
-            }
-            self.resolved_sorted = true;
-        }
+    /// Emit resolved intervals in sorted order. Returns true when complete.
+    fn emit_step(&mut self, next: &mut usize, budget: &mut usize) -> Result<bool, AxisSizeError> {
         while *budget > 0 {
-            let Some(entry) = self.resolved.pop() else {
+            let Some(entry) = self.resolved.get(*next).copied() else {
                 return Ok(true);
             };
             *budget -= 1;
+            // Check before omitting defaults. A default-sized interval can
+            // also have an invalid duplicate start.
+            if *next > 0 && self.resolved[*next - 1].first == entry.first {
+                return Err(AxisSizeError::InvalidRecord {
+                    record: entry.record,
+                    first: entry.first,
+                    last: entry.last,
+                });
+            }
+            *next += 1;
             // Default-size runs carry no information after precedence resolution.
             if entry.size == self.default_size {
                 continue;
@@ -550,6 +655,7 @@ impl AxisSizeBuilder {
 
     #[cfg(test)]
     fn synthetic(axis: Axis, default_size: f64, records: &[(i32, i32, f64)]) -> Self {
+        let intervals = records.len().saturating_mul(2).min(CONSTRUCTION_LIMIT);
         Self {
             axis,
             source: AxisSource {
@@ -570,10 +676,11 @@ impl AxisSizeBuilder {
                 cursor: 1,
                 cover: None,
             },
-            covered: Vec::new(),
-            resolved: Vec::new(),
-            resolved_sorted: false,
-            runs: Vec::new(),
+            covered: Vec::with_capacity(records.len()),
+            resolved: Vec::with_capacity(intervals),
+            resolved_ordered: true,
+            sort_buffer: Vec::with_capacity(intervals),
+            runs: Vec::with_capacity(intervals),
         }
     }
 
@@ -627,39 +734,73 @@ fn next_overlap(covered: &[Cover], at: i32, last: i32) -> Option<(i32, i32)> {
 /// Merge a cover interval into the covered set. Returns true when inserted.
 fn merge_cover(
     covered: &mut Vec<Cover>,
-    cover: &mut Cover,
+    merge: &mut CoverMerge,
     budget: &mut usize,
 ) -> Result<bool, AxisSizeError> {
-    loop {
-        if *budget == 0 {
-            return Ok(false);
+    while *budget > 0 {
+        match *merge {
+            CoverMerge::Locate(mut cover) => {
+                *budget -= 1;
+                // Covers are disjoint and nonadjacent. Two searches find the
+                // whole replacement span. Its first and last entries supply
+                // the merged bounds; no scan or repeated removal is needed.
+                let first =
+                    covered.partition_point(|item| item.end < cover.start.saturating_sub(1));
+                let end = covered.partition_point(|item| item.start <= cover.end.saturating_add(1));
+                if first == end {
+                    if covered.len() >= CONSTRUCTION_LIMIT {
+                        return Err(AxisSizeError::Limit);
+                    }
+                    let next = covered.len();
+                    covered.push(cover);
+                    if first == next {
+                        return Ok(true);
+                    }
+                    *merge = CoverMerge::Insert {
+                        cover,
+                        index: first,
+                        next,
+                    };
+                } else {
+                    cover.start = cover.start.min(covered[first].start);
+                    cover.end = cover.end.max(covered[end - 1].end);
+                    covered[first] = cover;
+                    let removed = end - first - 1;
+                    if removed == 0 {
+                        return Ok(true);
+                    }
+                    *merge = CoverMerge::Compact { next: end, removed };
+                }
+            }
+            CoverMerge::Insert { cover, index, next } => {
+                // Copy backward so a later slice still reads the old entries.
+                // The copy length counts against the budget, not as one move.
+                let count = (next - index).min(*budget);
+                covered.copy_within(next - count..next, next - count + 1);
+                *budget -= count;
+                let next = next - count;
+                if next == index {
+                    covered[index] = cover;
+                    return Ok(true);
+                }
+                *merge = CoverMerge::Insert { cover, index, next };
+            }
+            CoverMerge::Compact { next, removed } => {
+                // Copy forward after a replacement. Keep the old length until
+                // all source entries move. Cover has no destructor to run.
+                let count = (covered.len() - next).min(*budget);
+                covered.copy_within(next..next + count, next - removed);
+                *budget -= count;
+                let next = next + count;
+                if next == covered.len() {
+                    covered.truncate(covered.len() - removed);
+                    return Ok(true);
+                }
+                *merge = CoverMerge::Compact { next, removed };
+            }
         }
-        *budget -= 1;
-        let index = covered.partition_point(|item| item.start < cover.start);
-        if let Some(previous) = index
-            .checked_sub(1)
-            .and_then(|index| covered.get(index).copied())
-            && previous.end >= cover.start.saturating_sub(1)
-        {
-            covered.remove(index - 1);
-            cover.start = previous.start;
-            cover.end = cover.end.max(previous.end);
-            continue;
-        }
-        let limit = cover.end.saturating_add(1);
-        if let Some(next) = covered.get(index).copied()
-            && next.start <= limit
-        {
-            covered.remove(index);
-            cover.end = cover.end.max(next.end);
-            continue;
-        }
-        if covered.len() >= CONSTRUCTION_LIMIT {
-            return Err(AxisSizeError::Limit);
-        }
-        covered.insert(index, *cover);
-        return Ok(true);
     }
+    Ok(false)
 }
 
 /// Resolve row sizes with the individual getter rules.
@@ -914,6 +1055,186 @@ mod tests {
     }
 
     #[test]
+    fn cover_insertion_and_compaction_yield_during_entry_moves() {
+        let original: Vec<_> = (1..=512)
+            .map(|index| Cover {
+                start: index * 4,
+                end: index * 4,
+            })
+            .collect();
+        for inserted in [Cover { start: 1, end: 1 }, Cover { start: 4, end: 20 }] {
+            let mut covered = Vec::with_capacity(original.len() + 1);
+            covered.extend_from_slice(&original);
+            let mut merge = CoverMerge::Locate(inserted);
+            let mut budget = 1;
+            assert!(!merge_cover(&mut covered, &mut merge, &mut budget).unwrap());
+            assert_eq!(budget, 0);
+
+            // The first call finds the replacement. The second moves just
+            // one entry, so neither large suffix can be complete yet.
+            let mut budget = 1;
+            assert!(!merge_cover(&mut covered, &mut merge, &mut budget).unwrap());
+            assert_eq!(budget, 0);
+            let capacity = covered.capacity();
+            loop {
+                let mut budget = 3;
+                if merge_cover(&mut covered, &mut merge, &mut budget).unwrap() {
+                    break;
+                }
+                assert_eq!(covered.capacity(), capacity);
+            }
+            let expected: Vec<_> = std::iter::once((inserted.start, inserted.end))
+                .chain(
+                    original
+                        .iter()
+                        .filter(|cover| cover.start > inserted.end)
+                        .map(|cover| (cover.start, cover.end)),
+                )
+                .collect();
+            assert_eq!(
+                covered
+                    .iter()
+                    .map(|cover| (cover.start, cover.end))
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(covered.capacity(), capacity);
+        }
+    }
+
+    #[test]
+    fn sorting_copies_only_the_budget_and_keeps_both_capacities() {
+        let mut source: Vec<_> = (1..=513)
+            .rev()
+            .map(|first| ResolvedInterval {
+                first,
+                last: first,
+                size: 40.0,
+                record: first as usize,
+            })
+            .collect();
+        let mut output = Vec::with_capacity(source.capacity());
+        let capacity = source.capacity();
+        let mut sort = IntervalSort::new();
+        let mut budget = 1;
+        assert!(!sort.step(&mut source, &mut output, &mut budget));
+        assert_eq!(output.len(), 1);
+        assert_eq!(source[0].first, 513);
+        let mut budget = 2;
+        assert!(!sort.step(&mut source, &mut output, &mut budget));
+        assert_eq!(output.len(), 3);
+        let mut calls = 0;
+        loop {
+            let mut budget = 7;
+            let complete = sort.step(&mut source, &mut output, &mut budget);
+            assert_eq!(source.capacity(), capacity);
+            assert_eq!(output.capacity(), capacity);
+            calls += 1;
+            assert!(calls < 10_000, "sort did not finish");
+            if complete {
+                break;
+            }
+        }
+        assert_eq!(
+            source.iter().map(|entry| entry.first).collect::<Vec<_>>(),
+            (1..=513).collect::<Vec<_>>()
+        );
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn duplicate_check_yields_with_emission_and_includes_default_sizes() {
+        let mut builder = AxisSizeBuilder::synthetic(Axis::Row, DEFAULT_ROW_HEIGHT, &[]);
+        builder.phase = Phase::Emit { next: 0 };
+        builder.resolved = (0..2)
+            .map(|record| ResolvedInterval {
+                first: 1,
+                last: 1,
+                size: DEFAULT_ROW_HEIGHT,
+                record,
+            })
+            .collect();
+        let mut budget = 1;
+        builder.advance(None, &mut budget).unwrap();
+        assert!(!builder.is_complete());
+        assert!(builder.runs.is_empty());
+        let mut budget = 1;
+        assert_eq!(
+            builder.advance(None, &mut budget),
+            Err(AxisSizeError::InvalidRecord {
+                record: 1,
+                first: 1,
+                last: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn ordered_records_skip_sorting_and_all_steps_keep_reserved_capacity() {
+        let mut model = UserModel::new_empty("capacity", "en", "UTC", "en").unwrap();
+        for row in 1..=100 {
+            model
+                .set_rows_height(0, row * 2, row * 2, 30.0 + f64::from(row % 2))
+                .unwrap();
+        }
+        let source = AxisSource::resolve(&model, 0, 1, 1).unwrap();
+        let mut builder =
+            AxisSizeBuilder::with_slice_operations(&model, source, Axis::Row, 1).unwrap();
+        let capacities = |builder: &AxisSizeBuilder| {
+            [
+                builder.records.capacity(),
+                builder.covered.capacity(),
+                builder.resolved.capacity(),
+                builder.sort_buffer.capacity(),
+                builder.runs.capacity(),
+            ]
+        };
+        let reserved = capacities(&builder);
+        let mut calls = 0;
+        while builder.step(&model, source).unwrap() == AxisSizeProgress::Pending {
+            assert!(!matches!(builder.phase, Phase::Sort(_)));
+            assert_eq!(capacities(&builder), reserved);
+            calls += 1;
+            assert!(calls < 10_000, "builder did not finish");
+        }
+        assert_eq!(capacities(&builder), reserved);
+        let sizes = builder.into_sizes().unwrap();
+        for row in 1..=201 {
+            assert_eq!(sizes.size_at(row), model.get_row_height(0, row).unwrap());
+        }
+    }
+
+    #[test]
+    fn fragmented_resolution_and_sorting_keep_reserved_capacity() {
+        // Each early single-cell record splits the final broad record. This
+        // reaches 2*n-1 pieces and exercises the reservation bound.
+        let mut records: Vec<_> = (1..=128).map(|i| (i * 2, i * 2, 40.0)).collect();
+        records.push((1, 257, 20.0));
+        let mut builder = AxisSizeBuilder::synthetic(Axis::Row, DEFAULT_ROW_HEIGHT, &records);
+        let capacities = |builder: &AxisSizeBuilder| {
+            [
+                builder.covered.capacity(),
+                builder.resolved.capacity(),
+                builder.sort_buffer.capacity(),
+                builder.runs.capacity(),
+            ]
+        };
+        let reserved = capacities(&builder);
+        let mut calls = 0;
+        while !builder.is_complete() {
+            let mut budget = 1;
+            builder.advance(None, &mut budget).unwrap();
+            assert_eq!(capacities(&builder), reserved);
+            calls += 1;
+            assert!(calls < 10_000, "builder did not finish");
+        }
+        let expected: Vec<_> = (1..=257)
+            .map(|i| row_run(i, i, if i % 2 == 0 { 40.0 } else { 20.0 }))
+            .collect();
+        assert_eq!(builder.runs, expected);
+    }
+
+    #[test]
     fn merged_covers_match_brute_force_precedence() {
         const LIMIT: i32 = 80;
         let sizes = [0.0, 10.0, DEFAULT_ROW_HEIGHT, 40.0, 60.0];
@@ -957,9 +1278,18 @@ mod tests {
                     });
                 }
             }
-            let actual = AxisSizeBuilder::synthetic(Axis::Row, DEFAULT_ROW_HEIGHT, &records)
-                .finish_synthetic();
-            assert_eq!(actual, expected, "seed {seed}");
+            for step_budget in [1, 2, 7, 64, DEFAULT_SLICE_OPERATIONS] {
+                let mut builder =
+                    AxisSizeBuilder::synthetic(Axis::Row, DEFAULT_ROW_HEIGHT, &records);
+                let mut calls = 0;
+                while !builder.is_complete() {
+                    let mut budget = step_budget;
+                    builder.advance(None, &mut budget).unwrap();
+                    calls += 1;
+                    assert!(calls < 100_000, "builder did not finish");
+                }
+                assert_eq!(builder.runs, expected, "seed {seed}, budget {step_budget}");
+            }
         }
     }
 

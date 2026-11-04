@@ -418,9 +418,13 @@ per-index dimension getters for geometry and merge extents.
   A visible stored column uses its width only with `custom_width`.
 - `AxisSizeBuilder::step` advances a bounded slice and reports
   `AxisSizeProgress`. The synchronous getters run the same builder to
-  completion. The step budget covers record reads, overlap checks, cover merges,
-  and interval pops. It does not cover the final sort, the duplicate scan, or
-  the vector entries that a cover move shifts. The module documents this limit.
+  completion. The step budget covers record reads, interval lookups, each moved
+  cover entry, each sort copy, and each emitted interval. Emission includes the
+  duplicate check. Ordered input skips sorting. Other input uses a resumable
+  merge sort. Cover replacement uses two binary searches and moves its suffix
+  in limited slices. The constructor reserves vector capacity from the record
+  count. Steps do not grow buffers. This limits algorithm work, not elapsed
+  time. Constructor allocation and `AxisSizes::to_run_axis` remain synchronous.
 - `WorksheetAxes { rows: RunAxis, cols: RunAxis, scope }` holds rounded axes.
   `from_sizes` converts and validates. `with_scope` attaches workbook, stable
   sheet ID, and revision.
